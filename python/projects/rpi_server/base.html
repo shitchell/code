@@ -1,0 +1,88 @@
+<html>
+	<head>
+		<title>pi.py</title>
+		<meta name="viewport" content="width=device-width; initial-scale=1.0; maximum-scale=2.0;" />
+		<link href='http://fonts.googleapis.com/css?family=Poiret+One|Quicksand|Josefin+Sans' rel='stylesheet' type='text/css' />
+		<style>
+			body {
+				background-color: #ADD8E6;
+				color: #000;
+				font-size: 1em;
+				font-family: Quicksand;
+				padding: 0;
+				margin: 0;
+			}
+			
+			header {
+				background-color: #ADD8E6;
+				height: 2em;
+				text-align: center;
+				font: bold 1.5em 'Quicksand';
+				line-height: 2em;
+			}
+
+			#r {
+				color: #C7053D;
+			}
+			
+			#pi {
+				color: #8CC04B;
+			}
+			
+			main {
+				background-color: #FFFFFF;
+				margin: auto;
+				padding: 1em;
+				box-sizing: border-box;
+			}
+			@media (min-width: 768px) {
+				main {width: 80%%;}
+			}
+			@media (max-width: 767px) {
+				main {width: 100%%;}
+			}
+			
+			#title {
+				margin: 0;
+				font: bold 1.3em 'Poiret One';
+			}
+			
+			.sample {
+				display: block;
+			}
+			
+			#subtitle {
+				font-size: .8em;
+				font-style: italic;
+			}
+			
+			#content {
+				margin-top: 1em;
+			}
+			
+			header a, header a:visited, header a:active {
+				text-decoration: none;
+			}
+			header a:hover {
+				text-decoration: underline;
+			}
+			
+			main a, main a:visited, main a:active {
+				text-decoration: underline;
+				color: #666;
+			}
+			main a:hover {
+				color: #000;
+			}
+		</style>
+	</head>
+	<body>
+		<header><a href="/"><span id="r">r</span><span id="pi">Pi</span></a></header>
+		
+		<main>
+			<div id="title">%(title)s</div>
+			<span id="subtitle">%(subtitle)s</span>
+			<div id="content">%(content)s</div>
+		</main>
+	</body>
+</html>

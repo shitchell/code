@@ -1,0 +1,9 @@
+# Artist	Title		Youtube ID	Tags
+Boyce Avenue	See You Again	HcQJzFzZfVI	acoustic,cover
+Boyce Avenue	Fast Car	M4zCOHFrLVY	acoustic,cover
+Boyce Avenue	Photograph	tIA_vrBDC1g	acoustic,cover
+Boyce Avenue	I'm Not the Only One	oQq9vDU4IfU	acoustic,cover
+Boyce Avenue	A Thousand Years	iIj07LL57RA	acoustic,cover
+Indiefied	poem_for_your_sprog	mjjTSHVH0Cs	acoustic,indie
+Goo Goo Dolls	Better Days	i-kHleNYIDc	chill
+Goo Goo Dolls	Slide	yP4qdefD2To	chill
