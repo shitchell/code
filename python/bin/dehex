@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+
+import re
+import sys
+import syslog
+
+DEBUG = True
+def debug(*message):
+	message = " ".join([str(x) for x in message])
+	if DEBUG:
+		syslog.syslog(syslog.LOG_ALERT, message)
+
+def unhex(line):
+	hex_data = [x[0] for x in re.findall('(([0-9a-f]{2}[:-])+([0-9a-f]{2}))', line, re.I)]
+	debug("hex:", hex_data)
+	for hex_datum in hex_data:
+		bits = [str(chr(int(bit, 16)).encode())[2:-1] for bit in hex_datum.split(":")]
+		line = line.replace(hex_datum, ''.join(bits))
+	debug("decoded:", line)
+	return line
+
+i = 1
+if sys.stdin.isatty():
+	data = ''.join(sys.argv[1:])
+	for line in data.split('\n'):
+		print(unhex(line))
+else:
+	while True:
+		line = sys.stdin.readline()
+		if line == '':
+			break
+		line = line[:-1]
+		try:
+			debug("line:", line)
+			print(unhex(line))
+		except:
+			pass
+		sys.stdout.flush()

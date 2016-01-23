@@ -1,0 +1,45 @@
+#!/usr/bin/env python3.1
+ 
+import sys
+import time
+import random
+import optparse
+ 
+parser = optparse.OptionParser()
+parser.add_option("--switch", action="store_true", dest="switch", default=False,
+                help="Switch doors after the first is revealed.")
+parser.add_option("--no-switch", action="store_false", dest="switch", default=False,
+                help="Don't switch doors after the first is revealed.")
+parser.add_option("--host-knows", action="store_true", dest="host_knows", default=False,
+                help="The revealed door is always a dud.")
+parser.add_option("-t", "--times", type="int", dest="times", default=10,
+                help="Number of times to test.")
+(options, args) = parser.parse_args()
+ 
+successes = 0
+doors = [0, 0, 1]
+doors_length = len(doors)
+ 
+for x in range(options.times):
+        random.shuffle(doors)
+       
+        # Pick a door, any door!
+        picked_index = random.randrange(3)
+        if options.host_knows:
+                # Pick a door that isn't the right choice
+                revealed_index = random.choice(list(filter(lambda x: x not in [picked_index, doors.index(1)], range(doors_length))))
+        else:
+                # Else just pick randomly from the remaining two doors
+                revealed_index = random.choice(list(filter(lambda x: doors[x] != 1, range(doors_length))))
+               
+        if doors[revealed_index] != 1:
+                # If the revealed door wasn't the right one, we now decide whether or not to switch our choice
+                if options.switch:
+                        # Create a set of numbers 0-2 and a set of the picked/revealed indices, then find the difference (the only door left)
+                        picked_index = set(range(doors_length)).difference({picked_index, revealed_index}).pop()
+        
+        if doors[picked_index] == 1 or doors[revealed_index] == 1:
+                # Did we find the number 1? Did we do good? We did good...
+                successes += 1
+ 
+print("%i/%i successes - %.2f%% success rate" % (successes, options.times, successes/options.times*100))

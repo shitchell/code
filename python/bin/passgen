@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+
+import random
+import optparse
+
+parser = optparse.OptionParser()
+parser.add_option("-L", "--length", type="int", dest="size", default=12,
+			help="Set the length of the password")
+parser.add_option("-n", "--numbers", type="int", dest="nnum", default=3,
+			help="Set the number of symbols to use in the password")
+parser.add_option("-s", "--symbols", type="int", dest="snum", default=3,
+			help="Set the number of symbols to use in the password")
+parser.add_option("-l", "--lower", type="int", dest="lnum", default=3,
+			help="Set the number of lowercase letters to use")
+parser.add_option("-u", "--upper", type="int", dest="unum", default=3,
+			help="Set the number of uppercase letters to use")
+parser.add_option("-t", "--test", dest="test", action="store_true", default=False,
+			help="Test your ability to type a password correctly.")
+options, args = parser.parse_args()
+
+if options.test:
+	from getpass import getpass
+	password = getpass("Password: ")
+	while 1:
+		try:
+			attempt = getpass("Verify: ")
+		except (KeyboardInterrupt, EOFError):
+			print()
+			quit()
+		if attempt == password:
+			print("Success!")
+		else:
+			print("Failed.")
+
+# Make sure the number of items to use doesn't exceed the length
+total = (options.nnum + options.snum + options.lnum + options.unum)
+if options.size == 12 and total > options.size:
+	options.size = total
+
+lhand =	{
+		'numbers' : '12345',
+		'lowercase' : 'qwerasdfgzxcv',
+		'uppercase' : 'QWERASDFGZXCV',
+		'symbols' : '!@#$%'
+	}
+rhand =	{
+		'numbers' : '7890',
+		'lowercase' : 'yuiophjklnm',
+		'uppercase' : 'YUIOPHJKLNM',
+		'symbols' : '[];./*?"'
+	}
+
+password = ""
+alt = 1
+
+while (len(password) < options.size):
+	if alt == 1:
+		hand = lhand
+	else:
+		hand = rhand
+	alt = alt*-1
+
+	# See if we have any required numbers / symbols / lower / upper left to add
+	remaining = {}
+
+	# Add the required remaining count of each option to the list
+	if options.nnum > 0:
+		remaining['n'] = options.nnum
+	if options.snum > 0:
+		remaining['s'] = options.snum
+	if options.lnum > 0:
+		remaining['l'] = options.lnum
+	if options.unum > 0:
+		remaining['u'] = options.unum
+	
+	# See if there are any requirements left. If not, everything is game
+	if not remaining:
+		remaining = {'n' : 1, 's' : 1, 'l' : 1, 'u' : 1}
+	
+	# Pick a random category
+	categories = list(remaining)
+	category = random.randrange(0,len(categories))
+	category = categories[category]
+	
+	# Get the available choices based on the category
+	if category == 'n':
+		choices = hand['numbers']
+	elif category == 's':
+		choices = hand['symbols']
+	elif category == 'l':
+		choices = hand['lowercase']
+	elif category == 'u':
+		choices = hand['uppercase']
+
+	# Pick a random character from the list of choices and remove it
+	index = random.randrange(0, len(choices))
+	char = choices[index]
+
+	# Reduce the number of remaining choices
+	if category == 'n':
+		options.nnum -= 1
+	elif category == 's':
+		options.snum -= 1
+	elif category == 'l':
+		options.lnum -= 1
+	elif category == 'u':
+		options.unum -= 1
+
+	# Add the character to the password
+	password += char
+
+# Print the password at completion
+print(password)

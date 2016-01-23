@@ -1,0 +1,17 @@
+import os
+import io
+import re
+import zipfile
+
+def zipper(directory):
+	base	= os.path.dirname(re.sub('[^/]$', '/', directory))
+	zf		= io.BytesIO()
+	z		= zipfile.ZipFile(zf, 'w')
+	for root, dirs, files in os.walk(directory):
+		for f in files:
+			fullpath	= os.path.join(root, f)
+			arcname		= re.sub('^%s' % base, '', fullpath)
+			z.write(fullpath, arcname)
+	z.close()
+	zf.seek(0)
+	return zf

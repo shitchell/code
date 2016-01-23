@@ -1,0 +1,9 @@
+import os
+owner   = True
+
+def do(msg):
+	path	= '/tmp/iSight.jpg'
+	os.system('isightcapture -t jpg ' + path)
+	image	= open(path, 'br')
+	os.remove(path)
+	return {'msg' : 'iSight Capture', 'attach' : [image], 'subject' : 'iSight Capture'}

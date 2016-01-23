@@ -1,0 +1,8 @@
+import subprocess
+import os
+owner	= True
+
+def do(msg):
+	fortuna	= os.path.expanduser('~/Music/fortuna.mp3')
+	cmd	=subprocess.Popen(['mplayer'] + [fortuna], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+	cmd.communicate()

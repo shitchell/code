@@ -1,0 +1,37 @@
+import os
+owner=True
+
+def help():
+	return "Remove command modules."
+
+def do(msg):
+	# Allow for flexibility. Let the commands be any case and delimited by commas. Then remove dupes.
+	commands	= list(dict([(x.strip(', ').lower(), None) for x in msg['args']]))
+
+	for command in msg['args']:
+		# Set the filepath
+		filepath	= 'gv' + os.path.sep + 'commands' + os.path.sep + command
+		success		= []
+		
+		# See that the files exist
+		if os.path.exists(filepath + '.gvpy'):
+			try:
+				os.remove(filepath + '.gvpy')
+			except:
+				return "You do not have permission to write files."
+			else:
+				success.append(command)
+		
+		# Remove the compiled version if it exists
+		if os.path.exists(filepath + '.gvpyc'):
+			try:
+				os.remove(filepath + '.gvpyc')
+			except:
+				pass
+		
+		# Setup and return the return string
+		if len(success) > 1:
+			pre_and	= ", ".join(success[:-1])
+			return "%s and %s were successfully removed." % (pre_and, success[-1])
+		else:
+			return "%s was successfully removed." % success[0]

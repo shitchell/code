@@ -1,0 +1,29 @@
+#!/usr/bin/env python
+
+import re
+import sys
+import optparse
+
+parser = optparse.OptionParser()
+parser.add_option("-p", "--passes", dest="passes", type="int", default=1,
+					help="Number of times to decode.")
+(options, optionargs) = parser.parse_args()
+
+if sys.stdin.isatty():
+	message = parser.largs
+	message = " ".join(message)
+else:
+	message = sys.stdin.read()
+
+# Remove all characters other than 0's and 1's
+message = re.sub('[^01]', '', message)
+# Split the message up into 8 character slices
+message = re.sub('(.{8})', '\g<1> ', message).strip()
+
+while options.passes:
+	options.passes -= 1 # Decrement the passes
+	
+	message = message.split()
+	message = "".join([chr(int(x, 2)) for x in message])
+
+print(message)

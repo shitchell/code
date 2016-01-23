@@ -1,0 +1,24 @@
+import re
+import urllib.request
+
+def help():
+	return "Lookup a word using Merriam-Webster."
+
+def do(msg):
+	if msg['args']:
+		word	= msg['args'][0]
+		url		= "http://www.merriam-webster.com/dictionary/%s?show=0" % word
+		html	= urllib.request.urlopen(url).read()
+		if b"The word you've entered isn't in the dictionary" in html:
+			return "'%s' isn't in the dictionary." % word
+		syl		= re.findall(b'<h2>(.*?)</h2>', html)[0].replace(b'&#183;', b'-').decode()
+		syl		= re.sub('<sup>.*?</sup>', '', syl)
+		pos		= re.findall(b'<span[^>]+class=".*?fl"[^>]*>(.*?)</span>', html)[0].decode()
+		pos		= re.sub('<[^>]*>', '', pos)
+		pos		= pos.strip(') (')
+		d		= re.findall(b'<span[^>]+class="ssens"[^>]*>.*?</span>', html)[0].decode()
+		d		= re.sub('<span[^>]+class="vi"[^>]*>.*?</span>', '', d)
+		d		= re.sub('<[^>]*>', '', d)
+		d		= re.findall(':.*', d)[0].strip()
+		
+		return "%s (%s)\n%s" % (syl, pos, d)

@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+# -*- coding: utf8 -*-
+ # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# PyG Calculator is a python interface to Google's Calculator functions.    #
+#                                                                           #
+# Copyright (C) 2009,  Shaun Mitchell                                       #
+#                                                                           #
+# This program is free software: you can redistribute it and/or modify      #
+# it under the terms of the GNU General Public License as published by      #
+# the Free Software Foundation, either version 3 of the License.            #
+#                                                                           #
+# This program is distributed in the hope that it will be useful,           #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of            #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the             #
+# GNU General Public License for more details.                              #
+ # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+class Prog:
+	name = "PyG Calculator"
+	version = "0.4"
+	author = "Shaun Mitchell"
+	year = "2009"
+
+import urllib.parse, urllib.request
+import sys, json, cmd, readline, re, optparse
+
+parser = optparse.OptionParser()
+parser.add_option("-q", "--quietish", action="store_true", dest="quietish", default=False)
+(options, args)	= parser.parse_args()
+
+class Prompt(cmd.Cmd):
+#	intro = Prog.name + " " + Prog.version + "\n" + 'Type "help", "info" or "copyright" for more information.'
+	prompt = "% "
+	# The following constants are recognized by Google through the suggestion feature
+	_constants = ['gamma', 'pi', 'i', 'G', 'e', 'c', 'speed of light', 'm_e', 'epsilon_0', 'k', 'elementary charge', 'Faraday constant', 'fine-structure constant', 'magnetic flux quantum', 'm_mercury', 'm_venus', 'm_earth', 'm_mars', 'm_jupiter', 'm_saturn', 'm_uranus', 'm_neptune', 'm_pluto', 'm_sun', 'r_mercury', 'r_venus', 'r_earth', 'r_mars', 'r_jupiter', 'r_saturn', 'r_uranus', 'r_neptune', 'r_pluto', 'r_sun', 'molar gas constant', 'permeability of free space', 'h', 'm_p', 'Rydberg constant', 'speed of sound', 'Stefan-Boltzmann constant']
+	def default(self, line):
+		# A constant alone won't invoke the calculator, so we replace each constant with (constant*1)
+		for const in self._constants:
+			line = re.sub("([^A-z])(" + const + ")([^A-z])", "\g<1>(\g<2>*1)\g<3>", " " + line + " ").strip()
+		# For some reason, pound(s) fails and needs to be replaced with lbs
+		line = re.sub("([^A-z])(pound)(s)?([^A-z])", "\g<1>lbs ", " " + line + " ").strip()
+		# Strip comments from this shiznit
+		line = re.sub('#.*', '', line)
+		query = urllib.parse.quote(line, safe="")
+		res = calc(query)
+		if options.quietish and res.startswith("="):
+			print("".join(re.findall("[\d\.\-]", res)))
+		else:
+			print(res)
+	def do_copyright(self, line):
+		lines = ["Copyright (C) 2009,  Shaun Mitchell",
+				"",
+				"This program is free software: you can redistribute it and/or modify",
+				"it under the terms of the GNU General Public License as published by",
+				"the Free Software Foundation, either version 3 of the License.",
+				"",
+				"This program is distributed in the hope that it will be useful,",
+				"but WITHOUT ANY WARRANTY; without even the implied warranty of",
+				"MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the",
+				"GNU General Public License for more details."]
+		print(" #"*38)
+		print(*map(lambda x: "# " + x.ljust(74) + "#", lines), sep="\n")
+		print(" #"*38)
+	def do_info(self, line):
+		lines = ['PyG Calculator v0.2, bringing Python and Google together.',
+				'',
+				'This utility provides a simple command line interface to',
+				"Google's calculator functions on top of a smooth",
+				"command prompt feature with history.",
+				'',
+				'Current Drawbacks:',
+				"-can't convert between currencies",
+				'',
+				'Author, Shaun Mitchell <wandering.truths@gmail.com>']
+		print("/*")
+		print(*map(lambda x: "  " + x, lines), sep="\n")
+		print("/*")
+	def do_help(self, line):
+		lines = ['Basic Operations:',
+				'+	(Addition)',
+				'-	(Subtraction)',
+				'/	(Division)',
+				'*	(Multiplication)',
+				'%	(Modulo)',
+				'^	(Exponentiation)',
+				'!	(Factorial)',
+				'',
+				'Phrasal Operations:',
+				'th root of			(Calculates the nth root of a number) - 5th root of 32',
+				'square root of OR sqrt	(Calculate the square root of a number) - square root of 4 OR sqrt(4)',
+				'% of				(Calculates x% of y) - 5% of 10',
+				'X choose Y			(Returns the number of possible permutations from choosing Y elements out of X)',
+				'',
+				'Advanced Math:',
+				'sin, cos, tan			(Trigonometric functions) - cos(pi/6)',
+				'  sec, csc, cot...',
+				'arcsin, arccos, arctan		(Inverse trigonemtric functions)',
+				'  arcsec, arccsc, arccot...',
+				'sinh, cosh, tanh			(Hyperbolic functions)',
+				'  csch, arsinh, arccsch...',
+				'ln					(Base e logarithm)',
+				'log					(Base 10 logarithm)',
+				'lg					(Base 2 logarithm)',
+				'exp					(Exponential function) - exp(16)',
+				'',
+				'Constants:',
+				'e				(Base of the natural system of logarithms)',
+				'pi				(3.14159265...)',
+				'i				(Square root of -1)',
+				"gamma			(Euler's constant)",
+				'epsilon_0			(Electric constant)',
+				'm_e				(Electron mass)',
+				'm_p				(Proton mass)',
+				'c OR speed of light		(Speed of light in a vacuum)',
+				'speed of sound		(Speed of sound in air at sea level)',
+				'm_*lowercase planet name*	(Mass of each planet and the sun) m_earth...',
+				'r_*lowercase planet name*	(Radius of each planet and the sun) r_earth...',
+				'',
+				"Extensive as this message is, it still manages to fail horribly. For",
+				"a more exhaustive list of Google Calculator's functions, see one or", 
+				"both of the following pages:",
+				'http://www.googleguide.com/calculator.html',
+				'http://www.google.com/help/calculator.html']
+		print("-/"*40)
+		print(*map(lambda x: "|  " + x, lines), sep="\n")
+		print("-/"*40)
+	def emptyline(self):
+		return False # Do nothing
+	def do_EOF(self, line):
+		if self.prompt: print()
+		quit()
+
+def calc(equation):
+	res = urllib.request.urlopen("http://suggestqueries.google.com/complete/search?output=firefox&q=" + equation).read().decode()
+	answer = json.loads(res)[1]
+	if len(answer) > 0:
+		if answer[0][0] == '=':
+			return answer[0]
+	return "-no solution"
+
+# First check for data piped to PyG
+if sys.stdin.isatty() is False:
+	query = sys.stdin.read().strip('\n')
+	Prompt(completekey=None).default(query)
+# If none exists, check for command line arguments
+elif len(sys.argv) > 1:
+	query = " ".join(parser.largs)
+	Prompt(completekey=None).default(query)
+# If all else fails, start up in interactive mode
+else:
+	while 1:
+		try:
+			Prompt(completekey=None).cmdloop()
+		except KeyboardInterrupt:
+			print()
+			continue

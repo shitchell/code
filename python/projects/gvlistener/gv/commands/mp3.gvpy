@@ -1,0 +1,87 @@
+import re, json
+from gv import settings
+import urllib.parse
+import urllib.request
+
+def help():
+	return "Search for a song / artist, and the first result will be sent to your email."
+
+def decode(data):
+	for i in range(len(data)):
+		info = data[i]
+		if info.get('duration'):
+			minutes = int(info.get("duration") / 60)
+			seconds = info.get("duration") - minutes * 60
+			data[i]['duration'] = "%i:%.2i" % (minutes, seconds)
+		else:
+			data[i]['duration'] = "?:??"
+		song_url = info.get('song_url')
+		# Dehex each url
+		song_url = ''.join([chr(int(x, 16)) for x in re.findall('..', song_url)])
+		# Decode each unhexed url using rc4
+		song_url = rc4(song_url, 'sdf883jsdf22')
+		# Set each url in the list to the new, decoded url
+		data[i]['song_url'] = song_url
+	# Return the fixed data
+	return data
+	
+def unhex(url):
+	formatted = re.sub('(..)', lambda x: x.groups()[0] + " ", url.upper())
+	return ''.join([chr(int(x, 16)) for x in formatted.split()])
+
+def rc4(data, key):
+	x = 0
+	box = list(range(256))
+	for i in range(256):
+		x = (x + box[i] + ord(key[i % len(key)])) % 256
+		box[i], box[x] = box[x], box[i]
+	x = 0
+	y = 0
+	out = []
+	for char in data:
+		x = (x + 1) % 256
+		y = (y + box[x]) % 256
+		box[x], box[y] = box[y], box[x]
+		out.append(chr(ord(char) ^ box[(box[x] + box[y]) % 256]))
+	return ''.join(out)
+
+def do(msg):
+	# Make sure we got args
+	if not msg['args']:
+		return "You must specify a search term."
+	
+	# Check to see if we want to change the number of attachments sent
+	if len(msg['args']) == 2 and msg['args'][0] == "attach":
+		try:
+			attach_num	= int(msg['args'][1])
+		except:
+			return "The second argument must be the number of attachments to send. Note that Gmail won't send emails > 25 Mb."
+		else:
+			settings.set(msg['number'], {'mp3attachments' : attach_num})
+			return "mp3 will now attach %i results." % attach_num
+	
+	query		= ' '.join(msg['args'])
+	resultsurl	= 'http://www.playlist.com/async/searchbeta/tracks?params=tracks%23' + urllib.parse.quote(urllib.parse.quote(query)) + "/1"
+	html		= urllib.request.urlopen(resultsurl).read().decode()
+	trackdata	= re.findall('PPL\.search\.trackdata = (\[\{.*?\}\]);', html, re.DOTALL)
+	if trackdata:
+		trackdata	= json.loads(trackdata[0])
+	else:
+		return "No results found for '%s'" % query
+
+	trackdata	= decode(trackdata)
+	res			= ""
+	attachments	= []
+	
+	attach_num	= settings.get(msg['number'], 'mp3attachments', 1)
+	while attach_num and trackdata:
+		song		= trackdata.pop(0)
+		res			+= '%s \n' % song.get('artist')
+		res			+= '%s (%s)' % (song.get('title'), song.get('duration'))
+		res			+= ' \n \n'
+		furl		= urllib.request.urlopen(song.get('song_url'))
+		furl.name	= song.get('title') + ".mp3"
+		attachments.append(furl)
+		attach_num	-= 1
+	
+	return {'msg' : res, 'attach' : attachments, 'subject' : "MP3 Search Results"}

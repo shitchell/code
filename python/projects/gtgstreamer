@@ -1,0 +1,189 @@
+#!/usr/bin/env python3.2
+
+import os
+import re
+import ssl
+import sys
+import time
+import imaplib
+
+# get the mailbox to watch
+if len(sys.argv) > 1:
+	mbox = sys.argv[1]
+else:
+	mbox = ''
+
+USERNAME = 'shauni3dud3@gmail.com'
+PASSWORD = 'yqwpzpoeyhflqewm'
+CHECKEDMIDS = set()
+IMAPCONNECTION = None
+MAXCOUNT = 25
+GFILEPATH = os.path.expanduser('~/.gstreamer.%s.txt' % mbox)
+
+_idle = False
+def idle(status):
+	global _idle
+	global IMAPCONNECTION
+	
+	_idle = bool(_idle)
+	status = bool(status)
+	if status == _idle:
+		return
+	elif status == True:
+		idlecode = "%s idle\r\n" % IMAPTAG()
+		IMAPCONNECTION.send(idlecode.encode())
+	elif status == False:
+		IMAPCONNECTION.send(b'done\r\n')
+	parse_readline(IMAPCONNECTION.readline())
+	_idle = status
+	return True
+
+def parse_readline(line):
+	if isinstance(line, bytes):
+		line = line.decode()
+	line = str(line)
+	if line.lower().endswith("exists"):
+		# stop idling
+		idle(0)
+		mid = re.findall('\* (\d+) exists', line, re.IGNORECASE)
+		if mid:
+			mid = mid[0]
+		else:
+			idle(1)
+			return
+		# parse the mid
+		res = parse_mid(mid)
+		
+		# and log it if we can
+		if res:
+			gvlog(res)
+
+def IMAPTAG():
+	global IMAPCONNECTION
+	return "%s%i" % (IMAPCONNECTION.tagpre.decode(), IMAPCONNECTION.tagnum)
+
+def gvlog_clear():
+	global GFILEPATH
+	
+	f = open(GFILEPATH, 'w')
+	f.write('')
+	f.close()
+
+def gvlog(message):
+	global GFILEPATH
+	
+	f = open(GFILEPATH, 'a')
+	f.write(message + '\n')
+	f.close()
+
+def parse_mid(mid):
+	global CHECKEDMIDS
+	
+	# make sure we aren't idling
+	idle(0)
+	
+	if isinstance(mid, bytes):
+		mid = mid.decode()
+	mid = str(mid)
+	
+	# make sure we haven't already checked the mid
+	if mid in CHECKEDMIDS:
+		return None
+	else:
+		CHECKEDMIDS.add(mid)
+	data = IMAPCONNECTION.fetch(mid, '(BODY[HEADER.FIELDS (FROM)] BODY[TEXT])')
+	
+	# fix up the data
+	try:
+		sender = data[1][1][1].decode()
+	except Exception as e:
+		print("GTG ERROR: " + str(e) + ": DATA: " + str(data))
+		return None
+	gv = bool(sender.endswith('@txt.voice.google.com>\r\n\r\n') or sender.endswith('<voice-noreply@google.com>\r\n\r\n'))
+	sender = re.findall('From: "(.*?)"', sender)
+	if sender:
+		sender = sender[0]
+		sender = sender.rstrip(' (SMS)')
+	else:
+		sender = None
+	
+	body = data[1][0][1].decode()
+	body = re.compile('\r\n\r\n-.*', re.DOTALL).sub('', body)
+	body = body.strip()
+	
+	# make sure that it's a google voice message
+	if not gv:
+		return None
+	
+	if sender:
+		# if we're dealing with an sms, print the sender / contents
+		body = body.replace('\n', ' ')
+		body = body.replace('\r', '')
+		body = re.sub(' +', ' ', body)
+		return "\n%s\n%s%s" % (body, chr(8226), sender)
+	elif '\r\n\r\nVoicemail from' in body:
+		# otherwise, print that we have a new voicemail
+		body = re.findall('\r\n\r\n(Voicemail from .*?)\r\n', body)[0]
+		body = re.sub('at \d+:\d+ (A|P)M$', '', body)
+		body = body.replace('  ', ' ')
+		body = re.compile('(from [^(]+) \(.*', re.DOTALL).sub('\g<1>', body)
+		return "\n%s %s" % (chr(8226), body)
+
+def login():
+	global IMAPCONNECTION
+	global MAXCOUNT
+	global USERNAME
+	global PASSWORD
+	global mbox
+	
+	lines = []
+	IMAPCONNECTION = imaplib.IMAP4_SSL('imap.gmail.com')
+	IMAPCONNECTION.login(USERNAME, PASSWORD)
+	IMAPCONNECTION.select(mbox)
+	mids = IMAPCONNECTION.search(None, '()')
+	
+	# get all the most recent shit
+	for mid in mids[1][0].split()[::-1]:
+		if not MAXCOUNT:
+			break
+		
+		res = parse_mid(mid)
+		if res:
+			MAXCOUNT -= 1
+			lines.append(res)
+	
+	# clear the log and refill it
+	gvlog_clear()	
+	gvlog("\n".join(lines[::-1]))
+
+# startup message
+gvlog_clear()
+gvlog("starting up...")
+
+# log in once
+login()
+
+# then loop forever, waiting for push notifications
+while 1:
+	# make sure we're idling
+	idle(1)
+	
+	try:
+		line = IMAPCONNECTION.readline()
+	except ssl.SSLError:
+		# restart idling
+		idle(0)
+		idle(1)
+	except KeyboardInterrupt:
+		print('')
+		quit()
+	except:
+		# relogin
+		time.sleep(5)
+		login()
+		continue
+	
+	# parse incoming lines
+	line = line.strip().decode()
+	
+	parse_readline(line)

@@ -1,0 +1,40 @@
+import re
+import imp
+import urllib.parse
+import urllib.request
+
+def help():
+	return 'Look things up on Wikipedia.'
+
+def do(msg):
+	query	= ' '.join([x.capitalize() for x in msg['args']])
+	req		= urllib.request.Request('http://en.wikipedia.org/wiki/Special:Search?search=' + urllib.parse.quote(query))
+	req.add_header('User-Agent', 'Firefox')
+	res		= urllib.request.urlopen(req)
+	html	= res.read()
+	
+	# Remove some tags
+	html	= re.sub(b'<[^bp/].*?>', b'', html)
+	html	= re.sub(b'</[^bp].*?>', b'', html)
+	
+	# Then grab the first bit of data
+	try:
+		snippet	= re.findall(b'<p>(.*?)</p>', html)[0].decode()
+	except:
+		return "There were no results for '%s'" % query
+	else:
+		# Format the snippet
+		snippet	= re.sub('<[^>]+>', '', snippet)
+		snippet	= re.sub('\[\d+\]', '', snippet)
+		# Compose the return message
+		to_return	= "%s -- " % query
+		while len(to_return) < 300 and snippet:
+			to_return	+= snippet[0]
+			snippet		= snippet[1:]
+		if len(to_return) == 300 and snippet:
+			to_return	+= '...'
+	
+	if 'There were no results matching' in snippet:
+		return "There were no results for '%s'" % query
+	else:
+		return to_return

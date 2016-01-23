@@ -1,0 +1,40 @@
+#!/usr/bin/env python
+
+import time
+import random
+import optparse
+
+parser		= optparse.OptionParser()
+parser.add_option("-c", "--chars", dest="chars", default=None)
+parser.add_option("-w", "--white-space", dest="white_chars", default=" ")
+parser.add_option("-s", "--start", type="int", dest="pos", default=0)
+parser.add_option("-i", "--increment", type="int", dest="increment", default=1)
+parser.add_option("-d", "--delay", type="int", dest="delay", default=100)
+(options, args)	= parser.parse_args()
+
+direction	= 0
+buffer		= ""
+for i in range(0, options.pos):
+	buffer += options.white_chars[random.randrange(0, len(options.white_chars))]
+
+while 1:
+	try:
+		last_direction			= direction
+		if options.pos == 0: direction	= 1
+		else: direction			= random.randint(0,1)
+		if options.chars: next_char	= options.chars[random.randrange(0, len(options.chars))]
+		elif direction == 1: next_char	= "\\"
+		elif direction == 0: next_char	= "/"
+		if direction == 0:
+			for i in range(0, options.increment):
+				options.pos -= 1
+				buffer	= buffer[:-1]
+		else:
+			for i in range(0, options.increment):
+				options.pos += 1
+				buffer += options.white_chars[random.randrange(0, len(options.white_chars))]
+		print(buffer + next_char)
+		time.sleep(options.delay / 1000)
+	except KeyboardInterrupt:
+		print()
+		break

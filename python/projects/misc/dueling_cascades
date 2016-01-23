@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+
+import os
+import time
+import random
+import optparse
+
+parser		= optparse.OptionParser()
+parser.add_option("-c", "--char", dest="chars", default=None)
+parser.add_option("-a", "--ansi-colors", action="store_true", dest="colors", default=False)
+parser.add_option("-n", "--cascade-num", type="int", dest="num", default=2)
+parser.add_option("-i", "--increment", type="int", dest="increment", default=1)
+parser.add_option("-s", "--smooth", type="int", dest="smooth", default=1)
+parser.add_option("-d", "--delay", type="int", dest="delay", default=100)
+(options, args)	= parser.parse_args()
+
+get_width = lambda: int(os.popen('stty size').read().split()[1])
+get_pos = lambda width, old_pos: 1 if old_pos <= 0 else width - 1 if old_pos >= width else min(old_pos + (options.increment*random.randrange(-1,2,step=2)), width - 2)
+width = get_width()
+
+cascades	= []
+for x in range(0, options.num):
+	cascade					= {}
+	cascade['direction']	= random.randint(0, 1)
+	cascade['old_position']	= get_pos(width, random.randrange(0, width))
+	cascade['position']		= get_pos(width, cascade['old_position'])
+	cascade['char']			= None
+	if options.colors:
+		cascade['color']	= '\033[%im' % random.randint(31, 37)
+	else:
+		cascade['color']	= ''
+	cascades.append(cascade)
+
+while 1:
+	try:
+		width		= get_width()
+		for cascade in cascades:
+			cascade['old_position']		= cascade['position']
+			cascade['position']			= get_pos(width, cascade['position'])
+			cascade['direction']		= int(cascade['position'] < cascade['old_position'])
+			if options.chars: next_char	= options.chars[random.randrange(0, len(options.chars))]
+			elif cascade['direction'] == 1: next_char	= "/"
+			elif cascade['direction'] == 0: next_char	= "\\"
+			cascade['char']				= next_char
+		for x in range(0, options.smooth):
+			for cascade in sorted(cascades, key=lambda k: k['position'], reverse=True):
+				print("%s%s%s" % (" "*(cascade['position'] - 1), cascade['color'], cascade['char']), end="\r")
+			print('')
+			time.sleep(options.delay / 1000)
+	except KeyboardInterrupt:
+		print()
+		break

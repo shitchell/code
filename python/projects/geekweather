@@ -1,0 +1,61 @@
+#!/usr/bin/env python
+
+import re
+import urllib.request
+
+# get weather from weather.com
+
+tries = 3
+success = False
+while tries:
+	try:
+		# Attempt to get the current location
+		req = urllib.request.Request('http://www.google.com/search?q=current+weather')
+		req.add_header('User-Agent', 'w3m')
+		html = urllib.request.urlopen(req).read()
+		location = re.findall(b'<h3 class="r"><b>Weather</b> for <b>(.*?)</b>', html)
+		coords = re.findall(b'www\.weather\.com/weather/tenday/([\d\-,.]+)&', html)
+		if location and coords:
+			location = location[0].decode()
+			coords = coords[0].decode()
+		else:
+			success = False
+			quit()
+		
+#		html = urllib.request.urlopen('http://www.weather.com/search/enhancedlocalsearch?where=%s' % urllib.parse.quote(location)).read().decode()
+		html = urllib.request.urlopen('http://www.weather.com/weather/today/%s' % urllib.parse.quote(coords)).read().decode()
+		temp = re.findall('realTemp: "(.*?)"', html)[0]
+		[(imgurl, weather)] = re.findall('<span.*?>Right Now</span>.*?<img src="(.*?)" alt="(.*?)"', html, re.DOTALL)
+		sunrise = re.findall('Sunrise: <strong>[^>]+\w+ \w+ \d+ (\d+:\d+):\d+', html, re.DOTALL)[-1]
+		sunset = re.findall('Sunset: <strong>[^>]+\w+ \w+ \d+ (\d+:\d+):\d+', html, re.DOTALL)[-1]
+	except Exception as e:
+		tries -= 1
+	else:
+		success = True
+		break
+
+weather_i = open('/tmp/weather.png', 'bw')
+weather_t = open('/tmp/weather.txt', 'w')
+sunrise_t = open('/tmp/sunrise.txt', 'w')
+sunset_t = open('/tmp/sunset.txt', 'w')
+
+if success:
+	# fix up the 24 hour shit
+	hour, minute = sunset.split(':')
+	hour = int(hour) - 12
+	sunset = '%i:%s' % (hour, minute)
+	
+	# get the image data
+	img = urllib.request.urlopen(imgurl).read()
+	
+	# save the data in the proper locations
+	
+	weather_i.write(img)
+	weather_t.write("%s - %s%sF | %s" % (location, temp, chr(730), weather))
+	sunrise_t.write('%s AM' % sunrise.lstrip('0'))
+	sunset_t.write('%s PM' % sunset.lstrip('0'))
+elif not success:
+	# write blank data to the files
+	weather_t.write('')
+	sunrise_t.write('')
+	sunset_t.write('')

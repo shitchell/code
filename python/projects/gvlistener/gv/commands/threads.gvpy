@@ -1,0 +1,19 @@
+from gv import settings
+owner   = True
+
+def do(msg):
+	# Make sure we have args
+	if not msg['args']: return
+	
+	# If the first arg is an int...
+	try:	settings.set('threads', 'max' int(msg['args'][0]))
+	except:	pass
+	else:	return "Set the number of max threads to '%s'" % msg['args'][0]
+	
+	# Else, if it's "off" or "on"
+	if msg['args'][0] == 'off':
+		settings.set('threads', {'state' : False})
+		return "Set threading 'off'"
+	elif msg['args'][0] == 'on':
+		settings.set('threads', {'state' : True})
+		return "Set threading 'on'"

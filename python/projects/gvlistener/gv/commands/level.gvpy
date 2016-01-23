@@ -1,0 +1,22 @@
+from gv import settings
+owner	= True
+
+def help():
+	return "Set the lockdown level or the level of a phone number."
+
+def do(msg):
+	try:
+		level	= int(msg['args'][0])
+	except:
+		return "You must specify an integer level."
+	
+	if len(msg['args']) == 1:
+		settings.set('lockdown', {'level' : level})
+		return "Lockdown level set to %i" % level
+	else:
+		for number in msg['args'][1:]:
+			settings.set(number, 'level', level)
+		pre_and	= ", ".join(msg['args'][:-1])
+		last	= msg['args'][-1]
+		res		= "%s%s%s set to %i" % (pre_and, " and " if pre_and else "", last, level)
+		return res

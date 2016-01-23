@@ -1,0 +1,28 @@
+import re
+import urllib.request
+
+def help():
+	return "ZOMG Redbox CHEAT CODEZ!!!1111oneoneeleventyone"
+
+def do(msg):
+	# First get all the first page results
+	html	= urllib.request.urlopen('http://www.insideredbox.com/redbox-codes/').read()
+	results	= re.findall(b'''<tr class="( ?pending ?|)"><td.*?class="code_listing">.*?<td class="code_status"><img src='/images/ball_(.*?)\.png' align='absmiddle' title='(.*?)' onclick=usecode\('.*?'\); /></td>.*?<span class="codelink">(.*?)</span></a></div><div class="code_special">(.*?)</div></td>.*?<div class="code_lastuse">Last Used: <strong>(.*?) .*?</strong></div><div class="code_purpose">(.*?)</div></td>''', html, re.DOTALL)
+	# Convert each item in the results into a list of string objects
+	results	= [list([subresult.decode() for subresult in result]) for result in results]
+	# Replace the color code of each result with something more meaningfule like a number
+	order	= {'green' : 1, 'yellow' : 2, 'red' : 3, 'ltgrey' : 4}
+	for result in results: result[1]	= order.get(result[1], 5)
+	# Sort by the color rating
+	results	= sorted(results, key=lambda x: x[1])
+	# Now sort by individual rating
+	for result in results: result[2]	= eval(result[2])
+	results	= sorted(results, key=lambda x: x[2], reverse=True)
+	# Now return the top few that can fit and any helpful infoz
+	res		= tmp	= ""
+	for x in results:
+		tmp	+= '%s%s\n' % (x[3], (" (%s)" % x[4]) if x[4] else "")
+		if len(tmp) < 160: res	= tmp
+		else: break
+	
+	return res

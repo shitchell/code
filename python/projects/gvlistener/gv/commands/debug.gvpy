@@ -1,0 +1,14 @@
+from gv import settings
+owner	= True
+
+def help():
+	return "Set the verbosity of helpful messages."
+
+def do(msg):
+	try:
+		level	= int(msg['args'][0])
+	except:
+		return "You must specify an integer debug level."
+	else:
+		settings.set('debug', {'level' : level})
+		return "Debug level set to %i" % level

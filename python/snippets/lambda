@@ -1,0 +1,27 @@
+def serialize(key):
+	cos = {}
+	c = key.__code__
+	cos["argcount"] = c.co_argcount
+	cos["co_kwonlyargcount"] = c.co_kwonlyargcount
+	cos["nlocals"] = c.co_nlocals
+	cos["stacksize"] = c.co_stacksize
+	cos["co_flags"] = c.co_flags
+	cos["code"] = c.co_code
+	cos["constants"] = c.co_consts
+	cos["names"] = c.co_names
+	cos["varnames"] = c.co_varnames
+	cos["filename"] = c.co_filename
+	cos["name"] = c.co_name
+	cos["firstlineno"] = c.co_firstlineno
+	cos["lnotab"] = c.co_lnotab
+	cos["freevars"] = c.co_freevars
+	cos["cellvars"] = c.co_cellvars
+	return pickle.dumps(cos)
+
+def deserialize(p):
+	cos = pickle.loads(p)
+	y = lambda x: x
+	code = CodeType(cos["argcount"], cos["co_kwonlyargcount"], cos["nlocals"], cos["stacksize"], cos["co_flags"], cos["code"], cos["constants"], cos["names"], cos["varnames"], cos["filename"], cos["name"], cos["firstlineno"], cos["lnotab"], cos["freevars"], cos["cellvars"])
+	y.__code__ = code
+	return y
+

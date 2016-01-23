@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+
+import re
+import sys
+import base64
+
+try:
+	data = sys.argv[1]
+	data = re.sub('([^\\\])"', '\g<1>\\"', data)
+	data = re.sub('^"', '\\"', data)
+	data = eval('b"' + data + '"')
+except Exception as details:
+	print(details)
+	quit()
+
+encode = lambda data: base64.encodebytes(data)
+decode = lambda data: base64.decodebytes(data)
+
+try:
+	data = decode(data)
+except:
+	data = encode(data).strip()
+		
+try:
+	print(data.decode())
+except:
+	data = str(data)
+	print(data[2:-1])

@@ -1,0 +1,180 @@
+import re
+import unread
+import sqlite3
+
+# Log into Google Voice
+# Check for new SMS messages
+# Reply to old messages with an apology, stating that gvlistener is now online. Ask if the user would like a reply to old messages / list of impending tasks.
+# Poll for new messages every second
+# Use flask to implement a web interface
+
+
+### Necessary classes ###
+
+# Command
+# -function
+# -level required
+# -level setter
+# -active
+# -doc
+
+# Inbox
+# -get unread
+
+# SMS
+# -mark unread
+# -delete forever
+# -block sender
+# -read
+# -caller
+
+
+### Necessary methods ###
+
+# get_unread()
+# send_email
+
+# Helper functions
+
+global conn
+conn = sqlite3.connect('db.sqlite')
+# Autocommit changes to the database
+conn.isolation_level = None
+
+def Property(func):
+	return property(**func())
+
+def get_unread():
+	pass
+
+class Gmail:
+	username = None
+	password = None
+	
+	@property
+	def unread():
+		pass
+	
+	def send(address, message, attachments=[]):
+		pass
+
+class SMS:
+	def __init__(self, contents, number, reply_address):
+		self._reply_address = reply_address
+		self.contents = contents
+		self.caller = Caller(number)
+		self._update_reply_address()
+		
+	def _update_reply_address(self):
+		c = conn.cursor()
+		c.execute('''update callers set "reply" = "?" where number = "?"''', (self.reply_address, self.caller.number))
+		c.close()
+	
+	def reply(self, message, attachments=[]):
+		# If there are attachments, send an email to the caller's email.
+		if attachments and not caller.email:
+			# Check for an email, if not, send the user an sms
+			self.reply("This action requires an email. You can set yours using the 'email' command.")
+		elif attachments:
+			# Send an email to the user with the attachments.
+			pass
+		else:
+			# Send the user a reply.
+			pass
+		self.caller.send(message, attachments)
+
+# -block sender
+# -contents
+# -caller (class)
+
+class Caller:
+	def __init__(self, number):
+		self.number = number
+		# Make sure the user is in the database
+		self._archive()
+	
+	def _archive(self):
+		c = conn.cursor()
+		try:
+			c.execute('''insert into callers values ("?", "", 0, 1)''', (self.number,))
+		except sqlite3.IntegrityError:
+			pass
+		c.close()
+	
+	def _block(self, boolean):
+		boolean = bool(boolean)
+		boolean = 1 if boolean else 0
+		c = conn.cursor()
+		c.execute('''update callers set blocked = "?" where number = "?"''', (boolean, self.number))
+		c.close()
+	
+	def block(self):
+		self._block(1)
+	
+	def unblock(self):
+		self._block(0)
+	
+	def get_history(self, size=10):
+		conn = sqlite3.connect('db.sqlite')
+		c = conn.cursor()
+		history = c.execute('''select * from history where number = "?" order by timestamp desc limit ?''', (self.number, size)).fetchall()
+		c.close()
+		history = [dict(zip(["timestamp", "command", "arguments", "message"], x[1:])) for x in history]
+		return history
+	
+	@Property
+	def email():
+		doc = "The caller's email."
+				
+		def fget(self):
+			c = conn.cursor()
+			email = c.execute('''select email from callers where number = "?"''', (self.number,)).fetchall()
+			c.close()		
+			if email:
+				return email[0][0]
+			else:
+				return None
+		
+		def fset(self, email):
+			c = conn.cursor()
+			c.execute('''update callers set email = "?" where number = "?"''', (email, self.number))
+			c.close()
+		
+		def fdel(self):
+			c = conn.cursor()
+			c.execute('''update callers set email = "" where number = "?"''', (self.number,))
+			c.close()
+		
+		return locals()
+	
+	@Property
+	def level():
+		doc = "The user's level associated with allowed commands."
+				
+		def fget(self):
+			c = conn.cursor()
+			lvl = c.execute('''select level from callers where number = "?"''', (self.number,)).fetchall()
+			c.close()
+			if lvl:
+				return lvl[0][0]
+			else:
+				return None
+		
+		def fset(self, lvl):
+			c = conn.cursor()
+			c.execute('''update callers set level = ? where number = "?"''', (lvl, self.number))
+			c.close()
+		
+		def fdel(self):
+			c = conn.cursor()
+			c.execute('''update callers set level = "" where number = "?"''', (self.number,))
+			c.close()
+		
+		return locals()
+
+# -number
+# -history
+# -email
+# -send sms
+# -level
+

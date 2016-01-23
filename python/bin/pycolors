@@ -1,0 +1,198 @@
+#!/usr/bin/env python
+
+default = """### pycolors file ###
+
+### Styles ###
+# bold, default, reversed, blinking, underlined, concealed
+
+### Colors ###
+# black, darkgrey, grey, white,
+# yellow, orange, red, lightred,
+# blue, lightblue, purple, lightpurple
+# turquoise, green, lightgreen
+
+# "text" applies color to the text
+# "bg" applies color to the background
+# "style" applies a style
+#
+# Colors can vary slightly from terminal to terminal - go with what works
+
+NORMAL	=	{}							# global default, although everything should be something.
+FILE	=	{}							# normal file
+DIR	=	{"text" : "blue", "style" : "bold"}			# directory
+LINK	=	{"text" : "cyan", "style" : "bold"}			# symbolic link.
+FIFO	=	{"text" : "orange", "bg" : "black"}			# pipe
+SOCK	=	{"text" : "purple", "style" : "bold"}			# socket
+DOOR	=	{"text" : "purple", "style" : "bold"}			# door
+BLK	=	{"text" : "orange", "bg" : "black", "style" : "bold"}	# block device driver
+CHR	=	{"text" : "orange", "bg" : "black", "style" : "bold"}	# character device driver
+ORPHAN	=	{"text" : "red", "bg" : "black", "style" : "bold"}	# symlink to nonexistent file
+EXEC	=	{"text" : "green", "bg" : "bold"}			# This is for files with execute permission:
+
+# Lists of file extensions for use with the FILE_EXTS dict.
+audio = [".aac", ".au", ".flac", ".mid", ".midi", ".mka", ".mp3", ".mpc", ".ogg", ".ra", ".wav"]
+pictures = [".jpg", ".jpeg", ".gif", ".bmp", ".pbm", ".pgm", ".ppm", ".tga", ".xbm", ".xpm", ".tif", ".tiff", ".png", ".mng", ".pcx"]
+video = [".mov", ".mpg", ".mpeg", ".m2v", ".mkv", ".ogm", ".mp4", ".m4v", ".mp4v", ".vob", ".qt", ".nuv", ".wmv", ".asf", ".rm", ".rmvb", ".flc", ".avi", ".fli", ".gl", ".dl", ".xcf", ".xwd", ".yuv"]
+compressed = [	".tar", ".tgz", ".arj", ".taz", ".lzh", ".zip", ".z", ".Z", ".gz", ".bz2", ".bz", ".tbz2", ".tz", ".deb", ".rpm", ".jar", ".rar", ".ace", ".zoo", ".cpio", ".7z", ".rz"]
+dos = [".cmd", ".exe", ".com", ".btm", ".bat"] # DOS-style suffixes
+
+# File extension colorings:
+FILE_EXTS =	{
+		"audio" : {"text" : "cyan"},
+		"video" : {"text" : "purple", "style" : "bold"},
+		"pictures" : {"text" : "purple", "style" : "bold"},
+		"compressed" : {"text" : "red", "style" : "bold"},
+		"dos" : {"text" : "green", "style" : "bold"}
+		}"""
+
+help = """usage: pycolors [-p] [-h] /path/to/pycolors_file
+ -p		print the default config file
+ -h		display this help message
+
+If no pycolors_file is provided, pycolors looks for
+~/.py_colors. If that isn't found, it'll return the
+default settings."""
+
+import sys
+import os
+import re
+
+if len(sys.argv) > 1 and "-p" in sys.argv:
+	print(default)
+	quit()
+elif len(sys.argv) > 1 and ("--help" in sys.argv or "-h" in sys.argv):
+	print(help)
+	quit()
+elif len(sys.argv) > 1:
+	color_file = sys.argv[1]
+else:
+	color_file = os.path.expanduser("~") + "/.py_colors"
+
+filetypes = {
+			"NORMAL" : "no", 
+			"NORM" : "no", 
+			"FILE" : "fi", 
+			"DIR" : "di", 
+			"SYMLINK" : "ln", 
+			"LINK" : "ln", 
+			"LNK" : "ln", 
+			"FIFO" : "pi", 
+			"PIPE" : "pi", 
+			"DOOR" : "do", 
+			"BLOCK" : "bd", 
+			"BLK" : "bd", 
+			"CHAR" : "cd", 
+			"CHR" : "cd", 
+			"ORPHAN" : "or", 
+			"SOCK" : "so", 
+			"SETUID" : "su", 
+			"SETGID" : "sg", 
+			"STICKY_OTHER_WRITABLE" : "tw", 
+			"OTHER_WRITABLE" : "ow", 
+			"STICKY" : "st", 
+			"EXEC" : "ex", 
+			"MISSING" : "mi", 
+			"LEFTCODE" : "lc", 
+			"LEFT" : "lc", 
+			"RIGHTCODE" : "rc", 
+			"RIGHT" : "rc", 
+			"ENDCODE" : "ec", 
+			"END" : "ec"
+		}
+
+# The default color set used by dircolors
+ls_colors = {
+			"no" : "00",
+			"fi" : "00",
+			"di" : "01;34",
+			"ln" : "01;36",
+			"pi" : "40;33",
+			"so" : "01;35",
+			"do" : "01;35",
+			"bd" : "40;33;01",
+			"cd" : "40;33;01",
+			"or" : "40;31;01",
+			"su" : "37;41",
+			"sg" : "30;43",
+			"tw" : "30;42",
+			"ow" : "34;42",
+			"st" : "37;44",
+			"ex" : "01;32"
+		}
+
+class ColorSet:
+	text_colors = {"black" : "30", "red" : "31", "green" : "32", "orange" : "33", "blue" : "34", "purple" : "35", "cyan" : "36", "grey" : "37","darkgrey" : "90","lightred" : "91", "lightgreen" : "92", "yellow" : "93", "lightblue" : "94", "lightpurple" : "95", "turquoise" : "96", "white" : "97"}
+	bg_colors = {"black" : "40", "red" : "41", "green" : "42", "orange" : "43", "blue" : "44", "purple" : "45", "cyan" : "46", "grey" : "47","darkgrey" : "100", "lightred" : "101", "lightgreen" : "102", "yellow" : "103", "lightblue" : "104", "lightpurple" : "105", "turquoise" : "106","white" : "107"}
+	styles = {"default" : "00", "bold" : "01", "underlined" : "04", "blinking" : "05", "reversed" : "07", "concealed" : "08"}
+	def __init__(self, ls_colorname, colordict):
+		self.name = ls_colorname
+		self.text = colordict.get('text')
+		self.bg = colordict.get('bg')
+		self.style = colordict.get('style')
+	def __str__(self):
+		return "%s=%s" % (self.name, self.code())
+	def code(self):
+		textf = lambda x: self.text_colors.get(x) + ";" if self.text_colors.get(x) else ''
+		bgf = lambda x: self.bg_colors.get(x) + ";" if self.bg_colors.get(x) else ''
+		stylef = lambda x: self.styles.get(x) + ";" if self.styles.get(x) else ''
+		fin = "%s%s%s" % (stylef(self.style), textf(self.text), bgf(self.bg))
+		return fin[:-1]
+
+def completesAssignment(x):
+	match = re.findall("\s*(\w+)\s*=[^=]\s*[[{]*(\S+)", x)
+	if match:
+		return True
+	else:
+		return False
+
+def doesAssignment(x):
+	match = re.findall("\s*(\w+)\s*=[^=]\s*(\S+)", x)
+	if match:
+		return True
+	else:
+		return False
+
+def getAssignment(x):
+	match = re.search("\s*(\w+)\s*=[^=]\s*(.+)", x)
+	if match:
+		return match[0]
+	else:
+		return None
+
+if os.path.exists(color_file):
+	data = open(color_file, "r").read()
+	data = re.sub("#.*", "", data)
+	data = re.sub(";.*", "", data)
+	safe_data = []
+else:
+	lc = ""
+	for key in ls_colors:
+		lc += "%s=%s:" % (key, ls_colors[key])
+	print(lc)
+	quit()
+
+# This is probably a little unsafe, and i had to strongly consider whether or not to just leave it like this... but the way i see it, if someone
+# can edit your .py_colors file and make you execute some nasty stuff, they could just as easily fuck you over by editing your .bashrc files, not
+# to mention you probably have bigger problems if someone's got unauthorized write access to your machine
+exec(data)
+
+# Set file extension colors
+if globals().get('FILE_EXTS'):
+	if type(globals().get('FILE_EXTS')) == dict:
+		for ext_list in globals().get('FILE_EXTS'):
+			if globals().get(ext_list):
+				for ext in globals().get(ext_list):
+					ext = ColorSet(ext, globals().get('FILE_EXTS').get(ext_list))
+					ls_colors["*" + ext.name] = (ext.code())
+
+# Set the filetype colors
+for filetype in filetypes:
+	if globals().get(filetype):
+		cs = ColorSet(filetype, globals().get(filetype))
+		ls_colors[filetypes[filetype]] = cs.code()
+
+
+lc = ""
+for key in ls_colors:
+	lc += "%s=%s:" % (key, ls_colors[key])
+print(lc)

@@ -1,0 +1,8 @@
+import sys
+owner	= True
+
+def help():
+	return "Shutdown the program."
+
+def do(msg):
+	sys.exit()

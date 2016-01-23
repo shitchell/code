@@ -1,0 +1,44 @@
+import os
+import io
+import re
+import glob
+import shlex
+import zipfile
+owner	= True
+
+def help():
+	"Fetch files / folders from your computer and email them to yourself."
+
+def zipper(directory):
+	base	= os.path.dirname(re.sub('([^/])$', '\\1/', directory))
+	zf		= io.BytesIO()
+	z		= zipfile.ZipFile(zf, 'w')
+	for root, dirs, files in os.walk(directory):
+		for f in files:
+			fullpath	= os.path.join(root, f)
+			arcname		= re.sub('^%s' % base, '', fullpath)
+			z.write(fullpath, arcname)
+	z.close()
+	zf.seek(0)
+	return zf
+
+def do(msg):
+	args		= " ".join(msg['args'])
+	args		= shlex.split(args)
+	user_dir	= os.path.expanduser('~')
+	attachments	= []
+	to_return	= ""
+	for glob_path in args:
+		glob_path	= os.path.join(user_dir, glob_path)
+		for path in glob.glob(glob_path):
+			if os.path.isfile(path):
+				try:	attachments.append(open(path, 'br'))
+				except:	to_return += "Couldn't attach '%s'\n" % path
+			elif os.path.isdir(path):
+				zfile		= zipper(path)
+				zfile.name	= os.path.basename(path.strip(os.path.sep)) + '.zip'
+				attachments.append(zfile)
+	if attachments:
+		return {'msg' : to_return, 'attach' : attachments, 'subject' : "Fetched Files"}
+	elif msg['args'] and not attachments:
+		return "No such file or directory."

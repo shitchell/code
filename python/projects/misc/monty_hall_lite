@@ -1,0 +1,44 @@
+#!/usr/bin/env python3.1
+ 
+import sys
+import time
+import random
+import optparse
+ 
+parser = optparse.OptionParser()
+parser.add_option("--switch", action="store_true", dest="switch", default=False,
+                help="Switch doors after the first is revealed.")
+parser.add_option("--no-switch", action="store_false", dest="switch", default=False,
+                help="Don't switch doors after the first is revealed.")
+parser.add_option("--host-knows", action="store_true", dest="host_knows", default=False,
+                help="The revealed door is always a dud.")
+parser.add_option("-t", "--times", type="int", dest="times", default=10,
+                help="Number of times to test.")
+(options, args) = parser.parse_args()
+ 
+successes = 0
+ 
+for x in range(options.times):
+        doors = [0, 0, 1]
+        random.shuffle(doors)
+       
+        if options.host_knows:
+                # Pick an index in doors that doesn't correspond to a 1
+                revealed_index = random.choice(list(filter(lambda x: doors[x] != 1, range(len(doors)))))
+        else:
+                # Else just pick a random index
+                revealed_index = random.choice(range(len(doors)))
+        # Pick some door that wasn't revealed
+        picked_index = random.choice(list(filter(lambda x: x!= revealed_index, range(len(doors)))))
+               
+        if doors[revealed_index] != 1:
+                # If the revealed door wasn't the right one, now we decide whether or not to switch which door to open
+                if options.switch:
+                        # Create a set of numbers 0-2 and a set of the picked/revealed indices, then find the difference (the only door left)
+                        picked_index = set(range(3)).difference({picked_index, revealed_index}).pop()
+               
+        if doors[picked_index] == 1 or doors[revealed_index] == 1:
+                # Did we find the number 1? Did we do good? We did good...
+                successes += 1
+ 
+print("%i/%i successes - %.2f%% success rate" % (successes, options.times, successes/options.times*100))

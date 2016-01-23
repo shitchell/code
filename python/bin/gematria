@@ -1,0 +1,27 @@
+#!/usr/bin/env python
+
+import sys
+import json
+
+greek = '{"600": "\\u05dd", "700": "\\u05df", "60": "\\u05e1", "80": "\\u05e4", "20": "\\u05db", "40": "\\u05de", "1": "\\u05d0", "3": "\\u05d2", "2": "\\u05d1", "5": "\\u05d4", "4": "\\u05d3", "7": "\\u05d6", "400": "\\u05ea", "9": "\\u05d8", "8": "\\u05d7", "500": "\\u05da", "200": "\\u05e8", "300": "\\u05e9", "6": "\\u05d5", "70": "\\u05e2", "90": "\\u05e6", "100": "\\u05e7", "10": "\\u05d9", "900": "\\u05e5", "30": "\\u05dc", "50": "\\u05e0", "800": "\\u05e3"}'
+english = '{"A": 1, "C": 3, "B": 2, "E": 5, "D": 4, "G": 7, "F": 6, "I": 9, "H": 8, "K": 11, "J": 10, "M": 13, "L": 12, "O": 15, "N": 14, "Q": 17, "P": 16, "S": 19, "R": 18, "U": 21, "T": 20, "W": 23, "V": 22, "Y": 25, "X": 24, "Z": 26}'
+
+keys = json.loads(english)
+#keys = json.loads(greek)
+
+g = lambda keylist, word: sum([keylist.get(x) if keylist.get(x) else 0 for x in word.upper()])
+
+if len(sys.argv) > 1:
+	# Get the biggest word in the command line for pretty printing
+	justify = max([len(x) for x in sys.argv[1:]])
+
+total = 0
+
+for word in sys.argv[1:]:
+	word = word.upper()
+	wsum = g(keys, word)
+	print("%s => %i" % (word.ljust(justify), wsum))
+	total += wsum
+
+if total:
+	print("%s => %i" % (''.ljust(justify), total))

@@ -1,0 +1,108 @@
+import os
+import re
+import urllib.parse
+import urllib.request
+from gv import settings
+owner=True
+
+def help():
+	return "Install new command modules. Examples:\n$name translate, ud.\n$name translate, ud as urband."
+
+# A method for displaying the first few updates from a subdomain
+def get_recent(subdomain=""):
+	url = "http://%s.pastebay.com/" % subdomain
+	res = urllib.request.urlopen(url).read()
+	matches = re.findall('<li><a href="http://.*?pastebay.com/(\d+).*?">(.*?)</a><br/>(.*?)</li>', res.decode())
+	matches = [{"subdomain" : subdomain, "id" : x[0], "name" : x[1], "time" : x[2]} for x in matches]
+	return matches
+
+# A method for downloading a paste based on a dict returned by "get_recent"
+def get_paste(paste):
+	url	= 'http://%s.pastebay.com/pastebay.php?dl=%s' % (paste['subdomain'], paste['id'])
+	res = urllib.request.urlopen(url).read().decode('iso8859')
+	res	= res.replace('\r\n', '\n')
+	return res
+
+# A method for getting recent sauces from pastebay
+def from_pastebay(command):
+	subdomain	= "gvpy-" + command
+	recent		= get_recent(subdomain)
+	code		= get_paste(recent[0])
+	return code
+
+# A method for getting recent sauces from dropbox
+def from_dropbox(command):
+	url		= "http://dl.dropbox.com/u/11788847/gvlistener/gv/commands/%s.gvpy" % command
+	try:	code	= urllib.request.urlopen(url).read().decode()
+	except:	return None
+	else:	return code
+
+# Set the location to download from "dropbox" or "pastebay"
+def change_from(location):
+	if location == "dropbox":
+		settings.set('install', {'location' : 'dropbox'})
+	elif location == "pastebay":
+		settings.set('install', {'location' : 'pastebay'})
+
+def do(msg):
+	# Make sure we have args
+	if not msg['args']: return "You must provide the names of commands to install."
+	# See if all we're doing is setting up our install locaton
+	if len(msg['args']) == 2 and msg['args'][0] == 'from':
+		settings.set('install', {'location' : msg['args'][1]})
+		return "Install location changed to '%s'" % msg['args'][1]
+	
+	# Parse commands
+	commands	= " ".join(msg['args']).lower()
+	commands	= commands.split(',')
+	commands	= [x.strip() for x in commands]
+	
+	# Sort and make sure there aren't dupes
+	commands.sort()
+	commands	= list(dict([(x, None) for x in commands]))
+	commands	= [x.split() for x in commands]
+	
+	# Shit
+	response	= []
+	
+	for command in commands:
+		# See what the command should be installed as
+		if len(command) == 3 and command[1] == "as":
+			install_name	= command[2]
+			command			= command[0]
+		else:
+			install_name	= command[0]
+			command			= command[0]
+		
+		# Get links to sauces using the prescribed method
+		if settings.get('install', 'location', 'dropbox') == 'dropbox':
+			code	= from_dropbox(command)
+		elif settings.get('install', 'location') == 'pastebay':
+			code	= from_pastebay(command)
+		
+		# Check for retrieval failure
+		if not code:
+			response.append("'%s' not found." % command)
+			continue
+		
+		# Try to verify the code at least a little bit before installing it
+		try:
+			compile(code, 'shitdick', 'exec')
+		except:
+			response.append("'%s' won't compile." % command)
+		else:
+			# If it succeeded, go ahead and install it
+			filepath	= 'gv' + os.path.sep + 'commands' + os.path.sep + install_name + ".gvpy"
+			try:
+				commandfile	= open(filepath, 'w')
+			except:
+				return "You don't have permission to add files to the commands folder."
+			else:
+				commandfile.write(code)
+				commandfile.close()
+				# Remove the previous gvpyc file if it exists
+				if os.path.exists(filepath + "c"):	os.remove(filepath + "c")
+				response.append("'%s' installed%s." % (command, (" as '%s'" % install_name) if command != install_name else ""))
+	
+	# And finally, after we've gone through everything, return the results
+	return "\n".join(response)

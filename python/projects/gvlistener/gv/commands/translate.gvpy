@@ -1,0 +1,109 @@
+import re
+import sys
+import json
+import urllib.parse
+import urllib.request
+
+def help():
+	return "Translate things.\nexamples:\n$name hola mundo.\n$name to spanish hello world."
+
+languages	= [
+				{'lang': 'Afrikaans', 'code': 'af'},
+				{'lang': 'Albanian', 'code': 'sq'},
+				{'lang': 'Arabic', 'code': 'ar'},
+				{'lang': 'Belarusian', 'code': 'be'},
+				{'lang': 'Bulgarian', 'code': 'bg'},
+				{'lang': 'Catalan', 'code': 'ca'},
+				{'lang': 'Chinese', 'code': 'zh-CN'},
+				{'lang': 'Croatian', 'code': 'hr'},
+				{'lang': 'Czech', 'code': 'cs'},
+				{'lang': 'Danish', 'code': 'da'},
+				{'lang': 'Dutch', 'code': 'nl'},
+				{'lang': 'English', 'code': 'en'},
+				{'lang': 'Estonian', 'code': 'et'},
+				{'lang': 'Filipino', 'code': 'tl'},
+				{'lang': 'Finnish', 'code': 'fi'},
+				{'lang': 'French', 'code': 'fr'},
+				{'lang': 'Galician', 'code': 'gl'},
+				{'lang': 'German', 'code': 'de'},
+				{'lang': 'Greek', 'code': 'el'},
+				{'lang': 'Hebrew', 'code': 'iw'},
+				{'lang': 'Hindi', 'code': 'hi'},
+				{'lang': 'Hungarian', 'code': 'hu'},
+				{'lang': 'Icelandic', 'code': 'is'},
+				{'lang': 'Indonesian', 'code': 'id'},
+				{'lang': 'Irish', 'code': 'ga'},
+				{'lang': 'Italian', 'code': 'it'},
+				{'lang': 'Japanese', 'code': 'ja'},
+				{'lang': 'Korean', 'code': 'ko'},
+				{'lang': 'Latvian', 'code': 'lv'},
+				{'lang': 'Lithuanian', 'code': 'lt'},
+				{'lang': 'Macedonian', 'code': 'mk'},
+				{'lang': 'Malay', 'code': 'ms'},
+				{'lang': 'Maltese', 'code': 'mt'},
+				{'lang': 'Norwegian', 'code': 'no'},
+				{'lang': 'Persian', 'code': 'fa'},
+				{'lang': 'Polish', 'code': 'pl'},
+				{'lang': 'Portuguese', 'code': 'pt'},
+				{'lang': 'Romanian', 'code': 'ro'},
+				{'lang': 'Russian', 'code': 'ru'},
+				{'lang': 'Serbian', 'code': 'sr'},
+				{'lang': 'Slovak', 'code': 'sk'},
+				{'lang': 'Slovenian', 'code': 'sl'},
+				{'lang': 'Spanish', 'code': 'es'},
+				{'lang': 'Swahili', 'code': 'sw'},
+				{'lang': 'Swedish', 'code': 'sv'},
+				{'lang': 'Thai', 'code': 'th'},
+				{'lang': 'Turkish', 'code': 'tr'},
+				{'lang': 'Ukrainian', 'code': 'uk'},
+				{'lang': 'Vietnamese', 'code': 'vi'},
+				{'lang': 'Welsh', 'code': 'cy'},
+				{'lang': 'Yiddish', 'code': 'yi'}
+			]
+
+def get_lang_code(l):
+	for language in languages:
+		if language['lang'].lower() == l.lower():
+			return language['code']
+	return None
+
+def translate(phrase, lang_to):
+	langpair	= '|%s' % lang_to
+	data		= urllib.parse.urlencode({'v' : 1.0, 'q' : phrase, 'langpair' : langpair})
+	res			= urllib.request.urlopen('http://ajax.googleapis.com/ajax/services/language/translate?', data).read().decode()
+	res			= json.loads(res)
+	if res['responseData']:
+		for language in languages:
+			if language['code'] == res['responseData']['detectedSourceLanguage']:
+				trans_from = language['lang']
+				break
+		res		= res['responseData']['translatedText']
+		res		= re.sub('&#(\d+);', lambda x: chr(int(x.group(1))), res)
+		return {'from' : trans_from, 'text' : res}
+	else:
+		return None
+
+def do(msg):
+	if not msg['args']: return "You must enter a phrase to tranlate."
+
+	# Parse options
+	if msg['args'][0] == "to" and len(msg['args'] > 1):
+		lang_to	= msg['args'][1]
+		msg['args']	= msg['args'][2:]
+	else:
+		lang_to	= "english"
+	
+	# Make sure that the language is supported
+	lang_to	= get_lang_code(lang_to)
+	if lang_to == None:
+		return "'%s' is not a supported language." % lang_to
+	
+	# Get the phrase to translate
+	phrase	= " ".join(msg['args'])
+	if not phrase:
+		return "You must enter a phrase to translate."
+	
+	# Translate shit
+	res		= translate(phrase, lang_to)
+	if res:
+		return "[%s] %s" % (res['from'], res['text'])

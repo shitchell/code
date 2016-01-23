@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+
+import sys
+import time
+import optparse
+
+parser = optparse.OptionParser()
+parser.add_option("-n", action="store_true", dest="numbering", default=False,
+		help="Number the output lines, starting at 1.")
+parser.add_option("-s", action="store_true", dest="squeeze", default=False,
+		help="Squeeze multiple adjacent empty lines, causing the output to be single spaced.")
+parser.add_option("-v", action="store_true", dest="invisibles", default=False,
+		help="Display non-ascii characters so they are visible.")
+parser.add_option("-d", type="float", dest="delay", default=None,
+		help="Set the delay interval between character prints.")
+
+parser.usage = '%prog [-bnsv] [-d integer] [file ...]'
+parser.epilog = "slow cat - cat but with a delay between printing characters. accepts piped data"
+(options, args) = parser.parse_args()
+
+
+def slowprint(f):
+	if options.delay:
+		get_delay = lambda: options.delay
+	else:
+		import random
+		get_delay = lambda: random.randrange(5, 20)
+
+	lineno = 1
+	lastdata = '\n'
+	data = f.read(1)
+	while data:
+		if options.numbering and lastdata == '\n': print('     %d\t' % lineno, end="")
+		lineno += 1
+		if options.squeeze and lastdata == '\n': continue
+		lastdata = data
+		if options.invisibles:
+			data = str(data.encode())[2:-1]
+		stime = get_delay()
+		time.sleep(stime/100)
+		print(data, end="")
+		sys.stdout.flush()
+		data = f.read(1)
+
+if sys.stdin.isatty(): # Then we should look for arguments and cat these files
+	for f in parser.largs:
+		try:
+			myfile = open(f, 'r')
+		except:
+			continue
+		try:
+			slowprint(myfile)
+		except:
+			quit()
+else:
+	try:
+		slowprint(sys.stdin)
+	except:
+		pass
+
+if options.invisibles:
+	print()

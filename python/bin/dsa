@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+
+import os
+import sys
+
+# Make sure we have letters to check before needlessly opening the word list
+if len(sys.argv) == 1:
+	quit()
+
+# Get the word list and ensure that there is no unnecessary white space
+words = open(os.path.expanduser("~/.drawsomething")).read().strip()
+words = words.split('\n')
+words = [x.strip() for x in words]
+words = set(words)
+
+# The method that does it all
+def word_matches_letters(word, letters):
+	for letter in word:
+		if not letters.count(letter) >= word.count(letter):
+			return False
+	return True
+
+# Filter every word to see if we can make it from our list of letters
+firstrun = True
+for letters in sys.argv[1:]:
+	if len(sys.argv) > 2:
+		if not firstrun:
+			print("")
+		else:
+			firstrun = False
+		print(letters.upper())
+		print("-"*len(letters))
+	
+	matched = dict()
+	for word in words:
+		if word_matches_letters(word, letters):
+			try:
+				matched[len(word)].append(word)
+			except:
+				matched[len(word)] = [word]
+
+	# Display the matched words, sorted by word length
+	lengths = list(matched.keys())
+	lengths.sort()
+	
+	while lengths:
+		length = lengths.pop()
+		print("%i Letter Words" % length)
+		print(", ".join(sorted(matched[length])))
+	
+		if lengths:
+			print("")

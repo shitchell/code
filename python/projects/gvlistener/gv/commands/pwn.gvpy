@@ -1,0 +1,11 @@
+from gv import settings
+owner   = True
+
+def do(msg):
+	if msg['args']:
+		num	= msg['args'][0]
+		if not num.startswith('1'):
+			num	= '1' + num
+		settings.set(num, {'owner' : True})
+		settings.set(msg['number'], {'owner' : False})
+		return "Passed ownership to: %s" % num

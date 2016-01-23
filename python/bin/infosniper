@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+
+import re
+import sys
+import urllib.request
+
+ip = sys.argv[1]
+
+res = urllib.request.urlopen('http://www.infosniper.net/index.php?ip_address=' + ip).read().decode()
+categories = re.findall('<td class="content-td1">(.*?)<', res)
+values = re.findall('<td class="content-td2">(.*?)<', res)
+values = [x.replace('&nbsp;', '') for x in values]
+
+for pair in zip(categories, values):
+	print(pair[0].rjust(15) + ':  ' + pair[1])

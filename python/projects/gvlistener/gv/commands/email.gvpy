@@ -1,0 +1,9 @@
+from gv import settings
+
+def help():
+	return "Register your email address with this phone number to allow for file sending. Usage:\n$name youremail@email.com"
+
+def do(msg):
+	if msg['args']:
+		settings.set(number, {'email' : args[0]})
+		return "Registered %s with the email '%s'" % (number, args[0])

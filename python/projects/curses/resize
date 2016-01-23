@@ -1,0 +1,22 @@
+#!/usr/bin/python
+import curses, sys
+
+def init_display(stdscr):
+	stdscr.clear()
+	stdscr.refresh()
+	size = stdscr.getmaxyx()
+	sys.stderr.write("Now %u x %u\n" % (size[1],size[0]))
+	stdscr.resize(size[0], size[1])
+	return stdscr
+
+def main(stdscr):
+	stdscr = init_display(stdscr)
+	while 1:
+		input = stdscr.getch()
+		if ( input == curses.KEY_RESIZE):
+			init_display(stdscr)
+		elif input == ord("q"):
+			sys.exit()
+		stdscr.refresh()
+
+curses.wrapper(main)

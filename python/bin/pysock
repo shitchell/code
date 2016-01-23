@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+
+import sys
+import time
+import socket
+import _thread
+import readline
+
+if len(sys.argv) < 3:
+	print('usage: pysock [options] server port')
+	quit()
+
+# Go through options
+
+if "-u" in sys.argv:
+	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+else:
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+server = sys.argv[-2]
+port = int(sys.argv[-1])
+
+s.connect((server, port))
+
+def listener(sock):
+	global keepgoing
+	while 1:
+		res = sock.recv(1024)
+		if res == b'':
+			keepgoing = False
+			break
+		res = str(res)[2:-1]
+		print(res)
+
+_thread.start_new_thread(listener, (s,))
+
+keepgoing = True
+try:
+	while 1:
+		tosend = input()
+		tosend = eval("b'" + tosend.replace("'", "\\'") + "'")
+		s.send(tosend)
+except KeyboardInterrupt:
+	print()
+	quit()

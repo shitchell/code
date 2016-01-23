@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+
+import re
+import os
+import sys
+import time
+import hashlib
+import optparse
+
+parser = optparse.OptionParser()
+parser.add_option("-d", "--delete", action="store_true", dest="remove", default=False,
+					help="Delete any duplicates files.")
+parser.add_option("-x", "--exclude", action="append", dest="exclude", default=[],
+					help="Exclude filenames that match the regex.")
+parser.add_option("-r", "--recursive", action="store_true", dest="recursive", default=False)
+parser.add_option("-b", "--bytes", type="int", dest="bytes", default=None,
+					help="Read only the first X bytes of each file.")
+parser.add_option("--hidden", action="store_true", dest="hidden", default=False,
+					help="Include hidden files when using the recursive option.")
+parser.add_option("--debug", action="store_true", dest="debug", default=False,
+					help=optparse.SUPPRESS_HELP)
+(options, optionargs) = parser.parse_args()
+
+if not parser.largs:
+	parser.print_help()
+	quit()
+
+class Stats:
+	files_scanned = 0
+	files_skipped = 0
+	time = 0
+	duplicates = 0
+	deleted = 0
+
+def md5(file):
+	myfile = open(file, 'rb')
+	m = hashlib.md5()
+	if options.bytes:
+		m.update(myfile.read(options.bytes))
+	else:
+		while myfile.peek():
+			m.update(myfile.read(8192))
+	return m.hexdigest()
+
+def process(file):
+	print("\rScanned: " + str(Stats.files_scanned + 1), end="")
+	if options.exclude:
+		for regex in options.exclude:
+			if re.match(regex, os.path.abspath(file)):
+				debug('skipping: ' + file)
+				#Skip the file if it matches any of the regexes
+				Stats.files_skipped += 1
+				return
+	Stats.files_scanned += 1
+	debug('hashing ' + file)
+	h = md5(file)
+	debug(' - hash: ' + h)
+	if h not in md5s:
+		md5s[h] = file
+	else:
+		debug(' - duplicate found!')
+		Stats.duplicates += 1
+		if h in dupes:
+			dupes[h] += [file]
+		else:
+			dupes[h] = [file, md5s[h]]
+
+def recurse(directory):
+	if not directory.endswith('/'): directory += '/'
+	debug('entering dir: ' + directory)
+	files = os.listdir(directory)
+	if not options.hidden:
+		debug('skipping hidden files')
+		files = filter(lambda x: not x.startswith('.'), files)
+	for file in files:
+		file = directory + file
+		if not os.path.exists(file):
+			debug('no such file: "' + file + '"')
+			pass
+		elif os.path.isdir(file):
+			if options.recursive:
+				recurse(file)
+		else:
+			process(file)
+
+def debug(msg):
+	if options.debug:
+		print('# DEBUG: ' + msg)
+
+md5s = {}
+dupes = {}
+s = time.time()
+
+for file in parser.largs:
+	if not os.path.exists(file):
+		pass
+	elif os.path.isdir(file):
+		if options.recursive:
+			recurse(file)
+	else:
+		process(file)
+
+print("\r", end="")
+
+debug('dupes dict: ' + str(dupes))
+for h in dupes:
+	debug('dupes[h] : ' + h)
+	print("%s: (%s)" % (h, len(dupes[h])))
+	#Get the first file created out of the list, print it, and pop it from the list
+	ctime = (dupes[h][0], os.stat(dupes[h][0]).st_ctime)
+	debug('ctime: ' + str(ctime))
+	for file in dupes[h][1:]:
+		file_ctime = os.stat(file).st_ctime
+		debug('ctime: ' + str((file, file_ctime)))
+		if file_ctime < ctime[1]:
+			ctime = (file, file_ctime)
+	debug('created first: ' + ctime[0])
+	print('  ' + ctime[0])
+	dupes[h].remove(ctime[0])
+	for file in dupes[h]:
+		if options.remove:
+			os.remove(file)
+			print('  ' + file + ' (Deleted)')
+			Stats.deleted += 1
+		else:
+			print('  ' + file)
+	print()
+
+f = time.time()
+Stats.time = f - s
+print('\r', end="")
+print('%s files scanned.' % Stats.files_scanned)
+print('%s files skipped.' % Stats.files_skipped)
+print('%s duplicates found.' % Stats.duplicates)
+print('%s files deleted.' % Stats.deleted)
+print('%s seconds' % Stats.time)

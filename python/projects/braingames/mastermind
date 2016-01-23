@@ -1,0 +1,158 @@
+#!/usr/bin/env python
+
+import re
+import time
+import random
+import readline
+import optparse
+import itertools
+import collections
+
+parser = optparse.OptionParser()
+parser.add_option("-s", "--solve", action="store_true", dest="solve", default=False,
+					help="Solve a game using (sort of) Knuth's algorithm.")
+parser.add_option("-g", "--guess", action="store_true", dest="guess", default=False,
+					help="""Supply the number of correct/almost correct responses, and the computer will solve for a set of random numbers picked by you.""")
+parser.add_option("-r", "--range", dest="max", type="int", default=6,
+					help="Upper bound for the numbers used.")
+parser.add_option("-n", "--numbers", dest="numbers", type="int", default=4,
+					help="How many random numbers will be chosen.")
+parser.add_option("-q", "--quick-guess", action="store_true", dest="quick", default=False,
+					help="Only scan the last 100 possibilities for best guesses.")
+parser.add_option("-t", "--target", dest="target", default=None,
+					help="Set the target manually.")
+parser.add_option("-d", "--delay", dest="delay", type="float", default=.5)
+parser.description = """A variation of the classic Mastermind game. 4 numbers between 1 and 6
+are chosen at random. For each guess, a check will be awarded to a
+number in the correct spot, and a slash for each correct number in
+an incorrect location. A (slightly less innefficient) version of
+Knuth's algorithm is implemented that can solve the game (with
+default settings) in ~4.8 moves."""
+
+(options, optionargs) = parser.parse_args()
+
+# Create a list of random numbers
+if options.target:
+	nums = [int(x) for x in options.target.split()]
+else:
+	nums = []
+	for x in range(options.numbers):
+		nums.append(random.randrange(1, options.max+1))
+
+# Timing methods for debugging
+DEBUG = False
+_times = dict()
+def _t(sid, stdout=True):
+	if DEBUG:
+		if not _times.get(sid):
+			_times[sid] = time.time()
+		else:
+			t = time.time() - _times[sid]
+			del _times[sid]
+			if stdout:
+				print("%s:" % str(sid), "%f" % t)
+			else:
+				return t
+
+# Method for generating a score by comparing 2 lists
+def score(guess, solution):
+	s = list(solution)
+	g = list(guess)
+	c = 0
+	a = 0
+	for i in range(len(guess)):
+		if g[i] == s[i]:
+			c += 1
+			s[i] = "S"
+			g[i] = "G"
+	for num in g:
+		try:
+			i = s.index(num)
+		except:
+			continue
+		a += 1
+		s[i] = "X"
+	return c, a
+
+# Logically get the answer given
+def splitline(line):
+	if re.search('[^d]', line):
+		answer = re.findall('\d', line)
+	else:
+		answer = re.findall('\d+', line)
+	return [int(x) for x in answer]
+
+# Solve the game automatically if necessary
+if options.solve or options.guess:
+	def all_possibilities():
+		return itertools.product(*[range(1, options.max+1)]*options.numbers)
+	_possibilities = list(all_possibilities())
+	_possibilities = sorted(_possibilities, key=lambda x: len(set(x)))
+	
+	def filter_possibilities(guess, gscore):
+		global _possibilities
+		def _filter(guess, gscore):
+			for possibility in _possibilities:
+				s = score(possibility, guess)
+				if s == gscore:
+					yield possibility
+		_possibilities = list(_filter(guess, gscore))
+	
+	_used = []
+	def best_guess():
+		global _possibilities
+		
+		if not _used:
+			s = _possibilities
+		elif options.quick:
+			s = sorted(_possibilities[-100:], key=lambda x: sum([len(old.union(x)) for old in _used]))
+		else:
+			s = sorted(_possibilities, key=lambda x: sum([len(old.union(x)) for old in _used]))
+		g = s[-1]
+		_used.append(set(g))
+		return g
+
+guess = []
+c = 0
+while c != 4:
+	if not options.solve and not options.guess:
+		try:
+			line = input("> ")
+		except (KeyboardInterrupt, EOFError):
+			print()
+			quit()
+		else:
+			if line.startswith("!"):
+				# Treat as python code
+				try:
+					eval(line[1:])
+				except Exception as e:
+					print(e)
+				continue
+	
+	if options.solve or options.guess:
+		time.sleep(options.delay)
+		try:
+			guess = best_guess()
+		except IndexError:
+			if options.guess:
+				print("Nice job lying, you litte shit.")
+				quit()
+		print(">", *guess)
+	else:
+		guess = splitline(line)
+
+	if not options.guess:
+		_t('score')
+		c, a = score(guess, nums)
+		_t('score')
+		check = "%s " % chr(10003)
+		print("%s%s" % (check*c, "/ "*a))	
+	elif options.guess:
+		c = int(input("Correct: "))
+		a = int(input("Almost:  "))
+	
+	if options.solve or options.guess:
+		_t('filter')
+		filter_possibilities(guess, (c, a))
+		_t('filter')

@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+
+import re
+import os
+import sys
+import optparse
+
+parser = optparse.OptionParser()
+parser.add_option("-x", "--exclude", dest="exclude", default=None)
+parser.add_option("-e", "--extension", dest="extension", default=None)
+parser.add_option("-t", "--test", action="store_true", dest="test", default=False)
+(options, args) = parser.parse_args()
+
+if options.extension == None:
+	quit()
+
+# Pretty printing
+just = max([len(x) for x in parser.largs])
+
+if options.exclude:
+	regex = re.compile(options.exclude)
+for filepath in parser.largs:
+	if options.exclude and regex.findall(filepath):
+		continue
+	
+	newpath = filepath.rsplit('.', 1)[0]
+	newpath += "." + options.extension
+	
+	if not options.test:
+		try:
+			os.rename(filepath, newpath)
+		except Exception as details:
+			print(filepath.ljust(just), "=>", str(details))
+			continue
+	print(filepath.ljust(just), "=>", newpath)

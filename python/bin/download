@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+
+import os
+import re
+import sys
+import imp
+import time
+import socket
+import optparse
+import urllib.error
+import urllib.request
+
+parser = optparse.OptionParser()
+parser.add_option("-e", "--extension", action="append", dest="extensions", default=[],
+					help="Match urls that end with the given extension(s). This option can be specified multiple times.")
+parser.add_option("-l", "--links", action="store_true", dest="links", default=False,
+					help="Filter only the urls inside <a> tags.")
+parser.add_option("-r", "--regex", action="append", dest="regex", default=[],
+					help="Filter only urls that match the regex. If this option is specified more than once, each regex will be applied.")
+parser.add_option("-v", "--invert-regex", action="append", dest="iregex", default=[],
+					help="Filter only urls that don't match the regex. If this option is specified more than once, each regex will be applied.")
+parser.add_option("-d", "--duplicates", action="store_true", dest="duplicates", default=False,
+					help="Allow duplicate files to be downloaded.")
+parser.add_option("-n", "--no-skip", action="store_true", dest="noskip", default=False,
+					help="Overwrite a file if it already exists.")
+parser.add_option("-i", "--ignore", action="store_true", dest="ignore", default=False,
+					help="Ignore any custom directory settings (set by a .download file).")
+parser.add_option("-t", "--template", action="store_true", dest="template", default=False,
+					help="Echo a template .download file to stdout and exit.")
+parser.add_option("-u", "--user-agent", dest="user_agent", default='Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.2.3) Gecko/20100423 Ubuntu/10.04 (lucid) Firefox/3.6.3')
+parser.add_option("--debug", action="store_true", dest="debug", default=False,
+					help=optparse.SUPPRESS_HELP)
+(options, optionargs) = parser.parse_args()
+
+# Install an opener for urllib.request.urlopen
+o	= urllib.request.build_opener()
+o.addheaders	= [('User-Agent', options.user_agent)]
+urllib.request.install_opener(o)
+
+def debug(*args):
+	if options.debug: print(' '.join([str(x) for x in args]))
+
+def get_tb():
+	et, ev, tb	= sys.exc_info()
+	if not tb:	return None
+	while tb:
+		line_no = tb.tb_lineno
+		fn	= tb.tb_frame.f_code.co_filename
+		tb	= tb.tb_next
+	return "%s: %i: %s(%s)" % (fn, line_no, et.__name__, str(ev))
+
+if options.template:
+	t = '''#!/usr/bin/env python\n\nimport re\nimport os\nimport sys\nimport urllib.request\n\nclass DownloadFile: pass\n\ndef get(url):\n	html = urllib.request.urlopen(url).read()\n	\n	name = os.path.basename(url)\n	flvurl = re.findall(b'src="(.*?\.flv)"', html)\n	\n	if flvurl:\n		video = DownloadFile()\n		video.url = flvurl = flvurl[0].decode()\n		video.name = video.filename = name + ".flv"\n		return [video]'''
+	print(t)
+	quit()
+
+class DownloadFile:
+	def __init__(self, url, name, filename):
+		self.url = url
+		self.name = name
+		self.filename = filename
+
+# Load the current directory's download settings
+if os.path.exists('.download') and not options.ignore:
+	try:
+		get = imp.load_source('download', '.download').get
+		print('Loaded custom directory settings (use -i to ignore)')
+	except:
+		print(get_tb())
+		sys.exit(1)
+else:
+	# If none is found, make a get function that simply grabs all urls from a webpage
+	def get(url):
+		html = urllib.request.urlopen(url).read()
+		
+		if options.links:
+			urls = re.findall(b'''<a [^>]*href=['"]?(.*?)['" >]''', html)
+			for x in range (0, len(urls)):
+				link = urls[x]
+				if not link.startswith('http://') or not link.startswith('https://'):
+					urls[x] = url + link
+		else:
+			urls = re.findall(b"https?://[\w\-.;/?%&=]+", html)
+		urls = [x.decode() for x in urls]
+		return [DownloadFile(x, x.split('/')[-1], x.split('/')[-1]) for x in urls]
+
+# Make a function for filtering the urls based on the command line options
+def urlcheck(url):
+	if url.endswith('/'): return False
+	ext_check = not bool(options.extensions)
+	for extension in options.extensions:
+		if url.endswith('.' + extension.strip('.')): ext_check = True
+	if ext_check == False: return False
+	for regex in options.regex:
+		if not re.search(regex, url): return False
+	for regex in options.iregex:
+		if re.search(regex, url): return False
+	return True
+
+def hook(blocks, blocksize, totalsize):
+	global curfile
+	percent = ((blocks * blocksize) / totalsize) * 100
+	if percent > 100:
+		percent = 100
+	elif percent < 0:
+		print("\r%s => (???.??%%)" % curfile.name, end="")
+		return
+	print("\r%s => (%.2f%%)" % (curfile.name, percent), end="")
+
+downloaded = []
+socket.setdefaulttimeout(3)
+
+for url in parser.largs:
+	if not url.startswith('http://') and not url.startswith('https://'):
+		url = 'http://' + url
+
+	urls = get(url)
+	if not urls:
+		continue
+	else:
+		urls = iter(urls)
+	
+	while 1:
+		error = False
+		
+		try:
+			curfile = urls.__next__()
+		except StopIteration:
+			break
+		except Exception as details:
+			print(str(details))
+			continue
+		
+		if not curfile:
+			continue
+		else:
+			print(curfile.name + ' => ', end="")
+			sys.stdout.flush()
+		
+		if curfile.url in downloaded:
+			error = "[duplicate url]"
+		else:
+			downloaded.append(curfile.url)
+		
+		if not urlcheck(curfile.url):
+			error = "[invalid url]"
+		
+		if not options.noskip and os.path.exists(curfile.filename):
+			error = "[file exists]"
+		
+		i = 1		
+		while os.path.exists(curfile.filename) and not error:
+			filename, extension = ([x[::-1] for x in curfile.filename[::-1].split('.', 1)[::-1]] + [''])[:2]
+			filename = filename.split('-')
+			if len(filename) > 1:
+				try:
+					i = int(filename.pop())
+				except Exception:
+					pass
+			i += 1
+			curfile.filename = '-'.join(filename)
+			curfile.filename +=  "-%i.%s" % (i, extension)
+		
+		tries_left	= 3
+		while tries_left  :
+			tries_left	-= 1
+			if error: break
+			# Create an opener with a decent user agent
+			mozilla_opener	= urllib.request.FancyURLopener()
+			mozilla_opener.addheader('User-Agent', options.user_agent)
+			mozilla_opener.addheader('Referer', url)
+			try:
+				mozilla_opener.retrieve(curfile.url, filename=curfile.filename, reporthook=hook)
+				print()
+				break
+			except KeyboardInterrupt:
+				if os.path.exists(curfile.filename):
+					os.remove(curfile.filename)
+				print()
+				quit()
+			except (IOError, socket.error):
+				if os.path.exists(curfile.filename):
+					os.remove(curfile.filename)
+				
+				time.sleep(1)
+				
+				try:
+					mozilla_opener.retrieve(curfile.url, filename=curfile.filename, reporthook=hook)
+					print()
+				except:
+					if os.path.exists(curfile.filename):
+						os.remove(curfile.filename)
+					if not tries_left: error = '[socket error, skipping]'
+			except urllib.error.HTTPError as details:
+				if os.path.exists(curfile.filename):
+					os.remove(curfile.filename)
+				if not tries_left: error = '[%s]' % str(details.getcode()).strip()
+			except ZeroDivisionError:
+				if not tries_left: error = '[empty response]'
+			except Exception as details:
+				if options.debug:
+					if not tries_left: error = get_tb()
+				else:
+					if not tries_left: error = '[%s]' % str(details).strip()
+        
+		if error: print(error)

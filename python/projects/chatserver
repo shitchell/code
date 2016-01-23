@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+
+import socket
+import _thread
+import optparse
+
+parser = optparse.OptionParser()
+parser.add_option("--port", dest="port", type="int", default=1337,
+					help="The port the server should bind to.")
+parser.add_option("--host", dest="host", default="0.0.0.0",
+					help="The host the server should bind to.")
+(options, optionargs) = parser.parse_args()
+
+def console(type, client_s=None, message=""):
+	output = "[%s]" % type
+	if client_s:
+		output += " " + str(client_s.getpeername())
+	if message:
+		output += " " + message
+	print(output)
+
+class connections:
+	_connections = set()
+	_identities = {}
+	
+	def add(connection):
+		'''Add a new connection'''
+		connections._connections.add(connection)
+	def remove(connection):
+		'''Remove a connection, closing it first if it's open'''
+		if connection in connections._connections:
+			connections._connections.remove(connection)
+			console("REMOVED", connection)
+		if not connection._closed:
+			connection.close()
+	def get():
+		'''Return a set of current connections'''
+		return connections._connections
+	def ident(connection, identity=None):
+		'''Retrieve the identity associated with a socket connection. If a second options is added, set the identity of the connection'''
+		if identity:
+			connections._identities[connection] = identity
+		return connections._identities.get(connection, connection.getpeername()[0])
+	def send(msg, exclude=None):
+		'''Send a message to all connected users. Optionally, exclude a single client or a list of clients'''
+		connections._send(msg, exclude)
+	def system(msg):
+		'''Send a system message to all users'''
+		connections._send("[SYSTEM] " + msg)
+	def _send(msg, exclude=None):
+		# Make sure that exclude is either a socket connection or list of connections
+		if isinstance(exclude, (list, tuple)):
+			exclude = filter(lambda x: isinstance(x, socket.socket), exclude)
+			exclude = list(exclude)
+		elif isinstance(exclude, socket.socket):
+			exclude = [exclude]
+		else:
+			exclude = []
+		# Decode the message if bytes, and then convert any other data type to a string
+		if isinstance(msg, bytes):
+			msg = msg.decode()
+		msg = str(msg).encode()
+		# Prepend a system tag
+		for connection in connections._connections.difference(exclude):
+			connection.send(msg)
+
+class commands:
+	char = "/"
+	
+	def parse(line):
+		line = line[1:].strip()
+		cmnd = line.split(" ")[0]
+		args = line.split(" ")[1:]
+		return (cmnd, args)
+	def execute(client_s, cmnd, args):
+		if hasattr(commands, "do_" + cmnd):
+			func = getattr(commands, "do_" + cmnd)
+			func(client_s, args)
+		else:
+			client_s.send(b'No such command: ' + cmnd.encode())
+	def do_name(client_s, args):
+		identity = " ".join(args)
+		connections.ident(client_s, identity)
+		client_s.send(b'Changed your name to: ' + identity.encode() + b'\n')
+	def do_fag(client_s, args):
+		for connection in connections._connections:
+			if connection != client_s:
+				for i in range(10):
+					connection.send(b'suck dix\n')
+	def do_cmnds(client_s, args):
+		attributes = filter(lambda x: x.startswith("do_"), dir(commands))
+		commands = set(attributes)
+		commands = b' '.join([x.encode() for x in commands])
+		client_s.send(b'Commands: ' + commands)
+
+def listen(client_s):
+	global names
+	
+	(ip, port) = client_s.getpeername()
+	while 1:
+		line = b''
+		while not line.endswith(b'\n'):
+			try:
+				data = client_s.recv(1)
+			except:
+				console("DISCONNECTED", client_s)
+				connections.remove(client_s)
+				return
+			if data == b'':
+				# If we received an empty packet, the connection was closed
+				console("DISCONNECTED", client_s)
+				connections.remove(client_s)
+				return
+			line = line + data
+		line = line.decode()
+		if line.startswith(commands.char):
+			cmnd, args = commands.parse(line)
+			console("COMMAND", client_s, "%s %r" % (cmnd, args))
+			commands.execute(client_s, cmnd, args)
+		else:
+			console("MESSAGE", client_s, line.strip('\n'))
+			connections.send(connections.ident(client_s) + ": " + line, exclude=client_s)
+
+def main():
+	global server_s, connections
+	
+	server_s = socket.socket()
+	print("Binding to '%s' on port %i" % (options.host, options.port))
+	server_s.bind((options.host, options.port))
+	server_s.listen(10)
+	print("Listening for connections...")
+	
+	while True:
+		(connection, (ip, port)) = server_s.accept()
+		console("CONNECTION", connection)
+		connections.add(connection)
+		# Welcome message
+		connection.send(b'Welcome to le chat\nConnected:\n')
+		# Tell the recently connected user who else is connected
+		connected_ips = [b' ' + c.getpeername()[0].encode() for c in connections.get()]
+		connection.send(b'\n'.join(connected_ips) + b'\n')
+		# Tell everyone else that the new user connected
+		connections.send("### " + ip + " connected\n", exclude=connection)
+		# Start a background process listening to the new connection
+		_thread.start_new_thread(listen, (connection,))
+
+try:
+	main()
+except KeyboardInterrupt:
+	server_s.close()
+	print("")
+	quit()

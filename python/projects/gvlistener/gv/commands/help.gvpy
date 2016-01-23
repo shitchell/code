@@ -1,0 +1,44 @@
+import os
+import imp
+import glob
+from gv import settings
+
+def help():
+	return "Get help, dipshit."
+
+def get_commands():
+	commands	= {}
+	dirpath		= 'gv' + os.path.sep + 'commands' + os.path.sep
+	for path in glob.glob(dirpath + '*.gvpy'):
+		name	= os.path.basename(path).split('.')[0]
+		try:
+			module	= imp.load_source(name, path)
+		except:
+			continue
+		owner	= getattr(module, 'owner', False)
+		commands[name]	= {'module' : module, 'owner' : bool(owner)}
+	return commands
+
+def do(msg):
+	if msg['args']:
+		name		= msg['args'][0]
+		commands	= get_commands()
+		cmd		= commands.get(name)['module']
+		if not cmd:
+			return "Command not found: %s" % name
+		elif hasattr(cmd, 'help'):
+			return name + ": " + cmd.help().replace('$name', cmd.__name__)
+		else:
+			return "No help for: %s" % name
+	else:
+		commands	= get_commands()
+		cmd_list	= []
+		owner		= bool(settings.get(msg['number'], 'owner'))
+		for command in commands:
+			if commands[command]['owner'] and not owner: continue
+			# prepend a star to the command name if it requires owner status
+			cmd_list.append(("*" if commands[command]['owner'] else "") + command)
+		cmd_list.sort()
+		msg = "Commands: %s." % ', '.join(cmd_list)
+		msg += '\nType "help command" for specific help.'
+		return msg

@@ -1,0 +1,21 @@
+import os
+owner=True
+
+def help():
+	return "Rename command modules."
+
+def do(msg):
+	if msg['args'] == 2:
+		old_name, newname	= [x.lower() for x in msg['args']]
+		dirpath				= 'gv' + os.path.sep + 'commands' + os.path.sep + '%s.gvpy'
+		
+		# Rename shit
+		try:	os.rename(dirpath % old_name, dirpath % newname)
+		except:	return "You do not have permission to rename files in the commands directory."
+		
+		# Delete old pygc file if it exists
+		compiled	= (dirpath % old_name) + 'c'
+		if os.path.exists(compiled):	os.remove(compiled)
+		
+		# Return infoz
+		return "'%s' is now '%s'" % (old_name, new_name)

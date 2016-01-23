@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+
+import sys
+import time
+import _thread
+
+try:
+	wait = float(sys.argv[1])
+	go = False
+except:
+	wait = 0.00
+	go = True
+
+t = wait
+spaces = len(str(int(wait)))
+
+def increment():
+	global t
+	i = .01 if not wait else -.01
+	_thread.start_new_thread(accuracy, (1,))
+	while not wait or (wait and t >= 0):
+		print(" "*spaces, end="")
+		print(("\r%.2f" % t), end="")
+		time.sleep(.01)
+		t += i
+
+def accuracy(S):
+	global t
+	i = -wait if wait else 0
+	start = time.time()
+	while 1:
+		# Because of the nature of time delays and shiz, we check to make sure that t is where it should be every S seconds
+		time.sleep(S)
+		t = abs((time.time() - start) + i)
+
+try:
+	if wait:
+		increment()
+		print("\r%.2f" % 0)
+	else:
+		_thread.start_new_thread(increment, ())
+		while 1:
+			input()
+except KeyboardInterrupt:
+	print()
+except:
+	pass

@@ -1,0 +1,17 @@
+#!/usr/bin/python
+import curses, sys, readline
+
+def main(stdscr):
+	line = 2
+	while 1:
+		msg = stdscr.getstr().decode()
+			
+		stdscr.addstr(line,3, msg)
+		
+		line += 1
+
+try:
+	curses.wrapper(main)
+except KeyboardInterrupt:
+	print()
+	quit()

@@ -1,0 +1,396 @@
+#!/usr/bin/env python
+
+# Import a lot of shit
+import re
+import os
+import ssl
+import sys
+import imp
+import queue
+import atexit
+import imaplib
+import smtplib
+import _thread
+import optparse
+import threading
+import urllib.parse
+import urllib.request
+from gv import settings
+import email.utils
+import email.encoders
+import email.mime.text
+import email.mime.base
+import email.mime.multipart
+from getpass import getpass
+
+# An assload of classes
+
+class Session:
+	username	= ""
+	password	= ""
+
+class IMAP:
+	unread	= []
+	imap	= None
+	tag		= ""
+	_idling	= False
+
+	def login():
+		debug('imap', 'logging in', level=2)
+		# Connect to the IMAP server
+		IMAP.imap	= imaplib.IMAP4_SSL('imap.gmail.com')
+		# Authenticate
+		debug('imap', 'authenticating', level=5)
+		IMAP.imap.login(Session.username.encode(), Session.password.encode())
+		# Setup the tag
+		IMAP.tag	= "%s%i" % (IMAP.imap.tagpre.decode(), IMAP.imap.tagnum)
+		debug('imap', 'tag', IMAP.tag, level=5)
+		# Select the main inbox
+		IMAP.imap.select()
+		# Get any unread messages
+		IMAP.unread	= IMAP.imap.search(None, '(UNSEEN)')[1][0].split()
+		debug('imap', 'unread', len(IMAP.unread), level=3)
+		# Make sure we have the correct idle status set
+		IMAP._idling	= False
+		# Set up a socket timeout to prevent google from hating us off their server
+		IMAP.imap.sock.settimeout(180)
+	
+	def next():
+		while 1:
+			try:
+				# Get the next message from either unread or push
+				debug('imap', 'getting unread / push', level=4)
+				mid		= IMAP._next()
+				# Get the message info and see if it's an sms
+				debug('imap', 'retrieving message contents', level=4)
+				data	= IMAP._get_contents(mid)
+				# Break if we got an sms, otherwise keep looping
+				if data: return data
+				debug('imap', 'skipping message', level=4)
+			except imaplib.IMAP4.error:
+				# If we got disconnected, relogin
+				debug(get_tb())
+				IMAP.login()
+			except imaplib.IMAP4.abort:
+				# If we got disconnected, relogin
+				debug(get_tb())
+				IMAP.login()
+	
+	def _next():
+		# If we have unread messages pending return the oldest
+		if IMAP.unread:	return IMAP.unread.pop(0)
+		else:
+			# Else, start idling...
+			IMAP._idle(1)
+			while 1:
+				# ...and poll for messages
+				try:
+					line	= IMAP.imap.readline()
+				except ssl.SSLError:
+					# If we timed out, restart idling. We have to do this to keep google from kicking us off.
+					IMAP._idle(0)
+					IMAP._idle(1)
+					continue
+				debug('imap', line, level=3)
+				number	= re.findall(b'\* (\d+) exists', line, re.IGNORECASE)
+				if number:
+					# We hit a new message, so stop idling
+					IMAP._idle(0)
+					return number[0]
+	
+	def _idle(status=True):
+		if status:
+			# Set up idling for push notifications
+			idle	= "%s idle\r\n" % IMAP.tag
+			debug('imap', 'idling', level=4)
+			IMAP.imap.send(idle.encode())
+			# Try to readline... if it fails, just fucking relogin
+			try:	IMAP.imap.readline()
+			except:
+				debug('imap idle', get_tb(), level=0)
+				IMAP.login()				
+			IMAP._idling	= True
+		elif not status and IMAP._idling == True:
+			# Stop idling
+			debug('imap', 'done idling', level=4)
+			IMAP.imap.send(b'done\r\n')
+			# Try to readline... if it fails, just fucking relogin
+			try:	IMAP.imap.readline()
+			except:
+				debug('imap idle', get_tb(), level=0)
+				IMAP.login()				
+			IMAP._idling	= False
+	
+	def _get_contents(mid):
+		# Fetch the message information based on it's index
+		data	= IMAP.imap.fetch(mid, '(BODY[HEADER.FIELDS (FROM)] BODY[TEXT])')
+		debug(data, level=3)
+		number	= re.findall('\d+\.(\d+)\..*?@txt.voice.google.com', data[1][1][1].decode())
+		# If no results were found, this wasn't from a google sms and we skip it
+		if not number:	return None
+		body	= data[1][0][1].decode()
+		body	= re.compile('(\r\n)?(\r\n)?--\r\nSent using SMS-to-email.*', re.DOTALL|re.MULTILINE).sub('', body)
+		body	= body.strip()
+		# Allow multiple commands per text
+		results	= []
+		for line in body.split(';'):
+			line	= line.strip()
+			command	= line.split(' ')[0].lower()
+			args	= line.split(' ')[1:]
+			results.append({'number' : number[0], 'body' : line, 'command' : command, 'args' : args})
+		# Return the list of number / body infos
+		return results
+
+class SMTP:
+	def login():
+		debug('smtp', 'logging in', level=2)
+		# Connect to the SMTP server
+		SMTP.smtp	= smtplib.SMTP('smtp.gmail.com')
+		# Say hi!
+		SMTP.smtp.ehlo()
+		# Google requires TLS encryption
+		debug('smtp', 'starting tls', level=3)
+		SMTP.smtp.starttls()
+		# Say hi again!
+		SMTP.smtp.ehlo()
+		# Authenticate
+		debug('smtp', 'authenticating', level=5)
+		SMTP.smtp.login(Session.username, Session.password)
+	
+	def send(to, text, subject="GVListener", files=[]):
+		# First check for the user's email address
+		email_addr	= settings.get(to, 'email')
+		debug('smtp', 'sending email to', email_addr, level=2)
+		if not email_addr:
+			SMS.send(to, 'Failed to find an email address registered with this number. Please use the "email" command.')
+			return
+		# Now start building the message
+		msg				= email.mime.multipart.MIMEMultipart()
+		msg['From']		= Session.username
+		msg['To']		= email_addr
+		msg['Date']		= email.utils.formatdate(localtime=True)
+		msg['Subject']	= subject
+		# Convert shiz to html format
+		html	= text.replace('\n', '<br />')
+		msg.attach(email.mime.text.MIMEText(html, 'html'))
+		# Attach files
+		if files:
+			for file in files:
+				filename	= getattr(file, 'name', 'download')
+				part = email.mime.base.MIMEBase('application', 'octet-stream')
+				part.set_payload(file.read())
+				email.encoders.encode_base64(part)
+				part.add_header('Content-Disposition', 'attachment; filename="%s"' % os.path.basename(getattr(file, 'name', 'download')))
+				msg.attach(part)
+				debug('smtp', 'to %s' % email_addr, 'attached "%s"' % filename, level=2)
+		# Send the message, accounting for the fact that we may have disconnected
+		while 1:
+			try:
+				SMTP.smtp.sendmail(Session.username, email_addr, msg.as_string())
+			except smtplib.SMTPServerDisconnected:
+				debug('SMTP', get_tb())
+				SMTP.login()
+			else:
+				print('<< %s%s\t"%s" +%i files' % (email_addr, "*" if settings.get(to, 'owner') else "", str(html.encode())[2:-1], len(files)))
+				break
+
+class SMS:
+	_rnr_se	= ""
+	
+	def login():
+		debug('sms', 'logging in', level=2)
+		# First, set up a global cookie jar
+		cookiejar	= urllib.request.HTTPCookieProcessor()
+		cj_opener	= urllib.request.build_opener(cookiejar)
+		urllib.request.install_opener(cj_opener)
+		# Collect html for its galx value and to set our cookies
+		html	= urllib.request.urlopen('https://www.google.com/accounts/ServiceLoginAuth').read()
+		galx	= re.findall(b'<input[^>]*name="GALX"[^>]*value="(.*?)"', html)
+		galx	= galx[0].decode() if galx else ""
+		# Set up the form data
+		data	= urllib.parse.urlencode({
+											'Email' : Session.username,
+											'Passwd' : Session.password,
+											'GALX': galx
+											})
+		# Post data to login
+		urllib.request.urlopen('https://www.google.com/accounts/ServiceLoginAuth', data)
+		html	= urllib.request.urlopen('https://voice.google.com/').read()
+		# Get the _rnr_se value, which is vital for sending SMS's
+		SMS._rnr_se	= re.findall(b'<input[^>]*name="_rnr_se"[^>]*value="(.*?)"', html)
+		SMS._rnr_se	= SMS._rnr_se[0].decode() if SMS._rnr_se else ""
+	
+	def send(to, msg):
+		# Fix up newlines
+		msg		= msg.replace('\n', '\r')
+		data	= urllib.parse.urlencode({
+											"phoneNumber" : to,
+											"text" : msg,
+											"_rnr_se" : SMS._rnr_se
+											})
+		data	= urllib.request.urlopen('https://www.google.com/voice/sms/send/', data).read()
+		if not b'"ok":true' in data:
+			# If we got unlogged in, log back in and resend the message
+			SMS.login()
+			data	= urllib.request.urlopen('https://www.google.com/voice/sms/send/', data)
+		print('<< %s%s\t"%s"' % (to, "*" if settings.get(to, 'owner') else "", str(msg.encode())[2:-1]))
+		debug('SMS res', data, level=3)
+
+class IncomingSMS(threading.Thread):
+	def __init__(self, msg):
+		self.msg		= msg
+		self.interrupt	= _thread.interrupt_main
+		threading.Thread.__init__(self)
+	
+	def run(self):
+		# First a little output
+		print('>> %s%s\t(%s) %s' % (self.msg['number'], "*" if settings.get(self.msg['number'], 'owner') else "", self.msg['command'], self.msg['args']))
+		# Make sure that the appropriate lockdown levels are being adhered
+		lock_level	= settings.get('lockdown', 'level', 1)
+		user_level	= settings.get(self.msg['number'], 'level', 1)
+		if lock_level > user_level and not settings.get(self.msg['number'], 'owner'):
+			debug('locked out', self.msg['number'], level=3)
+			return
+		
+		# Handle the message
+		try:
+			self._handle(self.msg)
+		except SystemExit:
+			debug('SysExit by command', self.msg['number'], level=3)
+			self.interrupt()
+		except:
+			# Anything else, we simply report to stdout
+			debug('Error processing SMS', get_tb())
+			SMS.send(self.msg['number'], "There was an error processing your request.")
+	
+	def _handle(self, msg):
+		# First, determine where the command should be
+		command_path	= 'gv%scommands%s%s.gvpy' % (os.path.sep, os.path.sep, msg['command'])
+		
+		# Then try to load a file at that path
+		if os.path.exists(command_path):
+			command		= imp.load_source(msg['command'], command_path)
+		else:
+			debug('No command module at "%s"' % command_path, level=5)
+			SMS.send(msg['number'], "%s: not found." % msg['command'])
+			return
+		
+		# Make sure that owner privileges are respected
+		if getattr(command, 'owner', False) == True and not settings.get(msg['number'], 'owner'):
+			debug(msg['command'], "user doesn't have sufficient privileges", level=3)
+			SMS.send(msg['number'], "%s: not found." % msg['command'])
+			return
+		
+		# Execute the "do" command
+		response	= command.do(msg)
+		
+		# Skip the response if there was none
+		if response == None:
+			return
+		
+		# Now figure out how to respond
+		if type(response) != dict:
+			response		= {'msg' : response}
+		
+		# Let the return text be any type
+		if type(response['msg']) == bytes:
+			response['msg']	= response['msg'].decode()
+		else:
+			response['msg']	= str(response['msg'])
+				
+		# Pick a mode of transportation for the data
+		if response.get('attach') or response.get('force_email'):
+			SMTP.send(msg['number'], response.get('msg'), subject=response.get('subject', 'GVListener'), files=response.get('attach', []))
+		else:
+			SMS.send(msg['number'], response.get('msg'))
+
+class IncomingQueue(threading.Thread):
+	def __init__(self):
+		self.q	= queue.Queue()
+		threading.Thread.__init__(self)
+	
+	def run(self):
+		# Get the next message and handle it
+		while 1:
+			try:	next	= self.q.get(timeout=1)
+			except:	pass
+			else:	IncomingSMS(next).start()
+	
+	def add(self, msg):
+		self.q.put(msg)
+
+# Create some methods
+def debug(*args, level=1):
+	logfile	= open(options.logpath, 'a')
+	if settings.get('debug', 'level', 0) >= level:
+		print("DEBUG: %s" % ": ".join([str(x) for x in args]))
+	print("%i: %s" % (level, ": ".join([str(x) for x in args])), file=logfile)
+
+def get_tb():
+	# Method for converting traceback exceptions into nice, convenient, single lines
+	et, ev, tb	= sys.exc_info()
+	if not tb:	return None
+	while tb:
+		line_no = tb.tb_lineno
+		fn	= tb.tb_frame.f_code.co_filename
+		tb	= tb.tb_next
+	return "%s: %i: %s(%s)" % (fn, line_no, et.__name__, str(ev))
+
+def get_opts():
+	global options
+	# Add options
+	parser			= optparse.OptionParser()
+	parser.add_option("-u", "--username", dest="username", default="")
+	parser.add_option("-p", "--password", dest="password", default="")
+	parser.add_option("-o", "--owner", dest="owner", default="")
+	parser.add_option("-l", "--logpath", dest="logpath", default="gvlistener.log")
+	argline	= ''
+	# Grab settings from ~/.gvlistener and ./settings
+	for gv_path in ['./settings', os.path.expanduser('~/.gvlistener')]:
+		if os.path.exists(gv_path):
+			try:	argline	+= open(gv_path).read().strip() + ' '
+			except:	continue
+			else:
+				break
+	# Add settings from the command line
+	argline += ' ' + ' '.join(sys.argv[1:])
+	# Now parse all that shit
+	(options, args)	= parser.parse_args(argline.split())
+	# Now use this info where necessary
+	if options.owner:	settings.set(options.owner, {'owner' : True})
+	atexit.register(settings.delete, options.owner, 'owner')
+	# Make sure we have a username and password
+	Session.username	= options.username or Session.username or input('Username: ')
+	Session.password	= options.password or Session.password or getpass()
+
+# Mainloop
+def main():
+	global q
+	# Start the settings server
+	settings.serv()
+	# Create the queue
+	q	= IncomingQueue()
+	q.start()
+	# Setup options
+	get_opts()
+	# Login to everything
+	IMAP.login()
+	SMTP.login()
+	SMS.login()
+	# Listen infinitely for new messages
+	print('ready.')
+	while 1:
+		# Make sure that the maxsize of the queue is up to date
+		q.q.maxsize	= settings.get('threads', 'max', 10)
+		next	= IMAP.next()
+		for cmd_line in next:
+			q.add(cmd_line)
+
+try:
+	main()
+except KeyboardInterrupt:
+	q._stop()
+	print()
+	print('exiting.')
+except:
+	debug(get_tb())
