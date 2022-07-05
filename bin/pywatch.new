@@ -1,0 +1,281 @@
+#!/bin/bash
+
+# TODO: exclude specified files / directories
+# TODO: ignore hidden files/folders
+
+# require inotify-tools
+if ! command -v inotifywait >/dev/null 2>&1; then
+    echo "error: command 'inotifywait' not found"
+    exit 1
+fi
+
+# helpful functions
+##
+
+help-usage() {
+    echo "usage: $(basename "$0") [-qphr] [-e regex] [-c cmd] [-s strftime] filepaths..."
+}
+
+help-epilogue() {
+    echo "monitor scripts for file changes and run them when modified"
+}
+
+help() {
+    help-usage
+    help-epilogue
+    echo
+    echo "scripts are run using (in order of highest to lowest priority):"
+    echo "  1. the command specified with -c"
+    echo "  2. the script's hashbang, if it exists"
+    echo
+    cat << EOF
+    -h/--help       show help info
+    -e/--regex      when monitoring a directory, only run files matching
+                    the specified pattern
+    -r/--recursive  monitor directories recursively
+    -c/--command    run file using \`command\`. default is "python"
+    -s/--strftime   the format to use for script start/stop times
+                    see \`man 3 strftime\`
+    -p/--pause      stop monitoring file changes while a script is running.
+                    default is to add modified scripts to the queue and
+                    run them after the current script finishes
+    -q/--quiet      be less verbose. consecutive uses increases quietness
+                    (only shows stdout of running scripts)
+EOF
+}
+
+# trap functions
+##
+
+ctrlc() {
+    if [ "$(get-current-script)" == "" ]; then
+        echo -e '\rctrl-\ to exit'
+    else
+        rm "$LOCK_FILE"
+    fi
+}
+
+ctrlq() {
+    echo
+    echo "...exiting"
+    
+    # exit successfully only if no script is running
+    if [ "$(get-current-script)" == "" ]; then
+        exit 0
+    else
+        exit 1
+    fi
+}
+
+# setup lock/current script file
+##
+LOCK_FILE="/tmp/$(basename "$0").$$"
+get-current-script() {
+    cat "$LOCK_FILE" 2>/dev/null
+}
+
+set-current-script() {
+    echo "$1" > "$LOCK_FILE"
+}
+
+# determine the command to use when running the script
+get-prog() {
+    # -c/--command takes priority
+    if [ -n "$COMMAND" ]; then
+        prog="$COMMAND"
+    elif [ -f "$1" ]; then
+        # check the file for a hashbang
+        fline="$(head -1 "$1" 2>/dev/null)"
+        if [[ "$fline" == "#!"* ]]; then
+            prog="$(echo "$fline" | sed 's/^#!//')"
+        fi
+    fi
+    
+    echo "$prog"
+}
+
+# echo based on verbosity level
+# e.g., to echo if $QUIET is <= 1:
+#   echo-managed 1 hello world
+# the higher the number, the more -q will have to be used to silence it
+echo-managed() {
+    # default verbosity level is 0 -- only echo at max verbosity
+    level=0
+    
+    # if the first arg is a number, use it as verbosity level
+    if [ $1 -eq $1 ] 2>/dev/null; then
+        level=$1
+        shift
+    fi
+
+    # compare level to global verbosity level
+    if [ $level -ge $QUIET ]; then
+        /bin/echo $@
+    fi
+}
+
+# return whether or not a filepath passes the regex
+regex-test() {
+    [ -z "$REGEX" ] && return 0
+    
+    [[ "$(basename "$1")" =~ $REGEX ]]
+    return $?
+}
+
+# default options
+DATE_FORMAT="%Y.%m.%d %H.%M.%S"
+QUIET=0
+CUSTOMOPTS=""
+SEP='---'
+PAUSE=0
+
+SKIPPED=() # wait until $QUIET is set to use echo-managed on skipped files
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+key="$1"
+
+case $key in
+    -e|--regex)
+    REGEX="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -h)
+    help-usage
+    help-epilogue
+    echo
+    echo "--help for more"
+    exit
+    ;;
+    --help)
+    help
+    exit
+    ;;
+    -r|--recursive)
+    CUSTOMOPTS="$CUSTOMOPTS -r"
+    shift # past argument
+    ;;
+    -c|--command)
+    COMMAND="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -s|--strftime)
+    DATE_FORMAT="$2"
+    shift # past argument
+    shift # past value
+    ;;
+    -p|--pause)
+    PAUSE=1
+    shift # past argument
+    ;;
+    -q|--quiet)
+    let QUIET++
+    shift # past argument
+    ;;
+    *) # everything else gets saved as a filepath
+    # make sure the file is readable, else inotifywait will just fail
+    if [ -r "$1" ]; then
+        POSITIONAL+=("$1") # save it in an array for later
+    else
+        SKIPPED+=("$1")
+    fi
+    shift # past argument
+    ;;
+esac
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+# require at least one path
+if [ ${#POSITIONAL[@]} -eq 0 ]; then
+    help-usage
+    exit 1
+fi
+
+# echo skipped files
+for filepath in "${SKIPPED[@]}"; do
+    >&2 echo-managed 1 "skipped '$filepath': no read permission"
+done
+
+# ctrl-c should be able to kill the running python program
+# ctrl-q will be used to exit
+trap ctrlc SIGINT
+trap ctrlq SIGQUIT
+
+# validate regex
+regex-test test
+if [ $? -eq 2 ]; then
+    help-usage
+    echo
+    echo "error invalid regex: $REGEX"
+    exit 2
+fi
+
+# helpful message at beginning
+echo-managed "ctrl-c: kill running python program"
+echo-managed "ctrl-\: exit program"
+
+# for echoing before all but the first script outputs
+FIRST_RUN=0
+
+# inotifywait annoyingly reports duplicates sometimes,
+# so we track each filename:timestamp with a bashmap *ha!*
+declare -A MODIFICATION_TIMES
+LAST_RUN=0
+
+# outer loop to catch ctrl-c
+while :; do
+    # monitor the files indefinitely and loop over each line of output
+    inotifywait -qme MODIFY --format $'%w%f\t%T' --timefmt %s $CUSTOMOPTS "${POSITIONAL[@]}" | while IFS= read -r output; do
+        # get filename and timestamp
+        filepath="$(echo "$output" | cut -d $'\t' -f 1)"
+        filename="$(basename "$filepath")"
+        timestamp="$(echo "$output" | cut -d $'\t' -f 2)"
+        mdhash="$(echo "$filepath" | md5sum | sed 's/ .*//')"
+        # echo "got $filename - $filepath - $timestamp - $mdhash"
+        # echo "stored timestamp:" ${MODIFICATION_TIMES["$mdhash"]}
+        # echo "current log: ${MODIFICATION_TIMES[*]}"
+        
+        # check to see if the timestamp is in the hashmap
+        if [ "${MODIFICATION_TIMES[$mdhash]}" == "$timestamp" ]; then
+            continue
+        else
+            MODIFICATION_TIMES[$mdhash]="$timestamp"
+        fi
+        
+        # skip any saves that occured during the last script's run
+        if [[ "$PAUSE" -eq 1 && "$timestamp" -le "$LAST_RUN" ]]; then
+            continue
+        fi
+                        
+        # ensure a program was edited rather than a trapped signal caught
+        if [ -n "$filename" ]; then
+            # make sure it passes the regex
+            regex-test "$filename" || continue
+            
+            # echo a blank line before all runs except the first
+            [ $FIRST_RUN -eq 0 ] && FIRST_RUN=1 || echo
+            
+            # status infoz
+            prog="$(get-prog "$filepath")"
+            if [ -n "$prog" ]; then
+                echo-managed 2 "> $(basename "$prog") '$filepath'"
+                echo-managed 1 $(date +"-- $DATE_FORMAT")
+                
+                # run the modified script
+                set-current-script "$filepath"
+                $prog "$filepath"
+                EXIT_CODE=$?
+                set-current-script ""
+                LAST_RUN=$(date '+%s')
+
+                # time at finish
+                echo-managed 1 $(date +"-- $DATE_FORMAT")
+                [ $EXIT_CODE -ne 0 ] && echo-managed 1 "-- EXIT: $EXIT_CODE"
+            else
+                echo-managed 2 "> $filepath: no program found, skipping"
+            fi
+        fi
+    done
+done

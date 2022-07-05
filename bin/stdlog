@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# Send the output of COMMAND to stdout and stderr as well as the files
+# COMMAND.out and COMMAND.err
+#
+# TODO
+#  [ ] Add options (-n name, -q quiet)
+#  [ ] Add $name.log file which holds both stdout and stderr
+#  [ ] Make .log, .err, and .out all optional
+
+name="$1"
+command="$@"
+echo "logging to $name.out and $name.err"
+echo "--"
+$command 1> >(tee -a "$name".out ) 2> >(tee -a "$name".err >&2 )

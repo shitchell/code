@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# git command to pull each branch specified on the command line. if no branches
+# given, updates all branches
+
+# get the current remote
+remote="$(git remote)"
+
+# exit if not in a git repository
+if [ $? -ne 0 ]; then
+	exit 1
+fi
+
+# if no branches provided, pull all branches that exist on the remote
+if [ -z "$1" ]; then
+	branches="$(comm -12 <(git branch | sed 's|* |  |' | sort) <(git branch -r | sed 's|origin/||' | sort) | sed -E 's/^ +//')"
+else
+	branches="$@"
+fi
+
+# we have to use a different command for the current branch
+current_branch="$(git rev-parse --abbrev-ref HEAD)"
+
+for branch in ${branches}; do
+	if [ "$branch" = "$current_branch" ]; then
+		echo -e "\e[32mgit pull\e[0m"
+		git pull
+	else
+		echo -e "\e[32mgit fetch ${remote} ${branch}:${branch}\e[0m"
+		git fetch -v --progress "${remote}" "${branch}:${branch}"
+	fi
+done

@@ -1,0 +1,17 @@
+#!/bin/sh
+
+for path in "$@"
+do
+	# Fetch information from remote without updating
+	git -C "$path" fetch -q
+
+	# Count number of new commits on current branch
+	new_commits_count=$(git -C "$path" rev-list HEAD...@{u} --count 2>/dev/null)
+
+	# Display count of new commits
+	if [ -n "$new_commits_count" ]; then
+		if [ "$new_commits_count" -gt 0 ]; then
+			echo "$path: $new_commits_count new commits"
+		fi
+	fi
+done

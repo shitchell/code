@@ -1,0 +1,4 @@
+
+xcalib -d :0 -invert -alter
+sleep 0.1
+xcalib -d :0 -invert -alter

@@ -1,0 +1,25 @@
+#!/bin/bash
+
+URL='http://wwc.instacam.com/instacamimg/STNMN/STNMN_l.jpg'
+FILENAME=$(basename "$URL")
+PROG=$(basename "$0")
+DIR="/tmp/$PROG"
+FILEPATH="$DIR/$FILENAME"
+
+# Create temporary directory if it doesn't exist
+if [[ ! -d "$DIR" ]]; then
+	mkdir "$DIR"
+fi
+
+# Download the file to the temp dir
+wget -q "$URL" -O "$FILEPATH"
+
+# Get the file dimensions
+IMGW=$(identify -format "%w" "$FILEPATH")
+IMGH=$(identify -format "%h" "$FILEPATH")
+
+# Get screen dimensions
+SCRW=$(xrandr | awk '/current/ {print $10}')
+SCRH=$(xrandr | awk '/current/ ${print $8}')
+
+feh --reload 0.1 -Zxqg +320+180 /tmp/stnm.jpg

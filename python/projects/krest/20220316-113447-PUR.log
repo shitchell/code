@@ -1,0 +1,126 @@
+Katalon workspace folder is set to default location: C:\Users\SMITCH~1\AppData\Local\Temp\session-690eb14e
+Starting Groovy-Eclipse compiler resolver. Specified compiler level: unspecified
+138 org.codehaus.groovy_2.4.20.v202009301404-e2006-RELEASE ACTIVE
+
+
+INFO: Katalon Version: 8.2.5
+INFO: Command-line arguments: -v -runMode=console -projectPath=C:/Users/smitchell/code/git/OPG Katalon -retry=0 -testSuitePath=Test Suites/PUR -reportFileName=20220316-113447-PUR -executionProfile=DEV -browserType=Chrome (headless) -apiKey=******** --config -webui.autoUpdateDrivers=true
+INFO: User working dir: C:\Users\smitchell\code\python\projects\krest
+INFO: Error log: C:/Users/smitchell/AppData/Local/Temp/session-690eb14e/.metadata/.log
+INFO: Katalon KatOne server URL: https://admin.katalon.com
+INFO: Katalon TestOps server URL: https://testops.katalon.io
+INFO: Katalon Store server URL: https://store.katalon.com
+INFO: User home: C:\Users\smitchell
+INFO: Java vendor: Azul Systems, Inc.
+INFO: Java version: 1.8.0_282
+INFO: Local OS: Windows 10 64bit
+INFO: CPU load: 28%
+INFO: Total memory: 32519 MB
+INFO: Free memory: 16194 MB
+Start getting machine ID on Windows
+Start appending additional signatures
+hardwareSerialNumber 
+osDependentUsername smitchell
+End appending additional signatures ad262cfc-7be2-4390-9a56-bb4dfa90d097__smitchell
+End getting machine ID on Windows 73e50ecf2910db9617d8d69192e39217
+INFO: Machine ID: 73e50ecf2910db9617d8d69192e39217
+INFO: Your environment is compatible with the Katalon Runtime Engine NODE-LOCKED or FLOATING license. For a fixed machine ID, use a NODE-LOCKED license; for a dynamic machine ID, use a FLOATING license.
+
+
+Activating...
+Start activating offline...
+Search for valid offline licenses in folder: C:\Users\smitchell\.katalon\license
+The number of valid offline licenses: 0
+Start activating online...
+Project path is a folder.
+Examine folder '.cache'.
+Examine file '.classpath'.
+Examine folder '.git'.
+Examine file '.gitignore'.
+Examine folder '.groovy'.
+Examine file '.project'.
+Examine folder '.settings'.
+Examine folder '.tashelix-client'.
+Examine folder 'bin'.
+Examine folder 'Checkpoints'.
+Examine file 'console.properties'.
+Examine folder 'Data Files'.
+Examine folder 'devops'.
+Examine folder 'Drivers'.
+Examine folder 'Include'.
+Examine folder 'Keywords'.
+Examine folder 'Libs'.
+Examine folder 'Object Repository'.
+Examine file 'OPG Katalon.prj'.
+Found project file 'C:\Users\smitchell\code\git\OPG Katalon\OPG Katalon.prj'.
+Examine folder 'Plugins'.
+Examine folder 'Profiles'.
+Examine folder 'Reports'.
+Examine folder 'Screenshots'.
+Examine folder 'Scripts'.
+Examine folder 'settings'.
+Examine folder 'Test Cases'.
+Examine folder 'Test Listeners'.
+Examine folder 'Test Suites'.
+Delete folder: bin
+Delete folder: Libs
+Cleaning up workspace
+Opening project file: C:\Users\smitchell\code\git\OPG Katalon\OPG Katalon.prj
+Generating global variables...
+Project 'OPG Katalon' opened
+Start reloading plugins...
+Katalon version: 8.2.5
+Plugin info URL: https://store.katalon.com/api/products/ks?appVersion=8.2.5&appType=ENGINE&licenseType=ENTERPRISE
+Start check license task
+chromedriver is located at: C:\Users\smitchell\Programs\Katalon_Studio_Engine_Windows_64-8.2.5\Katalon_Studio_Engine_Windows_64-8.2.5\configuration\resources\temp\webdriver\chromedriver.exe
+INFO: KATALON_JAVA_HOME: null
+
+--------------------------------------------------------------------------------
+Test Suites/PUR - Chrome (headless) - 20220316_113505...................0/10(0%)
+--------------------------------------------------------------------------------
+
+2022-03-16 11:35:07.976 INFO  c.k.katalon.core.main.TestSuiteExecutor  - START Test Suites/PUR
+2022-03-16 11:35:08.043 INFO  c.k.katalon.core.main.TestSuiteExecutor  - hostName = smitchell - smitchell-pc.trinoor.local
+2022-03-16 11:35:08.043 INFO  c.k.katalon.core.main.TestSuiteExecutor  - os = Windows 10 64bit
+2022-03-16 11:35:08.044 INFO  c.k.katalon.core.main.TestSuiteExecutor  - hostAddress = 10.1.10.145
+2022-03-16 11:35:08.044 INFO  c.k.katalon.core.main.TestSuiteExecutor  - katalonVersion = 8.2.5.208
+Test Suites/PUR
+2022-03-16 11:35:08.210 INFO  c.k.katalon.core.main.TestCaseExecutor   - --------------------
+2022-03-16 11:35:08.210 INFO  c.k.katalon.core.main.TestCaseExecutor   - START Test Cases/Customizations/PUR/AS9-CUS-PUR-0033/AS9_CUS_PUR_0033_1
+Test Cases/Customizations/PUR/AS9-CUS-PUR-0033/AS9_CUS_PUR_0033_1
+[:]
+2022-03-16 11:35:08.464 DEBUG testcase.AS9_CUS_PUR_0033_1              - 1: callTestCase(findTestCase("Common/AS9/SignIn"), ["blnSessionsOK":false, "blnOpenBrowser":true, "host":HOST, "url_login":URL_LOGIN, "username":Username, "password":Password], STOP_ON_FAILURE)
+2022-03-16 11:35:08.832 INFO  c.k.katalon.core.main.TestCaseExecutor   - --------------------
+2022-03-16 11:35:08.833 INFO  c.k.katalon.core.main.TestCaseExecutor   - CALL Test Cases/Common/AS9/SignIn
+2022-03-16 11:35:08.853 INFO  c.k.katalon.core.main.TestCaseExecutor   - blnSessionsOK = false
+2022-03-16 11:35:08.854 INFO  c.k.katalon.core.main.TestCaseExecutor   - blnOpenBrowser = true
+2022-03-16 11:35:08.854 INFO  c.k.katalon.core.main.TestCaseExecutor   - host = http://assetsuite963-opg.trinoor.com:8080
+2022-03-16 11:35:08.854 INFO  c.k.katalon.core.main.TestCaseExecutor   - url_login = /as/ui
+2022-03-16 11:35:08.854 INFO  c.k.katalon.core.main.TestCaseExecutor   - username = KATST
+2022-03-16 11:35:08.855 INFO  c.k.katalon.core.main.TestCaseExecutor   - password = Katalon2021!
+2022-03-16 11:35:09.163 DEBUG testcase.SignIn                          - 1: LOGIN_URL = host + url_login
+2022-03-16 11:35:09.164 DEBUG testcase.SignIn                          - 2: openBrowser(LOGIN_URL)
+2022-03-16 11:35:09.323 INFO  c.k.k.core.webui.driver.DriverFactory    - Starting 'Chrome (headless)' driver
+Mar 16, 2022 11:35:09 AM org.openqa.selenium.remote.DesiredCapabilities chrome
+INFO: Using `new ChromeOptions()` is preferred to `DesiredCapabilities.chrome()`
+2022-03-16 11:35:09.355 INFO  c.k.k.core.webui.driver.DriverFactory    - Action delay is set to 0 milliseconds
+Starting ChromeDriver 99.0.4844.51 (d537ec02474b5afe23684e7963d538896c63ac77-refs/branch-heads/4844@{#875}) on port 34483
+Only local connections are allowed.
+Please see https://chromedriver.chromium.org/security-considerations for suggestions on keeping ChromeDriver safe.
+ChromeDriver was started successfully.
+Mar 16, 2022 11:35:11 AM org.openqa.selenium.remote.ProtocolHandshake createSession
+INFO: Detected dialect: W3C
+2022-03-16 11:35:11.154 INFO  c.k.k.core.webui.driver.DriverFactory    - sessionId = 22bdffee6e14c4726be06388df810646
+2022-03-16 11:35:11.174 INFO  c.k.k.core.webui.driver.DriverFactory    - browser = Chrome 99.0.4844.51
+2022-03-16 11:35:11.174 INFO  c.k.k.core.webui.driver.DriverFactory    - platform = Windows 10
+2022-03-16 11:35:11.175 INFO  c.k.k.core.webui.driver.DriverFactory    - seleniumVersion = 3.141.59
+2022-03-16 11:35:11.176 INFO  c.k.k.core.webui.driver.DriverFactory    - proxyInformation = ProxyInformation { proxyOption=NO_PROXY, proxyServerType=HTTP, username=, password=********, proxyServerAddress=, proxyServerPort=0, executionList="", isApplyToDesiredCapabilities=true }
+2022-03-16 11:35:11.543 DEBUG testcase.SignIn                          - 3: setViewPortSize(1366, 768)
+2022-03-16 11:35:11.684 DEBUG testcase.SignIn                          - 4: WebDrv = getWebDriver()
+2022-03-16 11:35:11.690 DEBUG testcase.SignIn                          - 5: blnExceed = false
+2022-03-16 11:35:11.691 DEBUG testcase.SignIn                          - 6: blnOther = false
+2022-03-16 11:35:11.691 DEBUG testcase.SignIn                          - 7: blnSignInComplete = false
+2022-03-16 11:35:11.692 DEBUG testcase.SignIn                          - 8: blnSignInLoopStop = false
+2022-03-16 11:35:11.692 DEBUG testcase.SignIn                          - 9: intRetry = 0
+2022-03-16 11:35:11.693 DEBUG testcase.SignIn                          - 10: while (blnSignInComplete == false && blnSignInLoopStop == false && intRetry < 5)
+2022-03-16 11:35:11.694 DEBUG testcase.SignIn                          - 1: waitForElementClickable(findTestObject("AS9/Signin_page/input_Username"), 10)

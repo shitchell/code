@@ -1,0 +1,70 @@
+#!/bin/bash
+#
+# This file is used to ignore files and folders in git.
+#
+# usage:
+#   git ignore
+#   git ignore <file1|pattern1> <file2|pattern2> ...
+#
+# - If no arguments are given, the .gitignore file will be opened in your
+#   default $EDITOR.
+# - If an argument is an existing file, it will be added to the .gitignore file
+#   using its path relative to the repository root.
+# - If an argument is a pattern, it will be added to the .gitignore file as is.
+
+GITROOT="$(git rev-parse --show-toplevel)" || exit 1
+GITIGNORE="$GITROOT/".gitignore
+LINES="$(wc -l "$GITIGNORE" | cut -d' ' -f1)"
+LINE=$(($LINES + 1))
+
+collapse-relative-path() {
+  # remove any `dir/../` sections from the path
+  path="$1"
+  while [[ "$path" = *"../"* ]]; do
+    path="$(echo "$path" | sed 's_/[^/]*/\.\.__')"
+  done
+  echo "$path"
+}
+
+# if no args provided, then just show the .gitignore file
+if [ -z "$1" ]
+then
+  "$EDITOR" "$GITIGNORE"
+else
+  # loop through args and add them to .gitignore
+  for path in "$@"; do
+    if [ -f "$GITIGNORE" ] && [ "$(tail -c 1 $GITIGNORE; echo x)" != $'\nx' ]
+    then
+      # if the file doesn't end with a newline, add a newline before our entry
+      echo >> "$GITIGNORE"
+    fi
+    if [ -e "$path" ]
+    then
+      # if the file is a directory, make sure it ends with a slash
+      if [ -d "$path" ] && [ "${path: -1}" != "/" ]
+      then
+        path="$path/"
+      fi
+      # if the file exists, determine its path relative to the git root
+      fullpath=$([[ $path = /* ]] && echo "$path" || echo "$PWD/${path#./}")
+      if [[ "$fullpath" =~ "$GITROOT" ]]
+      then
+        path="${fullpath/$GITROOT\//}"
+      fi
+      # collapse any relative paths
+      path="$(collapse-relative-path "$path")"
+    fi
+    # make sure the path doesn't already exist in the .gitignore
+    line_no=$(grep -Fxn "$path" "$GITIGNORE" | cut -d: -f1 | head -n1)
+    if [ -n "$line_no" ]
+    then
+      # if it does, then just echo a warning
+      echo ".gitignore:$line_no  $path (already exists)"
+    else
+      # otherwise, add the path to the .gitignore
+      echo "$path" >> "$GITIGNORE"
+      echo ".gitignore:$LINE  $path"
+      let LINE++
+    fi
+  done
+fi

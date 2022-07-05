@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if [ -z "$1" ]; then
+  echo "usage: $(basename $0) git-command"
+  echo "where \`git-command\` is fetch, pull, etc..."
+  exit 1
+fi
+
+find . -name '\.git' -type d -exec sh -c "echo '{}' | sed 's/\.git$//'" \; -exec echo git -C '{}/..' "$@" \;

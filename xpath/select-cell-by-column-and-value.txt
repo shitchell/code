@@ -1,0 +1,22 @@
+//table[
+    contains(concat(' ',@class,' '), ' x-grid-item ')
+]//td[
+    position()=(count(
+        //div[
+            @class='x-box-inner'
+            and @data-ref='innerCt'
+            and descendant::div[
+                normalize-space(text())='${cell}'
+            ]
+        ]//div[
+            contains(concat(' ', @class, ' '), ' x-column-header ')
+            and descendant::span[
+                normalize-space(text())='${column}'
+            ]
+        ]/preceding-sibling::*
+    )+1)
+    and contains(concat(' ',@class,' '), ' x-grid-cell ')
+    and descendant::div[
+        normalize-space(text()) = '${cell}'
+    ]
+]

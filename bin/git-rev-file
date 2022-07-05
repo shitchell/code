@@ -1,0 +1,29 @@
+#!/bin/bash
+
+usage() {
+  echo "usage: $(basename $0) filepath [version_index]"
+}
+help() {
+  echo "Reverts the specified file back to a previous version. If version_index"
+  echo "is provided, then the file will be restored to its state that many"
+  echo "versions ago. e.g.:"
+  echo "  $(basename $0) index.html 1"
+  echo "will revert index.html back to its last committed state. If"
+  echo "version_index is not provided, then:"
+  echo "  a) if the file has been deleted, then it is restored using the most"
+  echo "     recent commit"
+  echo "  b) if the file has not be restored"
+}
+
+FILEPATH="$1"
+VERSION="$2"
+
+# require a filepath
+if [ -z "$FILEPATH" ]; then
+  echo "You must provide a filepath" >&2
+  exit 1
+fi
+
+# optional 
+
+COMMIT_LIST=$(git log --pretty=format:"%H" -- )

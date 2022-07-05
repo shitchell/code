@@ -1,0 +1,39 @@
+//div[
+    @class='x-box-inner'
+    and @data-ref='innerCt'
+    and descendant::div[
+        normalize-space(text())='${cell}'
+    ]
+]/div/div[
+    contains(concat(' ',@class,' '), ' x-grid-inner-locked ')
+] //div[
+    contains(concat(' ',@class,' '), ' x-grid-item-container ')
+]/table[
+    position()=(count(
+        //table[
+            contains(concat(' ',@class,' '), ' x-grid-item ')
+            and descendant::td[
+                position()=(count(
+                    //div[
+                        @class='x-box-inner'
+                        and @data-ref='innerCt'
+                        and descendant::div[
+                            normalize-space(text())='${cell}'
+                        ]
+                    ]//div[
+                        contains(concat(' ', @class, ' '), ' x-column-header ')
+                        and descendant::span[
+                            normalize-space(text())='${column}'
+                        ]
+                    ]/preceding-sibling::*
+                )+1)
+                and contains(concat(' ',@class,' '), ' x-grid-cell ')
+                and descendant::div[
+                    normalize-space(text()) = '${cell}'
+                ]
+            ]
+        ]/preceding-sibling::*
+    )+1)
+]//img[
+    contains(concat(' ',@class,' '), ' x-grid-checkcolumn ')
+]

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="http://cs6035-warmup.gatech.edu:5000/lib/bootstrap/dist/css/bootstrap.min.css" />
+</head>
+
+<body>
+    <div id="server-output">
+    </div>
+    <script src="provided.js"></script>
+
+    <script>
+        function getStudentAnswers(imageHandler) {
+            // ------------------- DO not change any code above here -------------------------
+            // Step 1: Double click this file to open it in a browser.
+            // Step 2: Write JavaScript here to fetch values from the DOM.
+            // Hint: Use the browser developer tools to find out how to get these values
+            // Hint: Notice that this is just a plain old JavaScript function. I bet something is calling it. I also bet that you can find this code.
+            // Hint: Finding the code may help you figure out the code below =)
+            // DO not hard code these values. They WILL be different when we grade
+            // DO not modify any other code.
+
+
+            // 1) - Use JavaScript to get the value of the username text input and set the variable below to this value
+            var username = document.getElementsByName("username")[0].value;
+
+            // 2) - Use JavaScript to determine if the survived checkbox is checked. If it is set the variable below to true else false
+            var survived = document.getElementById("survived").checked;
+
+            // 3) - Find a submit button on the page, there is only 1 and will only be 1 when we grade your submission.
+            // Create an event handler function that will trigger when the button is clicked. Hint: We're NOT asking you to click the button. Read what we're asking carefully
+            // When the button is clicked (within your handler) set the value of the hidden input near the button to 999
+            // You'll see this message on the page when successful, see screenshot -> Button Click Event: Successful!
+            document.getElementById('submit-form-btn').onclick = function() {
+              document.getElementById("submit-form-hidden").value = "999";
+            };
+
+
+            // 4) - Create a new img DOM object and assign it to the variable provided below
+            // Set the source of the image to http://cs6035-warmup.gatech.edu:5000/gt-logo.png
+            // Scroll up and look at the input parameters to this function. We have provided to you a function handler
+            // Your job is to figure out how to make the provided imageHandler fire (get invoked) only when the image is loaded
+            // Hint: You'll need to utilize your img DOM object
+            // You'll see the image as well as this message on the page when successful -> GA Tech Imaged Loaded: Successful!
+            // Last Note: Order matters. Your submission must exactly match the screenshot in the writeup.
+            var createdImg = document.createElement('createdImg');
+            createdImg.setAttribute("src", "http://cs6035-warmup.gatech.edu:5000/gt-logo.png");
+            
+
+
+            // ------------------- DO not change any code below here -------------------------
+            return {
+                username,
+                survived,
+                createdImg
+            };
+        }
+    </script>
+</body>
+
+</html>

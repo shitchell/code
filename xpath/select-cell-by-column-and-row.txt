@@ -1,0 +1,50 @@
+# get the table which contains the specified column
+//div[
+    (
+        contains(@class, 'x-panel')
+        or contains(@class, 'x-grid')
+    )
+    and div[
+        contains(@class, 'x-grid-header')
+        and descendant::span[
+            normalize-space(.) = '${column}'
+        ]
+    ]
+]
+# get the table body
+//div[
+    (
+        contains(@class, 'x-grid-body')
+        or contains(@class, 'x-panel-body')
+    )
+]//div[
+    contains(@class, 'x-grid-item-container')
+]
+# get the specific row
+//table[
+    position() = ${row}
+]
+
+--------
+
+//div[
+    (
+        contains(@class, 'x-panel')
+        or contains(@class, 'x-grid')
+    )
+    and div[
+        contains(@class, 'x-grid-header')
+        and descendant::span[
+            normalize-space(.) = '${column}'
+        ]
+    ]
+]//div[
+    (
+        contains(@class, 'x-grid-body')
+        or contains(@class, 'x-panel-body')
+    )
+]//div[
+    contains(@class, 'x-grid-item-container')
+]//table[
+    position() = ${row}
+]

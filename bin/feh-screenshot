@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Use -u for a dry run so that we can append
+# an identifier "_fs" and the extension.
+# Documented as unsafe, but low odds of running
+# into a conflict
+filepath="$(mktemp -u)_fs.png"
+
+if command -v gnome-screenshot >/dev/null 2>&1; then
+	command="gnome-screenshot -a -f $filepath"
+elif command -v scrot >/dev/null 2>&1; then
+	command="scrot -s $filepath"
+else
+	>&2 echo "Try installing gnome-screenshot or scrot!"
+	exit 1
+fi
+
+($command && feh -Zx --edit "$filepath"; rm "$filepath") >/dev/null 2>&1

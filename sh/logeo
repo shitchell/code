@@ -1,0 +1,36 @@
+#!/bin/bash
+# Log the stdout and stderr of a command to separate log files
+
+usage() {
+    echo "usage: $(basename "$0" | sed 's/./ /g') command"
+    echo "       $(basename "$0") command <stdout log file> <stderr log file>"
+}
+
+# ensure at least one argument (the command) is passed
+if [ -z "$1" ]; then
+    usage
+    exit 1
+else
+    command="$1"
+fi
+
+# determine  the log files to use
+if [ -z "$2" ]; then
+    # if only the command is given, use `command.out` and `command.err` as logs
+    command="$1"
+    log_name="$(echo "${command}" | cut -d ' ' -f 1)"
+    log_stdout="${log_name}.out"
+    log_stderr="${log_name}.err"
+elif [ -n "$2" -a -z "$3" ]; then
+    # disallow just two arguments
+    usage
+    exit 1
+elif [ -n "$2" -a -n "$3" ]; then
+    # if two log files are given, use those
+    command="$1"
+    log_stdout="$2"
+    log_stderr="$3"
+fi
+
+# run the docker container
+(eval "$command" | tee "${log_stdout}") 3>&1 1>&2 2>&3 | tee "${log_stderr}"

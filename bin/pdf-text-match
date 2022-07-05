@@ -1,0 +1,65 @@
+#!/bin/bash
+
+usage() {
+	echo usage: $(basename $0) file.ppt [text]
+}
+
+remove_tags() {
+	sed -e 's/<[^>]*>/ /g' | sed 's/  */ /g' | sed 's/^  *//'
+}
+
+remove_empty_lines() {
+	grep -v -e '^$'
+}
+
+get_title() {
+	grep -shoP '<p:sp>.*?</p:sp>' | grep -P '<p:ph.*?type="title"' | remove_tags
+}
+
+get_matches() {
+	grep -shoP '<a:p>.*?</a:p>' | grep "$MATCH" | remove_tags | remove_empty_lines
+}
+
+if [ $# -lt 1 ]; then
+	usage && exit
+fi
+
+FILE="$1"
+MATCH="$2"
+
+## Unzip the file
+# Get a temporary directory to extract the powerpoint to
+TMPDIR=$(mktemp -d)
+
+# Extract the zip file
+unzip -qq "$FILE" -d "$TMPDIR"
+
+# By default, the index in the slide filenames aren't left-padded with zeros
+# (eg: slide1.xml), so if there are more than 10, the results will appear out
+# of order. If the rename command exists, we'll remedy that.
+if command -v rename &>/dev/null; then
+	rename -d -e 's/\d+/sprintf("%03d",$&)/e' -- "$TMPDIR"/ppt/slides/*.xml
+fi
+
+## Find matching results
+# Uses perl for a non-greedy search, greps for match text, and then removes tags
+first=1
+for f in "$TMPDIR"/ppt/slides/*.xml; do	
+	# Check for matches in the slide before printing
+	matches=$(cat "$f" | get_matches)
+	if [ -n "$matches" ]; then
+		# Put a newline before every section except the first
+		if [ $first -eq 1 ]; then
+			first=0
+		else
+			echo
+		fi
+
+		echo -n "## "
+		cat "$f" | get_title
+		echo "$matches"
+	fi
+done
+
+# Remove the temporary directory
+rm -r "$TMPDIR"

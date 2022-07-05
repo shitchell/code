@@ -1,0 +1,32 @@
+# Function to run a command
+# If the command is successful, echo 'Done' and return 0
+# If the command is not successful, echo 'Failed', echo the error, and exit 1
+run-and-echo-status () {
+    command="$@"
+    output="$(eval "$command 2>&1 1>/dev/null")"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Done${RESET}"
+        return 0
+    else
+        echo -e "${RED}Failed${RESET}"
+        echo "$output"
+        # exit 1
+    fi
+}
+
+INDENT_LEVEL=1
+indent() {
+    let INDENT_LEVEL++
+}
+unindent() {
+    let INDENT_LEVEL--
+}
+echo-indent() {
+    # print the specified spaces
+    if [ $INDENT_LEVEL > 0 ]; then
+        for i in $(seq 0 $INDENT_LEVEL); do
+            echo -n ' '
+        done
+    fi
+    echo "$@"
+}

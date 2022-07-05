@@ -1,0 +1,21 @@
+#!/bin/bash
+
+usage() {
+	echo "usage: $(basename $0) github-user github-repository"
+	echo "       $(basename $0) github-user/github-repository"
+}
+
+if [[ "$#" -ne 1 && "$#" -ne 2 && "$#" -ne 3 ]]; then # require exactly 1 or 2 arguments
+	usage && exit
+elif [[ "$#" -eq 1 && "$1" != *"/"* ]]; then # if one argument provided, require a slash
+	usage && exit
+elif [[ -n "$2" ]]; then # set the url based on 2 arguments
+	URL=git@github.com:$1/$2.git
+else # set the url based on one argument
+	URL=git@github.com:$1.git
+fi
+
+echo $URL
+if [[ -z "$3" ]]; then
+	git clone $URL
+fi

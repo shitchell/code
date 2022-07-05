@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+
+import sys
+import requests
+import urllib.parse
+
+if len(sys.argv) < 2:
+    print("Enter a person's name")
+else:
+    val = " ".join(sys.argv[1:])
+    val = urllib.parse.quote(val)
+    url = "https://beartrack.ggc.edu/TracWeb40/ajxData.4sp?type=qpSearchStud&val=" + val
+    res = requests.get(url)
+    print(res.text)

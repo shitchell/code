@@ -1,0 +1,36 @@
+#!/bin/bash
+
+COOKIES="$(cat $HOME/.d2l.cookie)"
+
+remove_tags() {
+    sed -e 's/<[^>]*>/ /g' | sed 's/  */ /g' | sed 's/^  *//'
+}
+
+get-classlist-html() {
+    url="https://ggc.view.usg.edu/d2l/lms/classlist/print_email.d2l?pageOption=email&ou=$1"
+    curl -s "$url" -H "Cookie: $COOKIES"
+}
+
+# Require (secure) session val at $HOME/.d2l.cookie
+if [[ -z "$COOKIES" ]]; then
+    echo "No cookie file found"
+    exit 1
+fi
+
+# Require one argument
+if [[ -z "$1" ]]; then
+    echo "No d2l course ID given"
+    exit 1
+fi
+
+HTML="$(get-classlist-html $1)"
+
+if [[ "$HTML" =~ "<title>Email Classlist" ]]; then
+    echo "$HTML" \
+        | grep -Po '<th scope="row"  class="d_ich">.*?</th><td class="d_gn"><label>.*?</label>' \
+        | remove_tags \
+        | sed 's/[[:space:]][[:space:]]*$//' \
+        | sed 's/[a-z0-9]*$/<&@ggc.edu>/'
+else
+    exit 1
+fi

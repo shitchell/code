@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+
+import re
+import sys
+import requests
+import urllib.parse
+
+if len(sys.argv) < 2:
+	print("Specify a filename or keyword.")
+
+# Fetch the results from packages.ubuntu.com using "trusty"
+keyword = sys.argv[1]
+response = requests.get("http://packages.ubuntu.com/search?suite=trusty&arch=any&mode=filename&searchon=contents&keywords=" + urllib.parse.quote(keyword))
+
+# Grab all of the filenames and packages
+results = re.findall('<td class="file">(.*?)</td>.*?href=.*?>(.*?)</td>', response.text, re.DOTALL)
+
+# Parse out the html bullshit and extra space
+results = [(re.sub('<.*?>', '', f), re.sub('<.*?>', '', p).strip()) for (f, p) in results]
+
+# Determine column size of the first column
+col_width = max(len(filename) for (filename, package) in results) + 2
+
+# Print shit finally
+for result in results:
+	filename, package = result
+	print(filename.ljust(col_width), package)
