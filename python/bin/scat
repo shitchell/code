@@ -30,8 +30,9 @@ def slowprint(f):
 	lastdata = '\n'
 	data = f.read(1)
 	while data:
-		if options.numbering and lastdata == '\n': print('     %d\t' % lineno, end="")
-		lineno += 1
+		if options.numbering and lastdata == '\n':
+			print('     %d\t' % lineno, end="")
+			lineno += 1
 		if options.squeeze and lastdata == '\n': continue
 		lastdata = data
 		if options.invisibles:

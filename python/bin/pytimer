@@ -18,10 +18,10 @@ def increment():
 	global t
 	i = .01 if not wait else -.01
 	_thread.start_new_thread(accuracy, (1,))
-	while not wait or (wait and t >= 0):
+	while not wait or (wait and t > 0):
 		print(" "*spaces, end="")
 		print(("\r%.2f" % t), end="")
-		time.sleep(.01)
+		time.sleep(0.01)
 		t += i
 
 def accuracy(S):
