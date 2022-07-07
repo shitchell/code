@@ -1,0 +1,4 @@
+#!/bin/bash
+
+message="${1:-trigger commit}"
+git commit --allow-empty -m "$message"
