@@ -5,6 +5,11 @@ accepts piped data from stdin or a file and prints the text with invisible
 characters optionally highlighted.
 """
 
+# TODO:
+# - escape all backslashes with some character like % before highlighting
+#   to be able to differentiate between literal escape characters and escape
+#   characters written in the text
+
 import re as _re
 
 
@@ -17,6 +22,8 @@ def convert_to_bytes_str(text: str) -> str:
     text = text.replace("\\n", "\\n\n")
     # Replace escaped single quotes with a single quote
     text = text.replace("\\'", "'")
+    # Replace escaped backslashes with a single backslash
+    text = text.replace("\\\\", "\\")
     return text
 
 
@@ -28,9 +35,12 @@ def highlight_escape_chars(text: str) -> str:
     # ANSI escape regex adapted from:
     # https://stackoverflow.com/a/14693789/794241
     escape_patterns: list[str] = [
-        r"(?<!\\)\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]", # ANSI escape characters
-        r"(?<!\\)\\x(?:(?!1b))[0-9a-zA-Z]{2}", # Hexadecimal escape characters (except \x1b)
-        r"(?<!\\)\\[nrtbfv0]", # Whitespace
+        # r"(?<!\\)\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]", # ANSI escape characters
+        # r"(?<!\\)\\x(?:(?!1b))[0-9a-zA-Z]{2}", # Hexadecimal escape characters (except \x1b)
+        # r"(?<!\\)\\[nrtbfv0]", # Whitespace
+        r"\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]", # ANSI escape characters
+        r"\\x(?:(?!1b))[0-9a-zA-Z]{2}", # Hexadecimal escape characters (except \x1b)
+        r"\\[nrtbfv0]", # Whitespace
     ]
     # Search for the escape characters and add the ANSI reverse video escape sequence
     for pattern in escape_patterns:
