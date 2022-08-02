@@ -1,0 +1,16 @@
+#!/bin/bash
+#
+# Shows the last commit hash for the current branch.
+# TODO: If an argument is provided, passes that as a pattern to `--grep` and
+# shows the last commit hash matching that pattern
+
+function usage() {
+	echo "usage: git last-hash [grep pattern]"
+}
+
+if [ "${1}" = "-h" ] || [ "${1}" = "--help" ]; then
+	usage
+	exit
+fi
+
+git log -1 --pretty="%H"

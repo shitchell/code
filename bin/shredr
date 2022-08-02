@@ -1,0 +1,25 @@
+#!/bin/bash
+
+function super-shred() {
+	# perform a random pass over the file
+	shred -v -n 1 "$1"
+	# ensure that the filesystem is synced up
+	sync
+	# perform a zero pass and remove the file
+	shred -v -n 0 -z -u "$1"
+}
+
+# Loop over all passed in arguments
+for path in "$@"; do
+	if [ -d "$path" ]; then
+		# if this is a directory, find and loop over all files inside of it
+		# (since shred only works on files and not directories)
+		while IFS= read -r -u3 -d $'\0' filepath; do
+			super-shred "$filepath"
+		done 3< <(find "$path" -type f -print0)
+		# remove the folder after shredding all files
+		rm -r "$path"
+	else
+		super-shred "$path"
+	fi
+done
