@@ -171,12 +171,27 @@ function include-source() {
         return 0
     else
         # treat the filename as a filepath and search for it
-        local shell=$(basename ${SHELL})
+        local shell_lower=$(basename "`ps -p "$$" -o cmd= | sed 's/^-//'`" | tr '[:upper:]' '[:lower:]')
+        local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
         # determine the current shell's lib path
-        local lib_path="${shell^^}_LIB_PATH"
+        local lib_path="${shell_upper}_LIB_PATH"
+        # load the value of the lib path from the environment
+        if [ "${shell_lower}" = "bash" ]; then
+            local lib_path_value="${!lib_path}"
+        elif [ "${shell_lower}" = "zsh" ]; then
+            local lib_path_value="${(P)lib_path}"
+        else
+            # attempt a generic eval, although chances are low that the rest of
+            # the module will work even if this does
+            eval local lib_path_value="\$${lib_path}"
+            if [ $? -ne 0 ]; then
+                echo "include-source: failed to determine the value of '${lib_path}'" >&2
+                return 1
+            fi
+        fi
         # load the path into an array
-        IFS=: read -r -d '' -a path_array < <(printf '%s:\0' "${!lib_path}")
-        for dir in ${path_array}; do
+        IFS=$'\n' local lib_path_array=($(echo "${lib_path_value}" | tr ':' '\n'))
+        for dir in ${lib_path_array[@]}; do
             # determine if a readable file with the given name exists in this dir
             if [ -f "${dir}/${filename}" ] && [ -r "${dir}/${filename}" ]; then
                 if [ "${show_location}" -eq 1 ]; then
@@ -193,7 +208,7 @@ function include-source() {
         done
     fi
     # if we get here, then the file was not found
-    echo "-${shell,,}: ${filename}: no such lib" >&2
+    echo "-${shell_lower}: ${filename}: no such lib" >&2
     return 1
 }
 
