@@ -3,7 +3,7 @@
 # `include-source <filename>` will search <SHELL>_PATH_LIB for a file with that
 # name and source it in the current shell. Scripts that call `include-source`
 # can be "compiled" with `compile-sources` to replace any calls to
-# `include-source` with the contents of the imported script.
+# `include-source` with the contents of the included script.
 #
 # I have a lot of useful utility functions that I like to reuse across my
 # scripts, but copy/pasting them is annoying, and deploying many bash scripts to
