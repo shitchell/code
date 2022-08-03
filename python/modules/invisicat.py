@@ -74,9 +74,6 @@ if __name__ == "__main__":
 
     # Determine if stdin is being piped or a file is being passed
     if sys.stdin.isatty():
-        # Read from stdin
-        text: str = sys.stdin.read()
-    else:
         # Loop over each operand and read the text those files
         for path in args.filepaths:
             if args.show_names:
@@ -104,3 +101,6 @@ if __name__ == "__main__":
                 text = highlight_escape_chars(text)
             # Finally, print the text
             print(text, end="")
+    else:
+        # Read from stdin
+        text: str = sys.stdin.read()
