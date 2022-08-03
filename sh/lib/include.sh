@@ -94,6 +94,7 @@
 #   -h: help
 function include-source() {
     local usage="usage: include-source [-vV|--(no-)verbose] [-l|--location] [-nN|--(no-)source] [-h|--help] <file>"
+
     # default values
     local verbose=0
     local do_source=1
