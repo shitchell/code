@@ -1,7 +1,8 @@
 # Module for importing functions from shell scripts.
 #
-# `include-source <filename>` will search <SHELL>_PATH_LIB for a file with that
-# name and source it in the current shell. Scripts that call `include-source`
+# `include-source <filename>` will search the current directory or
+# <SHELL>_PATH_LIB (or PATH if that's not set) for a file with that name, then
+# source it in the current shell. Scripts that call `include-source`
 # can be "compiled" with `compile-sources` to replace any calls to
 # `include-source` with the contents of the included script.
 #
@@ -83,6 +84,13 @@
 #   if func_from_gitlib "do the thing"; then
 #     func_from_somelib "we did the thing!"
 #   fi
+#
+#
+# TODO:
+#   - Split code into functions
+#   - Recursively compile sources
+#     - Use a stack to track which files have already been compiled to prevent
+#       infinite recursion or duplicate includes
 
 # Search <SHELL>_LIB_PATH for and source a file with the given name
 # Options:
@@ -174,45 +182,65 @@ function include-source() {
         return 0
     else
         # treat the filename as a filepath and search for it
-        local shell_lower=$(basename "`ps -p "$$" -o cmd= | sed 's/^-//'`" | tr '[:upper:]' '[:lower:]')
-        local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
-        # determine the current shell's lib path
-        local lib_path="${shell_upper}_LIB_PATH"
-        # load the value of the lib path from the environment
-        if [ "${shell_lower}" = "bash" ]; then
-            local lib_path_value="${!lib_path}"
-        elif [ "${shell_lower}" = "zsh" ]; then
-            local lib_path_value="${(P)lib_path}"
+        local filepath=""
+        if [ -f "${filename}" ]; then
+            # see if it exists in the current directory
+            filepath="${filename}"
         else
-            # attempt a generic eval, although chances are low that the rest of
-            # the module will work even if this does
-            eval local lib_path_value="\$${lib_path}"
-            if [ $? -ne 0 ]; then
-                echo "include-source: failed to determine the value of '${lib_path}'" >&2
-                return 1
+            local shell_lower=$(
+                basename `ps -p "$$" -o args= \
+                    | awk '{gsub(/^-?(.*\/)?/, "", $1); print $1}'` \
+                    | tr '[:upper:]' '[:lower:]'
+            )
+            local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
+            # determine the current shell's lib path
+            local lib_path="${shell_upper}_LIB_PATH"
+            # load the value of the lib path from the environment
+            if [ "${shell_lower}" = "bash" ]; then
+                local lib_path_value="${!lib_path}"
+            elif [ "${shell_lower}" = "zsh" ]; then
+                local lib_path_value="${(P)lib_path}"
+            else
+                # attempt a generic eval, although chances are low that the rest of
+                # the module will work even if this does
+                eval local lib_path_value="\$${lib_path}"
+                if [ $? -ne 0 ]; then
+                    echo "include-source: failed to determine the value of '${lib_path}'" >&2
+                    return 1
+                fi
             fi
+            # if the lib path is empty, use PATH
+            if [ -z "${lib_path_value}" ]; then
+                lib_path_value="${PATH}"
+            fi
+            # load the path into an array
+            IFS=$'\n' local lib_path_array=($(echo "${lib_path_value}" | tr ':' '\n'))
+            for dir in ${lib_path_array[@]}; do
+                # determine if a readable file with the given name exists in this dir
+                if [ -f "${dir}/${filename}" ] && [ -r "${dir}/${filename}" ]; then
+                    filepath="${dir}/${filename}"
+                    break
+                fi
+            done
         fi
-        # load the path into an array
-        IFS=$'\n' local lib_path_array=($(echo "${lib_path_value}" | tr ':' '\n'))
-        for dir in ${lib_path_array[@]}; do
-            # determine if a readable file with the given name exists in this dir
-            if [ -f "${dir}/${filename}" ] && [ -r "${dir}/${filename}" ]; then
-                if [ "${show_location}" -eq 1 ]; then
-                    echo "${dir}/${filename}"
-                    return 0
-                elif [ "${verbose}" -eq 1 ]; then
-                    echo "include-source: sourcing '${dir}/${filename}'"
-                fi
-                if [ "${do_source}" -eq 1 ]; then
-                    source "${dir}/${filename}"
-                fi
+        if [ -n "${filepath}" ]; then
+            # if we found a file, use it
+            if [ "${show_location}" -eq 1 ]; then
+                echo "${filepath}"
                 return 0
+            elif [ "${verbose}" -eq 1 ]; then
+                echo "include-source: sourcing '${filepath}'"
             fi
-        done
+            if [ "${do_source}" -eq 1 ]; then
+                source "${filepath}"
+            fi
+            return 0
+        else
+            # if we didn't find a file, return an error
+            echo "-${shell_lower}: ${filename}: no such lib" >&2
+            return 1
+        fi
     fi
-    # if we get here, then the file was not found
-    echo "-${shell_lower}: ${filename}: no such lib" >&2
-    return 1
 }
 
 # Load files that include "include-source" and replace the "include-source"
@@ -355,3 +383,6 @@ function compile-sources() {
         fi
     done
 }
+
+# export the functions for use in the shell and in other scripts
+export -f include-source compile-sources
