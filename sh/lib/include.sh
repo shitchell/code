@@ -92,11 +92,50 @@
 #   - Use regex to import only functions from the included script
 #     - Allow for modifying imported function names with a prefix/suffix
 
-## imports #####################################################################
+## helpful functions ###########################################################
 ################################################################################
 
-include-source 'debug.sh'
-include-source 'shell.sh'
+# Reliably determine the current shell
+function get-shell() {
+    local shell=$(
+        basename "`ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//'`" \
+            | tr '[:upper:]' '[:lower:]'
+    )
+    echo "${shell}"
+}
+
+# Cross-shell function for returning the calling function name
+function functionname() {
+    local shell=$(get-shell)
+    local index=${1:- -1}
+    case $shell in
+        bash)
+            echo ${FUNCNAME[${index}]}
+            ;;
+        zsh)
+            echo ${funcstack[${index}]}
+            ;;
+        *)
+            echo "unknown shell: $shell" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Checks if an item is in an array.
+# usage: in-array <item> "${array[@]}"
+# returns 0 if the item is in the array, 1 otherwise
+function in-array() {
+    local item=${1}
+    local array=${2}
+    local e
+    for e in ${array[@]}; do
+        if [ "${e}" = "${item}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 
 ## include-source ##############################################################
@@ -202,7 +241,7 @@ function __include_source_parse_args() {
 # Return the value of <SHELL>_LIB_PATH or PATH if it is not set.
 function __bash_libs_get_path() {
     # reliably determine the shell
-    local shell_lower=$(basename "`ps -p "$$" -o cmd= | sed 's/^-//'`" | tr '[:upper:]' '[:lower:]')
+    local shell_lower=$(get-shell)
     local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
 
     # determine the current shell's lib path
@@ -223,11 +262,7 @@ function __bash_libs_get_path() {
         fi
     fi
 
-    if [ -z "${lib_path_value}" ]; then
-        echo "${PATH}"
-    else
-        echo "${lib_path_value}"
-    fi
+    echo "${lib_path_value:-${PATH}}"
 }
 
 # Get the path to a script in the current directory, <SHELL>_LIB_PATH, PATH
@@ -299,7 +334,6 @@ function source-url() {
         return 1
     fi
 
-    debug "[source-url] about to cat: ${script_file}"
     # print the contents of the script if requested
     if [ "${DO_CAT}" -eq 1 ]; then
         cat "${script_file}"
@@ -320,12 +354,10 @@ function source-url() {
 
 # Import a shell script from a filename
 function source-lib() {
-    debug "source-lib(${@@Q})"
     local filename="${1}"
 
     # get the path to the file
     local filepath=$(__bash_libs_get_filepath "${filename}")
-    debug "[source-lib] filepath: ${filepath}"
 
     # if we couldn't find the file, exit with an error
     if [ -z "${filepath}" ]; then
@@ -468,7 +500,6 @@ function __compile_sources_parse_args() {
                 ;;
         esac
     done
-    debug "[__compile_sources_parse_args] POSITIONAL_ARGS: ${POSITIONAL_ARGS[@]}"
     set -- "${POSITIONAL_ARGS[@]}"
 }
 
@@ -479,7 +510,6 @@ function __compile_sources_parse_args() {
 # Check if the given filepath has any valid `include-source` or `source` calls.
 # If the given filepath is "-", read from stdin
 function __compile_sources_has_source_calls() {
-    debug "__compile_sources_has_source_calls(${@@Q})"
     local filepath="${1}"
 
     # get the file's contents
@@ -495,7 +525,6 @@ function __compile_sources_has_source_calls() {
 # Returns the line number of and shell lib specified by  the first occurrence of
 # "^include-source\b" in the given file. If '-' is specified, read from stdin
 function __compile_sources_find_include_source_line() {
-    debug "__compile_sources_find_include_source_line(${@@Q})"
     local filename="${1:- -}"
 
     # get the contents of the file
@@ -539,8 +568,6 @@ function __compile_sources_find_include_source_line() {
 #  1 - one or more included libs was empty
 #  2 - error parsing source file
 function __compile_sources() {
-    debug "__compile_sources(${@@Q})"
-
     # get the filepath
     local filepath="${1}"
 
@@ -548,17 +575,12 @@ function __compile_sources() {
     shift
     local included_sources=("$@")
 
-    # track which sources have been included across all recursive calls
-    debug "[__compile_sources] included_sources: $(printf "%q " "${included_sources[@]}")"
-
     # get the file contents
-    debug "[__compile_sources] getting file contents for '${filepath}'"
     if [ "${filepath}" = "-" ]; then
         local file_contents=$(cat)
     else
         local file_contents=$(<"${filepath}")
     fi
-    debug "[__compile_sources] file contents: `echo ${file_contents}`"
 
     # loop while we can find "^include-source\b" lines
     while grep -q "^include-source\b" <<< "${file_contents}"; do
@@ -566,14 +588,11 @@ function __compile_sources() {
         local include_source_line=$(echo "${file_contents}" | __compile_sources_find_include_source_line -)
         local line_number=$(echo "${include_source_line}" | cut -d ':' -f1)
         local sourced_filename=$(echo "${include_source_line}" | cut -d ':' -f2)
-        debug "[__compile_sources] found include statement in '${filepath}': ${include_source_line}"
 
         # check whether the source has already been included
         if in-array "${sourced_filename}" "${included_sources[@]}"; then
             # if it has, remove the "include-source" line from the file
-            debug "[__compile_sources] removing include-source line ${line_number} from '${filepath}'"
             local file_contents=$(echo "${file_contents}" | sed -e "${line_number}d")
-            debug "[__compile_sources] file contents: `echo $'\n'` ${file_contents}"
             continue
         fi
 
@@ -582,7 +601,6 @@ function __compile_sources() {
 
         # get the filepath or url of the source
         local included_filepath=$(include-source -l "${sourced_filename}")
-        debug "[__compile_sources] included_filepath: ${included_filepath}"
 
         # get the contents of the lib
         local sourced_contents=$(include-source -n --cat "${sourced_filename}" 2>&1)
@@ -601,7 +619,6 @@ function __compile_sources() {
         else
             # check to see if the source file contains any "include-source" lines
             if grep -q "^include-source\b" <<< "${sourced_contents}"; then
-                debug "[__compile_sources] recursing into '${sourced_filename}'"
                 # if it does, recursively compile the source file
                 local sourced_contents=$(echo "${sourced_contents}" | __compile_sources - "${included_sources[@]}")
                 # if the recursive sourcing returned a non-zero status, pass it on
@@ -635,18 +652,15 @@ function __compile_sources() {
             local file_contents="${sourced_contents}"$'\n'"${file_contents}"
         else
             # otherwise, insert the contents after the line number
-            debug "[__compile_sources] inserting sourced_contents at line ${line_number} in '${filepath}'"
             local file_contents=$(
                 sed "${line_number}r /dev/stdin" \
                     <(echo "${file_contents}") \
                     <<< "${sourced_contents}"
             )
         fi
-        debug "[__compile_sources] file contents: `echo $'\n'` ${file_contents}"
     done
 
     # output the compiled file
-    debug "[__compile_sources] FINAL COMPILED FILE"
     echo "${file_contents}"
 }
 
@@ -655,16 +669,12 @@ function __compile_sources() {
 ###
 
 function compile-sources() {
-    debug "compile-sources(${@@Q})"
     __compile_sources_parse_args "$@"
     # exit cleanly if help was displayed or with the exit code if non-zero
     case $? in 0);; 3) return 0 ;; *) return $?;; esac
 
-    debug "[compile-sources] POSITIONAL_ARGS: ${POSITIONAL_ARGS[@]}"
-
     # loop over each file in the positional arguments
     for filepath in "${POSITIONAL_ARGS[@]}"; do
-        debug "[compile-sources] compiling '${filepath}'"
         # compile the file
         local compiled_file=$(__compile_sources "${filepath}")
         local exit_code=$?
@@ -678,7 +688,6 @@ function compile-sources() {
         if [ "${IN_PLACE}" -eq 1 ]; then
             if [ "${IN_PLACE_BACKUPS}" -eq 1 ]; then
                 # make a backup of the original file
-                debug "[compile-sources] backing up '${filepath}'"
                 cp "${filepath}" "${filepath}.bak"
             fi
             echo "${compiled_file}" > "${filepath}"
@@ -692,7 +701,7 @@ function compile-sources() {
 ## Export Functions ############################################################
 ################################################################################
 
-export -f debug
+export -f get-shell
 export -f functionname
 export -f in-array
 export -f __include_source_help_usage

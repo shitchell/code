@@ -1,0 +1,278 @@
+#!/bin/bash
+#
+# `include-source <path>` will source <path> for use in the current shell, where
+# <path> can be:
+#   - the name of a script in <SHELL>_LIB_PATH
+#   - the name of a script in PATH
+#   - the name of a script in the current directory
+#   - a url to a script on the web
+#
+#
+# Supports:
+#   - bash
+#   - zsh
+#
+# Usage:
+#   include-source "<script_name|url>"
+#
+#
+# Example:
+#  The source for a couple of bash "libraries" that we'll import into another:
+#   : $HOME/code/bash/lib/somelib.sh
+#   function somelib_func() {
+#     echo "Hello from somelib_func!"
+#   }
+#
+#   : https://raw.githubusercontent.com/foo/bar/master/gitlib.sh
+#   function gitlib_func() {
+#     echo "[gitlib_func] $@"
+#     return 0
+#   }
+#
+#  Our actual script, which imports the above two
+#   : ./foo.sh
+#   #!/bin/bash
+#   include-source 'https://raw.githubusercontent.com/foo/bar/master/gitlib.sh'
+#   include-source 'somelib.sh'
+#   if gitlib_func "do the thing"; then
+#     somelib_func "we did the thing!"
+#   fi
+
+## Usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-hlnNvV] <path>"
+}
+
+function help-epilogue() {
+    echo "import shell scripts"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Imports the specified shell script. The specified script can be the"
+    echo "name of a script in <SHELL>_LIB_PATH, the name of a script in PATH,"
+    echo "the name of a script in the current directory, or a url to a script."
+    echo
+    cat << EOF
+    -h/--help          show help info
+    -l/--location      print the location of the imported script
+    -n/--dry-run       don't import the script
+    -N/--no-dry-run    import the script
+    -v/--verbose       be verbose
+    -V/--no-verbose    don't be verbose
+EOF
+}
+
+function parse-args() {
+    # default values
+    VERBOSE=0
+    DO_SOURCE=1
+    SHOW_LOCATION=0
+
+    # parse arguments
+    POSITIONAL_ARGS=()
+    while [[ ${#} -gt 0 ]]; do
+        local arg="$1"
+        case "$arg" in
+            -v|--verbose)
+                VERBOSE=1
+                shift
+                ;;
+            -V|--no-verbose)
+                VERBOSE=0
+                shift
+                ;;
+            -l|--location)
+                SHOW_LOCATION=1
+                shift
+                ;;
+            -n|--no-source)
+                DO_SOURCE=0
+                shift
+                ;;
+            -N|--source)
+                DO_SOURCE=1
+                shift
+                ;;
+            -h|--help)
+                echo ${usage}
+                exit 0
+                ;;
+            -*)
+                echo "include-source: invalid option '$arg'" >&2
+                exit 1
+                ;;
+            *)
+                POSITIONAL_ARGS+=("$arg")
+                shift
+                ;;
+        esac
+    done
+    set -- "${POSITIONAL_ARGS[@]}"
+}
+
+
+## Helpful functions ###########################################################
+################################################################################
+
+# Return the value of <SHELL>_LIB_PATH or PATH if it is not set.
+function get-path() {
+    # treat the filename as a filepath and search for it
+    local shell_lower=$(basename "`ps -p "$$" -o cmd= | sed 's/^-//'`" | tr '[:upper:]' '[:lower:]')
+    local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
+
+    # determine the current shell's lib path
+    local lib_path="${shell_upper}_LIB_PATH"
+
+    # load the value of the lib path from the environment
+    if [ "${shell_lower}" = "bash" ]; then
+        local lib_path_value="${!lib_path}"
+    elif [ "${shell_lower}" = "zsh" ]; then
+        local lib_path_value="${(P)lib_path}"
+    else
+        # attempt a generic eval, although chances are low that the rest of
+        # the module will work even if this does
+        eval local lib_path_value="\$${lib_path}"
+        if [ $? -ne 0 ]; then
+            echo "include-source: failed to determine the value of '${lib_path}'" >&2
+            return 1
+        fi
+    fi
+
+    if [ -z "${lib_path_value}" ]; then
+        echo "${PATH}"
+    else
+        echo "${lib_path_value}"
+    fi
+}
+
+# Get the path to a script in the current directory, <SHELL>_LIB_PATH, PATH
+function get-lib-path() {
+    local filename="${1}"
+
+    # look for the file in the current directory
+    if [ -f "$(pwd)/${filename}" ] && [ -r "$(pwd)/${filename}" ]; then
+        echo "$(pwd)/${filename}"
+        return 0
+    fi
+
+    # Try to find the path in <SHELL>_LIB_PATH or PATH
+    IFS=$'\n' local lib_path_array=($(get-path | tr ':' '\n'))
+    for dir in ${lib_path_array[@]}; do
+        # determine if a readable file with the given name exists in this dir
+        if [ -f "${dir}/${filename}" ] && [ -r "${dir}/${filename}" ]; then
+            echo "${dir}/${filename}"
+            return 0
+        fi
+    done
+
+    # if we get here, we didn't find the file
+    return 1
+}
+
+# Import a shell script from a url
+function import-url() {
+    local url="${1}"
+
+    # treat the filename as a url
+    if [ "${SHOW_LOCATION}" -eq 1 ]; then
+        echo "${filename}"
+        return 0
+    elif [ "${VERBOSE}" -eq 1 ]; then
+        echo "include-source: sourcing '${filename}'"
+    fi
+
+    # download and source the script
+    if [ "${DO_SOURCE}" -eq 1 ]; then
+        local url_contents=$(curl -s "${filename}")
+        if [ $? -ne 0 ] && [ "${VERBOSE}" -eq 1 ]; then
+            echo "include-source: failed to download '${filename}'" >&2
+            return 1
+        fi
+
+        # source the contents of the url. any output will be errors
+        local source_errors=$((source <<< "${url_contents}") 2>&1)
+        if [ -n "${source_errors}" ] && [ "${VERBOSE}" -eq 1 ]; then
+            echo "include-source: failed to source '${filename}'" >&2
+            echo "${source_errors}" >&2
+            return 1
+        fi
+    fi
+}
+
+# Import a shell script from a filename
+function import-file() {
+    local filename="${1}"
+
+    # get the path to the file
+    local filepath=$(get-lib-path "${filename}")
+
+    # if we couldn't find the file, exit with an error
+    if [ -z "${filepath}" ]; then
+        echo "include-source: failed to find '${filename}'" >&2
+        return 1
+    elif [ "${SHOW_LOCATION}" -eq 1 ]; then
+        echo "${filepath}"
+    fi
+
+    # source the file
+    if [ "${DO_SOURCE}" -eq 1 ]; then
+        if [ "${VERBOSE}" -eq 1 ]; then
+            echo "include-source: sourcing '${filepath}'"
+        fi
+        # there will only be output if there are errors
+        source_errors=$(source "${filepath}" 2>&1)
+        if [ -n "${source_errors}" ]; then
+            echo "include-source: failed to source '${filepath}'" >&2
+            if [ "${VERBOSE}" -eq 1 ]; then
+                echo "${source_errors}" >&2
+            fi
+            return 1
+        fi
+    fi
+}
+
+
+## Main ########################################################################
+################################################################################
+
+function main() {
+    echo -n "cmdline: "
+    cat /proc/$$/cmdline && echo
+    echo "SHELL: ${SHELL}"
+    echo -n "ps: "
+    ps -p "$$" -o args= --forest >&2
+    echo "ZSH_NAME: ${ZSH_NAME}"
+    exit
+
+    parse-args "$@"
+
+    local filename="${POSITIONAL_ARGS[0]}"
+
+    # ensure the filename is not empty
+    if [ -z "$filename" ]; then
+        help-usage >&2
+        return 1
+    fi
+
+    # determine whether to treat the filename as a filepath or url
+    if [[ "${filename}" =~ ^https?:// ]]; then
+        # treat the filename as a url
+        import-url "${filename}"
+        return $?
+    else
+        import-file "${filename}"
+        return $?
+    fi
+}
+
+
+## Run #########################################################################
+################################################################################
+
+# Run the main function only if the script is not being sourced
+main "$@"
