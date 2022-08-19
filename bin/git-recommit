@@ -1,0 +1,16 @@
+#!/bin/bash
+# Redo the most recent commit by resetting head and re-commiting
+
+RESET_COUNT="${1:-1}"
+
+# get the hash for the last commit
+commit=$(git log -1 --pretty=%H)
+
+# reset the head
+git reset --hard HEAD~"$RESET_COUNT"
+
+# pull the changes
+git pull
+
+# recommit the changes
+git cherry-pick "${commit}"

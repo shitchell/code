@@ -1,0 +1,233 @@
+#!/bin/bash
+#
+# Given a list of branches and filepaths, list every commit where those files
+# were changed in the format:
+#  <filepath>\t<md5 hash>\t<commit hash>\t<author>\t<branch>\t<date>\t<commit message>
+
+include-source 'debug.sh'
+include-source 'echo.sh'
+include-source 'git.sh'
+include-source 'shell.sh'
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [branch1 [branch2 [...]]] -- filepath"
+}
+
+function help-epilogue() {
+    echo "list the file history for the specified filepath across branches"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h            display usage
+    --help        display this help message
+    -f/--format   use the specified git pretty format, with the added fields:
+                  {FILE}, {MD5}, {VERSION_ID}, and {BRANCH}. e.g.:
+                    %H%x09{MD5}%x09{BRANCH}
+    -d/--date     strftime format for the date
+                  (default: %Y-%m-%d, only works with %ad)
+    -q/--quiet    don't print anything to stdout
+EOF
+}
+
+function parse-args() {
+    # Track whether positional arguments should be treated as files or not
+    local positional_files=0
+
+    # Default values
+    QUIET=0
+    FORMAT="{FILE}%x09{MD5}%x09%h%x09%al%x09{BRANCH}%x09%ad%x09%s"
+    DATE_FORMAT="%Y-%m-%d"
+    GIT_LOG_OPTS=()
+
+    # Loop over the arguments
+    declare -ga BRANCHES
+    declare -ga FILEPATHS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -f|--format)
+                FORMAT="${2}"
+                shift 2
+                ;;
+            -d|--date)
+                DATE_FORMAT="${2}"
+                shift 2
+                ;;
+            -q|--quiet)
+                QUIET=1
+                shift
+                ;;
+            --)
+                positional_files=1
+                shift 1
+                ;;
+            -*)
+                GIT_LOG_OPTS+=("${1}")
+                exit 1
+                ;;
+            *)
+                if [ ${positional_files} -eq 0 ]; then
+                    BRANCHES+=("${1}")
+                else
+                    FILEPATHS+=("${1}")
+                fi
+                shift 1
+                ;;
+        esac
+    done
+
+    # Set the positional arguments in the global array
+    set -- ${BRANCHES[@]}
+    set -- ${FILEPATHS[@]}
+}
+
+function verify-args() {
+    if [ -z "${BRANCHES[@]}" ]; then
+        echo-stderr "error: no branches specified"
+        echo-stderr "$(help-usage)"
+        exit 1
+    fi
+
+    if [ -z "${FILEPATHS[@]}" ]; then
+        echo-stderr "error: no filepaths specified"
+        echo-stderr "$(help-usage)"
+        exit 1
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# Retrieve the history for the filepath in the specified branch in the format:
+# <filepath>\t<md5 hash>\t<commit hash>\t<author>\t<branch>\t<date>\t<commit message>
+function get-file-branch-history() {
+    debug "${@@Q}"
+    local filepath="${1}"
+    local branch="${2}"
+    local format="${3:-{FILE\}%x09{MD5\}%x09%h%x09%al%x09{BRANCH\}%x09%ad%x09%s}"
+    local date_format="${4:-%Y-%m-%d}"
+
+    # Loop over each line of the file's git log for that branch and insert
+    # values for the fields into the format string
+    while IFS= read -p '' -r commit_info || [ -n "${commit_info}" ]; do
+        # Extract the prefixed commit hash from the info...
+        local commit_hash="${commit_info%%:*}"
+
+        # ...and then remove it from the commit info
+        commit_info="${commit_info#*:}"
+
+        # Get the md5 hash of the file in the commit if the format contains {MD5}
+        local commit_md5
+        if [[ "${format}" =~ "{MD5}" ]]; then
+            local file_content=$(git show "${commit_hash}:${filepath}" 2>/dev/null)
+
+            # If the file doesn't exist in the commit (was deleted), use a silly
+            # "00000000000000000000000000000000" hash
+            if [ -z "${file_content}" ]; then
+                commit_md5="00000000000000000000000000000000"
+            else
+                commit_md5=$(md5sum <<< "${file_content}" | cut -d' ' -f1)
+            fi
+        fi
+
+        # Insert values for each occurence of {FILE}, {MD5}, and {BRANCH}}
+        awk -v filepath="${filepath}" -v md5="${commit_md5}" -v branch="${branch}" \
+            '{
+                gsub("{FILE}", filepath);
+                gsub("{MD5}", md5);
+                gsub("{BRANCH}", branch);
+                print;
+            }' <<< "${commit_info}"
+    done < <(git log --max-parents=2 --first-parent ${branch} --pretty=format:"%h:${format}" --date=format:"${date_format}" -- ${filepath})
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "$@"
+
+    # track versions of each filepath
+    declare -ga md5_versions
+
+    # determine the field that the MD5 hash will be in -- that is, determine
+    # how many "\t" or "," characters precede the MD5 hash in the format string
+    local delimeter_regex=$'\t|%x09|,'
+    local md5_field_index=$(
+        echo "${FORMAT}" \
+            | tr -d '\n' \
+            | sed -E "s/${delimeter_regex}/"$'\2'"/g" \
+            | tr '\2' '\n' \
+            | awk '/^\{MD5\}$/ {print NR; exit}'
+    )
+    
+    for filepath in "${FILEPATHS[@]}"; do
+        for branch in "${BRANCHES[@]}"; do
+            while IFS= read -r line; do
+                local md5_hash
+
+                # Try to get the MD5 hash from the line using regex
+                md5_hash=$(echo "${line}" | grep -oE "[0-9a-f]{32}")
+
+                if [ -z "${md5_hash}" ]; then
+                    # If we didn't find one, then don't change anything
+                    echo "${line}"
+                    continue
+                fi
+
+
+                # If we found more than one md5 hash looking pattern, then try
+                # to find the one in the guessed field index
+                if [ $(echo "${md5_hash}" | wc -l) -gt 1 ]; then
+                    md5_hash=$(
+                        echo "${line}" \
+                            | tr -d '\n' \
+                            | sed -E "s/${delimeter_regex}/"$'\2'"/g" \
+                            | tr '\2' '\n' \
+                            | awk -v field_index="${md5_field_index}" 'NR == field_index {print; exit}'
+                    )
+                fi
+
+                # If we still don't have a md5 hash, then don't change anything
+                if [ -z "${md5_hash}" ]; then
+                    echo "${line}"
+                    continue
+                fi
+
+                # If we have a md5 hash, and it's not in our array already, then
+                # add it to the array
+                if ! in-array "${md5_hash}" "${md5_versions[@]}"; then
+                    md5_versions+=("${md5_hash}")
+                fi
+
+                # Get the index of the md5 hash in the array
+                local md5_index=$(index-of "${md5_hash}" "${md5_versions[@]}")
+
+                # Replace {VERSION_ID} with the md5 hash index
+                echo "${line}" | sed "s/{VERSION_ID}/${md5_index}/g"
+            done < <(get-file-branch-history "${filepath}" "${branch}" "${FORMAT}" "${DATE_FORMAT}")
+        done
+    done
+}
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "$@"

@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# This git command will propagate a set of objects or commits across multiple
+# branches. If no branches are specified, it will propagate across all branches.
+# A set of "core" branches can be configured via branches.core to use as default
+# branches to propagate to.
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-halftcpPmq] [--from <ref>] -- filepath1 [filepath2 ...]"
+}
+
+function help-epilogue() {
+    echo "propagate objects or commits across multiple branches"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "This git command will propagate a set of objects or commits across"
+    echo "multiple branches. If no branches are specified, it will propagate"
+    echo "across all branches. "
+    echo
+    cat << EOF
+    -h                display usage
+    --help            display this help message
+    -a/--all          propagate across all branches
+    -l/--local        propagate across local branches
+    -f/--from         the ref to fetch the object(s) from
+    -t/--to           a comma separated list of branches to propagate to
+    -p/--push         push the changes to the remote
+    -P/--no-push      do not push the changes to the remote
+    -m/--message      the commit message to use for the push
+    -q/--quiet        don't print anything to stdout
+EOF
+}
+
+function parse-args() {
+    # Track whether positional arguments should be treated as files or not
+    local positional_filepaths=0
+
+    # Default values
+    TARGET_BRANCHES="all" # all, local, or a comma separated list of branches
+    SRC_REF=$(git-branch-name)
+    MESSAGE="propagated from ${SRC_REF}"
+    declare -ga REFS
+    declare -ga FILEPATHS
+
+    # Loop over the arguments
+    declare -a positional_args
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -v)
+                verbose=1
+                shift 1
+                ;;
+            -*)
+                echo-stderr "error: unknown option ${1}"
+                echo-stderr "$(help-usage)"
+                exit 1
+                ;;
+            *)
+                positional_args+=(${1})
+                shift 1
+                ;;
+        esac
+    done
+
+    # Set the positional arguments in the global array
+    set -- ${positional_args[@]}
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+
+}
