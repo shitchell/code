@@ -30,7 +30,7 @@ function help-full() {
     -f/--format   use the specified git pretty format, with the added fields:
                   {FILE}, {MD5}, and {BRANCH}. e.g.: %H%x09{MD5}%x09{BRANCH}
     -d/--date     strftime format for the date
-                  (default: %Y-%m-%d, only works if %ad is used in the format)
+                  (default: "%Y-%m-%d %H:%M", only works with %ad in the format)
 EOF
 }
 
@@ -43,7 +43,7 @@ function parse-args() {
     FORMAT_SINGLEFILE="{MD5}%x09%h%x09%al%x09{BRANCH}%x09%ad%x09%s"
     QUIET=0
     FORMAT=""
-    DATE_FORMAT="%Y-%m-%d"
+    DATE_FORMAT="%Y-%m-%d %H:%M"
     GIT_LOG_OPTS=()
 
     # Loop over the arguments
