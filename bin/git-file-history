@@ -1,14 +1,19 @@
 #!/bin/bash
 #
 # Given a list of branches and filepaths, list every commit where those files
-# were changed in the format:
+# were changed in a customizable format. By default, the format for a single
+# file is:
+#  <md5 hash>\t<commit hash>\t<author>\t<branch>\t<date>\t<commit message>
+# And the format for multiple files is:
 #  <filepath>\t<md5 hash>\t<commit hash>\t<author>\t<branch>\t<date>\t<commit message>
+#
+# If no branches are specified, the current branch is used.
 
 ## usage functions #############################################################
 ################################################################################
 
 function help-usage() {
-    echo "usage: $(basename $0) [branch1 [branch2 [...]]] -- filepath"
+    echo "usage: $(basename $0) [branch1 [branch2 [...]]] -- filepath1 [filepath2 [...]]"
 }
 
 function help-epilogue() {
@@ -23,11 +28,9 @@ function help-full() {
     -h            display usage
     --help        display this help message
     -f/--format   use the specified git pretty format, with the added fields:
-                  {FILE}, {MD5}, {VERSION_ID}, and {BRANCH}. e.g.:
-                    %H%x09{MD5}%x09{BRANCH}
+                  {FILE}, {MD5}, and {BRANCH}. e.g.: %H%x09{MD5}%x09{BRANCH}
     -d/--date     strftime format for the date
-                  (default: %Y-%m-%d, only works with %ad)
-    -q/--quiet    don't print anything to stdout
+                  (default: %Y-%m-%d, only works if %ad is used in the format)
 EOF
 }
 
