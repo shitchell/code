@@ -72,6 +72,7 @@ if __name__ == "__main__":
     parser.epilog = "specifying '-' for a filepath will read from stdin"
     args: Namespace = parser.parse_args()
 
+    text: str
     # Determine if stdin is being piped or a file is being passed
     if sys.stdin.isatty():
         # Loop over each operand and read the text those files
@@ -88,19 +89,19 @@ if __name__ == "__main__":
                     print("Error: '{}' is not readable".format(path), file=sys.stderr)
                     continue
             # Read the text from the file
-            text: str
             if path == Path("-"):
                 text = sys.stdin.read()
             else:
                 with open(path, "r") as f:
                     text = f.read()
-            # Convert the text to byte format to show all non-standard character codes
-            text = convert_to_bytes_str(text)
-            # Optionally highlight escape characters
-            if args.video:
-                text = highlight_escape_chars(text)
-            # Finally, print the text
-            print(text, end="")
     else:
         # Read from stdin
-        text: str = sys.stdin.read()
+        text = sys.stdin.read()
+
+    # Convert the text to byte format to show all non-standard character codes
+    text = convert_to_bytes_str(text)
+    # Optionally highlight escape characters
+    if args.video:
+        text = highlight_escape_chars(text)
+    # Finally, print the text
+    print(text, end="")
