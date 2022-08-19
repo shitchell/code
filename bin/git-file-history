@@ -4,11 +4,6 @@
 # were changed in the format:
 #  <filepath>\t<md5 hash>\t<commit hash>\t<author>\t<branch>\t<date>\t<commit message>
 
-include-source 'debug.sh'
-include-source 'echo.sh'
-include-source 'git.sh'
-include-source 'shell.sh'
-
 ## usage functions #############################################################
 ################################################################################
 
@@ -41,8 +36,10 @@ function parse-args() {
     local positional_files=0
 
     # Default values
+    FORMAT_MULTIFILE="{FILE}%x09{MD5}%x09%h%x09%al%x09{BRANCH}%x09%ad%x09%s"
+    FORMAT_SINGLEFILE="{MD5}%x09%h%x09%al%x09{BRANCH}%x09%ad%x09%s"
     QUIET=0
-    FORMAT="{FILE}%x09{MD5}%x09%h%x09%al%x09{BRANCH}%x09%ad%x09%s"
+    FORMAT=""
     DATE_FORMAT="%Y-%m-%d"
     GIT_LOG_OPTS=()
 
@@ -91,6 +88,15 @@ function parse-args() {
         esac
     done
 
+    # If a format wasn't specified, use the default for the number of files
+    if [ -z "${FORMAT}" ]; then
+        if [ ${#FILEPATHS[@]} -eq 1 ]; then
+            FORMAT="${FORMAT_SINGLEFILE}"
+        else
+            FORMAT="${FORMAT_MULTIFILE}"
+        fi
+    fi
+
     # Set the positional arguments in the global array
     set -- ${BRANCHES[@]}
     set -- ${FILEPATHS[@]}
@@ -98,14 +104,14 @@ function parse-args() {
 
 function verify-args() {
     if [ -z "${BRANCHES[@]}" ]; then
-        echo-stderr "error: no branches specified"
-        echo-stderr "$(help-usage)"
+        echo "error: no branches specified" >&2
+        echo "$(help-usage)" >&2
         exit 1
     fi
 
     if [ -z "${FILEPATHS[@]}" ]; then
-        echo-stderr "error: no filepaths specified"
-        echo-stderr "$(help-usage)"
+        echo "error: no filepaths specified" >&2
+        echo "$(help-usage)" >&2
         exit 1
     fi
 }
@@ -117,7 +123,6 @@ function verify-args() {
 # Retrieve the history for the filepath in the specified branch in the format:
 # <filepath>\t<md5 hash>\t<commit hash>\t<author>\t<branch>\t<date>\t<commit message>
 function get-file-branch-history() {
-    debug "${@@Q}"
     local filepath="${1}"
     local branch="${2}"
     local format="${3:-{FILE\}%x09{MD5\}%x09%h%x09%al%x09{BRANCH\}%x09%ad%x09%s}"
@@ -163,66 +168,10 @@ function get-file-branch-history() {
 
 function main() {
     parse-args "$@"
-
-    # track versions of each filepath
-    declare -ga md5_versions
-
-    # determine the field that the MD5 hash will be in -- that is, determine
-    # how many "\t" or "," characters precede the MD5 hash in the format string
-    local delimeter_regex=$'\t|%x09|,'
-    local md5_field_index=$(
-        echo "${FORMAT}" \
-            | tr -d '\n' \
-            | sed -E "s/${delimeter_regex}/"$'\2'"/g" \
-            | tr '\2' '\n' \
-            | awk '/^\{MD5\}$/ {print NR; exit}'
-    )
     
     for filepath in "${FILEPATHS[@]}"; do
         for branch in "${BRANCHES[@]}"; do
-            while IFS= read -r line; do
-                local md5_hash
-
-                # Try to get the MD5 hash from the line using regex
-                md5_hash=$(echo "${line}" | grep -oE "[0-9a-f]{32}")
-
-                if [ -z "${md5_hash}" ]; then
-                    # If we didn't find one, then don't change anything
-                    echo "${line}"
-                    continue
-                fi
-
-
-                # If we found more than one md5 hash looking pattern, then try
-                # to find the one in the guessed field index
-                if [ $(echo "${md5_hash}" | wc -l) -gt 1 ]; then
-                    md5_hash=$(
-                        echo "${line}" \
-                            | tr -d '\n' \
-                            | sed -E "s/${delimeter_regex}/"$'\2'"/g" \
-                            | tr '\2' '\n' \
-                            | awk -v field_index="${md5_field_index}" 'NR == field_index {print; exit}'
-                    )
-                fi
-
-                # If we still don't have a md5 hash, then don't change anything
-                if [ -z "${md5_hash}" ]; then
-                    echo "${line}"
-                    continue
-                fi
-
-                # If we have a md5 hash, and it's not in our array already, then
-                # add it to the array
-                if ! in-array "${md5_hash}" "${md5_versions[@]}"; then
-                    md5_versions+=("${md5_hash}")
-                fi
-
-                # Get the index of the md5 hash in the array
-                local md5_index=$(index-of "${md5_hash}" "${md5_versions[@]}")
-
-                # Replace {VERSION_ID} with the md5 hash index
-                echo "${line}" | sed "s/{VERSION_ID}/${md5_index}/g"
-            done < <(get-file-branch-history "${filepath}" "${branch}" "${FORMAT}" "${DATE_FORMAT}")
+            get-file-branch-history "${filepath}" "${branch}" "${FORMAT}" "${DATE_FORMAT}"
         done
     done
 }
