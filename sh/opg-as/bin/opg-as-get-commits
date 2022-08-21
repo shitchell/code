@@ -1,0 +1,106 @@
+#!/bin/bash
+
+include-source 'opg-as-common.sh'
+
+function usage {
+	echo "$(basename $0): <customization file> <branch> [output file]"
+	echo "$(basename $0): <customization id> [branches]"
+	echo
+	echo "You must specify the path to a file which contains a list of"
+	echo "customizations and a branch to fetch the last commit from. The script"
+	echo "will generate a tab delimeted file containing the last cherry-pick"
+	echo "and number of changed files for the customizations listed."
+}
+
+function process_customization {
+	CUSTOMIZATION="$1"
+	TARGET_BRANCH="$2"
+	INCLUDE_BRANCH="${3:-false}"
+
+	if [ "${INCLUDE_BRANCH}" = "true" ]; then
+		branch_data=",${TARGET_BRANCH}"
+	fi
+
+	DATE_FORMAT="%a %b %d, %Y %H:%M:%S %z"
+
+    # determine if we're fetching a code checkin or cherry pick
+    if [ "$TARGET_BRANCH" = "development" ]; then
+        commit_type="checkin"
+        commit_fetch_cmd=get-last-checkin
+    else
+        commit_type="cherry-pick"
+        commit_fetch_cmd=get-last-pick
+    fi
+
+	# clean up the customization name
+	cust=`echo $CUSTOMIZATION | tr -d '\r\n'`
+	echo -n "$CUSTOMIZATION"
+	datums=`$commit_fetch_cmd "$cust" "$TARGET_BRANCH"`
+	timestamp_u=`echo "${datums}" | cut -d ' ' -f 1`
+	timestamp="`date -d@${timestamp_u} +"${DATE_FORMAT}" 2>/dev/null`"
+	[ -n "$timestamp" ] && timestamp="\"${timestamp}\""
+	hash=`echo "${datums}" | cut -d ' ' -f 2`
+	change_count=`echo "${datums}" | cut -d ' ' -f 3`
+
+	echo "${branch_data},${timestamp},${timestamp_u},${hash},${change_count}"
+}
+
+function process_customization_files {
+	CUSTOMIZATION_FILEPATH="$1"
+	TARGET_BRANCH="$2"
+
+    # determine if we're fetching a code checkin or cherry pick
+    if [ "$TARGET_BRANCH" = "development" ]; then
+        commit_type="checkin"
+        commit_fetch_cmd=get-last-checkin
+    else
+        commit_type="cherry-pick"
+        commit_fetch_cmd=get-last-pick
+    fi
+
+	OUTPUT_FILEPATH="${3:-${TARGET_BRANCH}-${commit_type}s-`date +'%Y%m%d.csv'`}"
+
+	# require two arguments and a valid input file
+	if [ -z "$TARGET_BRANCH" ] || [ ! -f "$CUSTOMIZATION_FILEPATH" ]; then
+		usage
+		exit 1
+	fi
+
+	# fetch latest updates from origin
+	echo -e "${CYAN}fetching updates from remote${RESET}"
+	git fetch --all -4
+
+	# if the output file doesn't exist, create it and add headers
+	if [ ! -f "$OUTPUT_FILEPATH" ]; then
+		echo "$HEADERS" > "$OUTPUT_FILEPATH"
+	fi
+
+	# read and loop over the input file
+	echo -e "${CYAN}fetching recent ${commit_type}s to '${TARGET_BRANCH}' using file '${CUSTOMIZATION_FILEPATH}'${RESET}"
+	cat "$CUSTOMIZATION_FILEPATH" | while read cust; do
+		process_customization "$cust" "$TARGET_BRANCH" | tee -a "$OUTPUT_FILEPATH"
+	done
+}
+
+function main {
+	CUSTOMIZATION_ITEM="$1"
+	CYAN='\e[0;36m'
+	RESET='\e[0m'
+
+	# if CUSTOMIZATION_ITEM starts with AS9-CUS, then fetch the one item from
+	# each of the core branches
+	if [[ "$CUSTOMIZATION_ITEM" =~ ^AS9-CUS ]]; then
+		HEADERS=$'Customization ID,Branch,Timestamp,Unix Timestamp,Commit,Files Changed'
+		echo -e "${CYAN}fetching updates...${RESET}"
+		git fetch --all -q
+		echo "$HEADERS"
+		for branch in development test release; do
+			process_customization "$CUSTOMIZATION_ITEM" "$branch" "true"
+		done
+	else
+		HEADERS=$'Customization ID,Timestamp,Unix Timestamp,Commit,Files Changed'
+		process_customization_files "$@"	
+	fi
+}
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "$@"

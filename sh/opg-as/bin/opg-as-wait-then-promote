@@ -1,0 +1,63 @@
+#!/bin/bash
+# given the path to the opg-as9 repository, this script will periodically
+# update the repo and check to see if any trigger files still exist. once
+# they've all been removed, it runs the `opg-as9-release-delivery` script,
+# cd's into the specified OPG AssetSuite repository, commits the changes, and
+# then pushes them
+
+TRI_REPO="${1}"
+OPG_REPO="${2}"
+CUS_LIST="${3}"
+INTERVAL="${4:-300}"
+
+# require all three params
+if [ -z "$CUS_LIST" ]; then
+  echo "usage: $(basename "$0"): <trinoor repo> <opg repo> <customization list file> [trigger check interval]" >&2
+  exit 1
+fi
+
+# require an integer interval
+if [ ! $INTERVAL -eq $INTERVAL ] 2>/dev/null; then
+  echo "trigger check interval must be an integer!" >&2
+  exit 1
+fi
+
+echo $INTERVAL
+
+exit
+
+# read the customization list
+CUS_NAMES=`cat $CUS_LIST`
+echo "$CUS_NAMES" | while read cus; do
+  echo name: $cus
+done
+
+# colored output
+GREEN="\033[32m"
+RED="\033[31m"
+BLUE="\033[34m"
+PURPLE="\033[35m"
+CYAN="\033[36m"
+RESET="\033[0m"
+
+# echo a command before running it
+echo-run() {
+  command="$@"
+  echo -e "${GREEN}${command}${RESET}"
+  "$@"
+  exit_code="$?"
+
+  if [ $exit_code -ne 0 ]; then
+    echo -e "${RED}command exited with status ${exit_code}${RESET}"
+  fi
+  return $exit_code
+}
+
+# cd into the opg repository
+echo-run cd "$TRI_REPO"
+
+# start waiting for all trigger files to disappear
+i=0
+while [ -n "$(ls AS9-CUS*)" ]; do
+  [ $i -eq 0 ] && echo -e "${BLUE}waiting for trigger files to be removed...${RESET}"
+  sleep "$INTERVAL"

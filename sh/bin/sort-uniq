@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# helpful functions
+##
+
+help-usage() {
+    echo "usage: $(basename "$0") [-i] filepaths..."
+}
+
+help-epilogue() {
+    echo "sort a file and remove duplicate lines"
+}
+
+help() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h/--help       show help info
+    -i              modify file in place
+EOF
+}
+
+# Determine if a file exists and is readable
+function validate-file() {
+	filepath="${1}"
+	if [ -f "${filepath}" ]; then
+}
+
+function main() {
+	POSITIONAL=()
+	while [[ $# -gt 0 ]]; do
+		key="$1"
+
+		case $key in
+		    -i)
+			    INPLACE=true
+			    shift # past option
+			    ;;
+		    -h)
+			    help-usage
+			    help-epilogue
+			    echo "--help for more"
+			    exit
+			    ;;
+		    --help)
+			    help
+			    exit
+			    ;;
+		    *)
+			    POSITIONAL+=("$1") # save it in an array for later
+			    shift # past argument
+			    ;;
+		esac
+	done
+	set -- "${POSITIONAL[@]}" # restore positional parameters
+
+	for filepath in "${POSITIONAL[@]}"; do
+		if [ "${filepath}" = "-" ]; then
+			# read from stdin for the filepath '-'
+			text="$(cat)"
+		elif [ -f "${filepath}" ]; then
+			if [ -r "${filepath}" ]; then
+		fi
+	done
+}
+
+[ "${0}" = "${BASH_SOURCE[0]}" ] && main "$@"

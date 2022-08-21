@@ -1,6 +1,1 @@
-#!/bin/sh
-
-if ! /usr/bin/urxvtc "$@"; then
-	/usr/bin/urxvtd -f -o -q
-	/usr/bin/urxvtc "$@"
-fi
+../sh/bin/urxvtc

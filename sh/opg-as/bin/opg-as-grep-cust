@@ -1,0 +1,5 @@
+#!/bin/bash
+
+include-source opg-as-common.sh
+
+grep-cust-names

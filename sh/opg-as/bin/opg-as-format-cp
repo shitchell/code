@@ -1,0 +1,11 @@
+#!/bin/bash
+
+branch="${1:-release}"
+cat \
+    | sed -E 's/^([a-f0-9]{5,9})(\s)*.*?(AS9.*)/\1\2\3/' \
+    | tr -d '\r' \
+    | tr '\t' ' ' \
+    | grep '-' \
+    | sed "s_.*_./mcp.sh & $branch ; \\\_" \
+    | awk '{l=$0; while(getline==1){print l;l=$0;} sub(" ;.*",""); print}' \
+    | column -t

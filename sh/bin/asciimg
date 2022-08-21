@@ -1,0 +1,6 @@
+#!/bin/bash
+
+if ! command -v convert &> /dev/null; then
+    echo "COMMAND could not be found"
+    exit
+fi

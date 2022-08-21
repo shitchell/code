@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Determine the pid of the process
+pids=$(pidof $1)
+
+if [ -z $pids ]; then
+	echo "No such process!"
+	exit 1
+fi
+
+# Grab a list of all tmux panes and their pseudo terminals
+panes=$(tmux list-panes -a -F '#{pane_id} #{pane_tty}')
+
+# Loop over each process (if multiple exist)
+for pid in $pids; do
+	# Determine the pseduo terminal the process running in
+	pty=$(ps -o tty= -p $pid)
+
+	# Determine the id of the pane attached to the pty
+	pane=$(echo "$panes" | grep $pty | awk -F ' ' '{print $1}')
+
+	# If the pane exists, switch to it
+	if [ -n "$pane" ]; then
+		tmux switch-client -t $pane
+	fi
+
+	exit 0
+done
+
+echo "$1 is not running inside a tmux pane!"
+exit 1

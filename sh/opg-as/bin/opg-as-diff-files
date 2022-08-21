@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# accepts a list of filenames and two branches, then generates a diff of each
+# file between those two branches
+
+CUST_FILE="${1}"
+BRANCH1="${2}"
+BRANCH2="${3}"
+
+usage() {
+	echo "usage: $(basename "$0") <custmization file> <branch1> <branch2>"
+}
+
+if [ -z "${BRANCH2}" ]; then
+	usage >&2
+	exit 1
+fi
+
+main() {
+	cust_file="${1}"
+	branch1="${2}"
+	branch2="${3}"
+
+	CYAN='\e[0;36m'
+	RESET='\e[0m'
+
+	# fetch updates
+	echo -e "${CYAN}fetching updates from remote${RESET}"
+	git fetch --all
+
+	# read and loop over the customization file
+	cat "${cust_file}" | while read cust; do
+		# echo the file name
+		echo -e "${CYAN}${cust}${RESET}"
+		git diff "origin/${branch1}:${cust}" "origin/${branch2}:${cust}"
+	done
+}
+
+main "${CUST_FILE}" "${BRANCH1}" "${BRANCH2}"

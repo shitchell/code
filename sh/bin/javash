@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# require javac
+if ! command -v javac >/dev/null 2>&1; then
+    echo "error: 'javac' not found"
+    exit 1
+fi
+
+# helpful functions
+##
+
+help-usage() {
+    echo "usage: $(basename "$0") [-i file/dir...] File.java"
+}
+
+help-epilogue() {
+    echo "compile and run java files"
+}
+
+help() {
+    help-usage
+    help-epilogue
+    echo
+    echo "temporarily copies all specified files to /tmp/ to compile and run."
+    echo "specify any extra necessary files or directories with -i, e.g."
+    echo "`javash -i LinkedList.java LLTest.java`"
+    echo
+    echo "the first positional argument is treated as the main java file, and"
+    echo "all others are passed as command line arguments."
+    echo
+    cat << EOF
+    -h/--help       show help info
+    -i/--include    include the given files/directories when running
+EOF
+}
+
+echo-verbose() {
+    output=""
+    if [ -n "$VERBOSE" ]; then
+        if [ ! -t 0 ]; then
+            output+=$(cat)
+            [ -n "$output" ] && output+=$'\n'
+        fi
+        output+="$@"
+    fi
+    [ -n "$output" ] && echo "$output"
+}
+
+INCLUDE=()
+POSITIONAL=()
+JAVA_FILE=""
+while [[ $# -gt 0 ]]; do
+    key="$1"
+
+    case $key in
+        -i|--include)
+            INCLUDE+=("$2")
+            shift # past argument
+            shift # past value
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -h)
+            help-usage
+            help-epilogue
+            echo
+            echo "--help for more"
+            exit
+            ;;
+        --help)
+            help
+            exit
+            ;;
+        *)    # unknown option
+            if [ -z "$JAVA_FILE" ]; then
+                JAVA_FILE="$1"
+            else
+                POSITIONAL+=("$1")
+            fi
+            shift # past argument
+            ;;
+    esac
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+# require a java file
+if [ -z "$JAVA_FILE" ]; then
+    help-usage
+    exit 1
+fi
+
+# copy stuff
+##
+TMP_DIR="$(mktemp --tmpdir -d javash.XXXXXX)"
+
+# copy included files
+for include in "${INCLUDE[@]}"; do
+    cp -rl "$include" "$TMP_DIR" 2&>1 | echo-verbose
+done
+
+# copy main file dir
+cp -rl "$(dirname "$JAVA_FILE")" "$TMP_DIR"
+
+# copy main file
+cp -l "$JAVA_FILE" "$TMP_DIR"
+
+# move to dir
+cd "$TMP_DIR"
+
+# compile main file
+javac $(basename "$JAVA_FILE")
+
+# run dat shit
+java $(basename "$JAVA_FILE")
+
+# deldatshit
+rm -r "$TMP_DIR"

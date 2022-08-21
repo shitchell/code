@@ -169,3 +169,9 @@ function find-function() {
             }'
     done
 }
+
+# Search for a file in the PATH or optionally specified PATH style variable
+# and return the full path to the file.
+function search-path() {
+    # TODO: write this
+}

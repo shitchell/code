@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+# Searches for git repositories in the current directory and runs the specified
+# git command in each.
+
+include-source 'echo.sh'
+
+if [ -z "$1" ]; then
+  echo "usage: $(basename $0) git-command"
+  exit 1
+fi
+
+find . -name '\.git' -type d \
+    -exec sh -c "echo '{}' | sed 's/\.git$//'" \;\
+    -exec echo-run git -C '{}/..' "$@" \;

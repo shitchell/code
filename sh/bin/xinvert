@@ -1,0 +1,22 @@
+#!/bin/bash
+
+alias invert="xcalib -d :0 -invert -alter"
+
+function main() {
+    local repeat="${1:-1}"
+    local sleep_time="${2:-0.1}"
+    
+    i=0
+    while [ ${i} -lt ${repeat} ] 2>/dev/null; do
+        # if we're doing more than 1 invert, then pause for ${sleep_time} before
+        # all but the first run
+        if [ ${repeat} -gt 1 ] && [ ${i} -ne 0 ]; then
+            sleep ${sleep_time}
+        fi
+
+        invert
+        let i++
+    done
+}
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"

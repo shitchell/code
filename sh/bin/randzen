@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Get quotes
+quotes=$(gkeep --auth ~/.config/gkeep get-note 1564400053268.394798136 | grep '•')
+
+# BUT HOW MANY QUOTES
+lines=$(echo "$quotes" | wc -l)
+
+# There can be only one
+quote=$(echo "$quotes" | awk NR=="$((RANDOM%lines+1))" | fmt  -w $(tput cols))
+
+# Determine quote height
+height=$(echo "$quote" | wc -l)
+rows=$(tput lines)
+
+# Print some padding maybe
+if [[ $rows -gt $height ]]; then
+	padding=$(((rows - height) / 2))
+	for ((i = 0; i < $padding; i++)); do
+		echo
+	done
+fi
+
+echo "$quote"

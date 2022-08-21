@@ -1,0 +1,30 @@
+#!/bin/bash
+
+green="\x1b[32m"
+red="\x1b[31m"
+reset="\x1b[m"
+
+ON="$green ON $reset"
+OFF="$red OFF $reset"
+
+ip route show | grep -i 'default via' | while read line; do
+	dev_ip=$(echo $line | sed 's/.*default via //' | sed 's/ .*//')
+	dev=$(echo $line | sed 's/.*dev //' | sed 's/ .*//')
+	if (ping -W 2 -c 1 $dev_ip &>/dev/null) then
+		echo -e "$dev:\t$ON"
+	else
+		echo -e "$dev:\t$OFF"
+	fi
+done
+
+if (ping -W 2 -c 1 8.8.8.8 &>/dev/null) then
+	echo -e "WAN:\t$ON"
+else
+	echo -e "WAN:\t$OFF"
+fi
+
+if (ping -W 2 -c 1 www.reddit.com &>/dev/null) then
+	echo -e "DNS:\t$ON"
+else
+	echo -e "DNS:\t$OFF"
+fi

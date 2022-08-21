@@ -1,0 +1,180 @@
+#!/bin/bash
+#
+# For each filepath passed in as an argument, creates a copy with the name
+# '<filename>.bak' in the same directory as the original file. If
+# '<filename>.bak' already exists, creates '<filename>.bak.<n>'. Optionally,
+# overwrites any existing '<filename>.bak' files with the -o|--overwrite option.
+
+## Imports #####################################################################
+################################################################################
+
+include-source 'echo.sh'
+include-source 'files.sh'
+
+
+## Usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-hoOdvq] <filepath> [<filepath> ...]"
+}
+
+function help-epilogue() {
+    echo "create backup files"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Creates backup files for each filepath passed in as an argument. By"
+    echo "default, ensures that a unique name is used for each backup file by"
+    echo "appending incrementing numbers to the backup filename as necessary."
+    echo
+    cat << EOF
+    -h/--help          show help info
+    -o/--overwrite     always use <filename>.bak, even if it already exists
+    -O/--no-overwrite  create <filename>.bak.<n> if <filename>.bak exists
+    -d/--directory     create backup files in the specified directory
+    -v/--verbose       be verbose
+    -q/--quiet         don't be verbose
+EOF
+}
+
+function parse-args() {
+    # Default values
+    DO_OVERWRITE=0
+    DO_VERBOSE=1
+    BACKUP_DIRECTORY=""
+
+    # Create an array to hold positional arguments
+    declare -a POSITIONAL_ARGS
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -o|--overwrite)
+                DO_OVERWRITE=1
+                shift
+                ;;
+            -O|--no-overwrite)
+                DO_OVERWRITE=0
+                shift
+                ;;
+            -d|--directory)
+                BACKUP_DIRECTORY="${2}"
+                shift 2
+                ;;
+            -v|--verbose)
+                DO_VERBOSE=1
+                shift
+                ;;
+            -q|--quiet)
+                DO_VERBOSE=0
+                shift
+                ;;
+            -*)
+                echo-stderr "error: unknown option '${1}'"
+                exit 1
+                ;;
+            *)
+                POSITIONAL_ARGS+=("${1}")
+                shift
+                ;;
+        esac
+    done
+
+    # Set positional args in the global array $@
+    set -- "${POSITIONAL_ARGS[@]}"
+}
+
+
+## Helpful functions ###########################################################
+################################################################################
+
+# Accepts a directory / filename and returns 0 if the directory / parent directory
+# is writable, 1 otherwise
+function is-dir-writable() {
+    local filepath="${1}"
+    if [ -d "${filepath}" ]; then
+        local dir="${filepath}"
+    else
+        local dir="$(dirname ${filepath})"
+    fi
+    if [ -w "${dir}" ]; then
+        return 0
+    fi
+    return 1
+}
+
+
+## Main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # If a backup directory was specified, make sure it exists and is writable
+    if [ -n "${BACKUP_DIRECTORY}" ]; then
+        if [ ! -d "${BACKUP_DIRECTORY}" ]; then
+            echo-stderr "error: backup directory '${BACKUP_DIRECTORY}' does not exist"
+            exit 1
+        fi
+        if [ ! -w "${BACKUP_DIRECTORY}" ]; then
+            echo-stderr "error: backup directory '${BACKUP_DIRECTORY}' is not writable"
+            exit 1
+        fi
+    fi
+
+    # Loop over each filepath passed in as an argument
+    for filepath in "${POSITIONAL_ARGS[@]}"; do
+        # Remove any trailing slash from the filepath
+        filepath="${filepath%/}"
+
+        if [ ${DO_VERBOSE} -eq 1 ]; then
+            echo -n "${filepath}"
+            [ -d "${filepath}" ] && echo -n "/"
+            echo -n " -> "
+        fi
+
+        # Create a backup filename
+        if [ -n "${BACKUP_DIRECTORY}" ]; then
+            local backup_filepath="${BACKUP_DIRECTORY}/$(basename ${filepath}).bak"
+        else
+            local backup_filepath="$(mkuniq-filename ${filepath}).bak"
+        fi
+
+        # Determine if the backup directory is writable
+        if [ ! is-dir-writable "${backup_filename}" ]; then
+            echo-stderr "error: backup directory '$(dirname "${backup_filepath}")' is not writable"
+            exit 1
+        fi
+
+        # Ensure the uniqueness of the backup filename if necessary
+        if [ ${DO_OVERWRITE} -ne 1 ]; then
+            backup_filepath="$(mkuniq-filename "${backup_filepath}")"
+        fi
+
+        # Copy the file to the backup file
+        cp "${filepath}" "${backup_filepath}"
+
+        # Print the backup filepath
+        if [ ${DO_VERBOSE} -eq 1 ]; then
+            echo "${backup_filepath}"
+            [ -d "${filepath}" ] && echo -n "/"
+        fi
+    done
+}
+
+
+## Run #########################################################################
+################################################################################
+
+[ "${0}" = "${BASH_SOURCE[0]}" ] && main "$@"

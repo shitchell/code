@@ -1,6 +1,1 @@
-#!/bin/bash
-
-for f in "$@"; do
-	echo "$f"
-	ed -s "$f" <<< $',s/;/;/g\nw' 
-done
+../sh/bin/its_all_greek

@@ -1,9 +1,1 @@
-#!/bin/bash
-
-i=0
-while :; do
-	read -n 1
-	echo -n $'\b\b\b\b\b'
-	i=$(($i + 1))
-	echo -n "$i "$'\b'
-done
+../sh/bin/counter
