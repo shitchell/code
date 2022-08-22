@@ -111,10 +111,17 @@ function echo-formatted() {
 # echo a command before running it, printing an error message if it exited with
 # a non-zero status
 function echo-run() {
-	command="$@"
-	echo-command "${command}"
-	"$@"
-	exit_code="$?"
+	local exit_code
+	echo-command "${@}"
+
+	# determine if the command is a string or an array
+	if [ "${#}" -eq 1 ]; then
+		eval " ${1}"
+		exit_code="${?}"
+	else
+		"${@}"
+		exit_code="${?}"
+	fi
 
 	if [ $exit_code -ne 0 ]; then
 		echo-error "command exited with status ${exit_code}"
@@ -129,7 +136,7 @@ function echo-comment() {
 
 # echo something to stdout in green
 function echo-command() {
-	echo-formatted "\$" -g "${@}"
+	echo-formatted "\$" -g "$(echo ${@})"
 }
 
 # echo something to stdout in red
@@ -199,17 +206,30 @@ function check-command() {
 	return ${exit_code}
 }
 
-# Print the given message depending on the VERBOSITY_LEVEL environment variable
+# Print the given message depending on the VERBOSITY_LEVEL environment variable.
+# Any arguments passed first are passed to echo.
 # usage:
 #   echo-managed <output-level> <message>
 #   echo-managed <message>
-#   echo-managed 2 "this will be displayed only if the verbosity is 2 or higher"
-#   echo-managed "this will be displayed only if the verbosity is 1 or higher"
+#   echo-managed -n 2 "this will be displayed only if the verbosity is 2 or higher"
+#   echo-managed -n "this will be displayed only if the verbosity is 1 or higher"
 function echo-managed() {
+	local echo_args=()
     local verbosity_level
     local message
 
-    # determine if the first argument is an int
+	# loop over each argument and, if it starts with a dash, add it to the list
+	# of options to pass to echo.
+	for arg in "${@}"; do
+		if [ "${arg:0:1}" = "-" ]; then
+			echo_args+=("${arg}")
+			shift
+		else
+			break
+		fi
+	done
+
+    # determine if the first argument after any echo args is an int
     if [[ "${1}" =~ ^[0-9]+$ ]]; then
         # if the first argument is an int, set the verbosity level
         verbosity_level="${1}"
@@ -224,6 +244,6 @@ function echo-managed() {
     # if the specified verbosity level is less than or equal to the current
     # verbosity level, print the message
     if [[ ${verbosity_level} -le ${VERBOSITY_LEVEL} ]]; then
-        echo "${message}"
+        echo ${echo_args} "${message}"
     fi
 }
