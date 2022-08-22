@@ -173,5 +173,26 @@ function find-function() {
 # Search for a file in the PATH or optionally specified PATH style variable
 # and return the full path to the file.
 function search-path() {
-    # TODO: write this
+    local filepath="${1}"
+    local path="${2:-${PATH}}"
+    local found_path
+
+    # loop through all of the paths in the PATH variable
+    while IFS=':' read -d: -r pathdir || [ -n "${pathdir}" ]; do
+        # if the file exists in the path, set the found_path variable and break
+        # out of the loop
+        if [ -f "${pathdir}/${filepath}" ]; then
+            found_path="${pathdir}/${filepath}"
+            break
+        fi
+    done <<< "${path}"
+
+    # if we found the file, echo the full path to the file
+    if [ -n "${found_path}" ]; then
+        echo "${found_path}"
+        return 0
+    fi
+
+    # if we didn't find the file, return 1
+    return 1
 }
