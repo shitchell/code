@@ -1,4 +1,5 @@
 include-source 'shell.sh'
+include-source 'text.sh'
 
 # echos each argument based on the preceding argument:
 #   -g: green
@@ -11,6 +12,9 @@ include-source 'shell.sh'
 #   -U: underline
 #   -K: blinking
 #   --: reset to default color
+# other options:
+#   -n: do not echo a newline
+#   -V <level>: only echo if the global VERBOSITY is >= <level>
 function echo-formatted() {
     local code_g="\033[32m"
     local code_r="\033[31m"
@@ -44,17 +48,34 @@ function echo-formatted() {
     fi
 
     # loop over each argument
+    local verbosity_level=1
     local is_first_argument=1
     local last_printable_argument=""
-    for arg in "${@}"; do
+    local has_printed_anything=0
+    while [[ ${#} -gt 0 ]]; do
+        local arg="${1}"
+        shift 1
         # if the argument starts with a dash, use it as the color code
         if [ "${arg:0:1}" = "-" ]; then
             if [ ${do_format} -eq 1 ]; then
                 # if it's a reset code, reset the color code
                 if [ "${arg}" = "--" ]; then
-                    echo -en "${code_reset}"
+                    if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+                    || ! is-int ${VERBOSITY}; then
+                        echo -en "${code_reset}"
+                    fi
                 elif [ "${arg}" = "-n" ]; then
                     print_newline=0
+                elif [ "${arg}" = "-V" ]; then
+                    # use the second arg as the verbosity level at which to print
+                    if is-int "${1}"; then
+                        local verbosity_level="${1}"
+                    else
+                        echo-stderr "echo-formatted: invalid verbosity level '${1}'"
+                        return 1
+                    fi
+                    shift 1
+                    continue
                 else
                     # otherwise, loop over each character in the argument
                     local arg_chars="${arg:1}"
@@ -62,7 +83,10 @@ function echo-formatted() {
                         # set the color code based on the character
                         local color_code="code_${char}"
                         # echo the color code
-                        echo -en "${!color_code}"
+                        if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+                        || ! is-int ${VERBOSITY}; then
+                            echo -en "${!color_code}"
+                        fi
                     done
                 fi
             fi
@@ -73,7 +97,10 @@ function echo-formatted() {
             if [ ${is_first_argument} -eq 0 ] \
             && ! [[ "${last_printable_argument}" =~ ^[[:space:]]$ ]] \
             && ! [[ "${arg}" =~ ^[[:space:]]$ ]]; then
-                printf " "
+                if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+                || ! is-int ${VERBOSITY}; then
+                    printf " "
+                fi
             else
                 is_first_argument=0
             fi
@@ -84,8 +111,11 @@ function echo-formatted() {
             fi
 
             # print the arg
-            printf "%s" "${arg}"
-
+            if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+            || ! is-int ${VERBOSITY}; then
+                printf "%s" "${arg}"
+                has_printed_anything=1
+            fi
             # store the last printable argument
             last_printable_argument="${arg}"
         fi
@@ -93,18 +123,29 @@ function echo-formatted() {
 
     # if piped data is available, echo it
     if read -t 0; then
-        local piped_data=$(cat -)
-        echo -n "${piped_data}"
+        if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+        || ! is-int ${VERBOSITY}; then
+            local piped_data=$(cat -)
+            echo -n "${piped_data}"
+            has_printed_anything=1
+        fi
     fi
 
     # echo the reset code
     if [ ${do_format} -eq 1 ]; then
-        echo -en "${code_reset}"
+        if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+        || ! is-int ${VERBOSITY}; then
+            echo -en "${code_reset}"
+        fi
     fi
 
     # echo a newline
     if [ ${print_newline} -eq 1 ]; then
-        echo
+        if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+        || ! is-int ${VERBOSITY} \
+        || [ ${has_printed_anything} -eq 1 ]; then
+            echo
+        fi
     fi
 }
 
@@ -215,7 +256,7 @@ function check-command() {
 #   echo-managed -n "this will be displayed only if the verbosity is 1 or higher"
 function echo-managed() {
     local echo_args=()
-    local verbosity_level
+    local verbosity_level=1
     local message
 
     # loop over each argument and, if it starts with a dash, add it to the list
@@ -234,8 +275,6 @@ function echo-managed() {
         # if the first argument is an int, set the verbosity level
         verbosity_level="${1}"
         shift
-    else
-        verbosity_level=1
     fi
 
     # get the rest of the arguments as the message
@@ -243,7 +282,7 @@ function echo-managed() {
 
     # if the specified verbosity level is less than or equal to the current
     # verbosity level, print the message
-    if [[ ${verbosity_level} -le ${VERBOSITY_LEVEL} ]]; then
+    if [[ ${verbosity_level} -le ${VERBOSITY} ]]; then
         echo ${echo_args} "${message}"
     fi
 }
