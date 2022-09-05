@@ -1,6 +1,8 @@
 #!/bin/bash
 #
-# Get the md5 hash for file(s) across commits, tags, or branches.
+# Get the md5 hash for file(s) across commits, tags, or branches. If no
+# filepaths are provided and the ref is a commit, the files modified in that
+# commit will be used.
 
 include-source 'echo.sh'
 include-source 'git.sh'
@@ -87,6 +89,22 @@ function parse-args() {
                 ;;
         esac
     done
+
+    # If no refs are provided, use HEAD
+    if [ ${#REFS[@]} -eq 0 ]; then
+        REFS+=("HEAD")
+    fi
+
+    # If no files are provided, then check if the ref is a commit. If it is, use
+    # the files modified in that commit.
+    if [ ${#FILEPATHS[@]} -eq 0 ]; then
+        if [ ${#REFS[@]} -eq 1 ]; then
+            local ref="${REFS[0]}"
+            if [ $(get-ref-type "${ref}") == "commit" ]; then
+                IFS=$'\n' FILEPATHS+=($(git log -1 --pretty=format: --name-only "${ref}"))
+            fi
+        fi
+    fi
 
     # Set the positional arguments in the global array
     set -- ${REFS[@]}
