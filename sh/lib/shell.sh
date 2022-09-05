@@ -196,3 +196,147 @@ function search-path() {
     # if we didn't find the file, return 1
     return 1
 }
+
+# Search for and attempt to return the original path to a command in the PATH
+# rather than an alias, function, or wrapper script.
+function which-original() {
+    local command="${1}"
+    local executables=()
+    local mimetype
+    local mimetypes=()
+
+    # use `which` to get the paths to all executables matching the command name
+    executables=($(which -a "${command}"))
+
+    # if no executables were found, return 1
+    if [ ${#executables[@]} -eq 0 ]; then
+        return 1
+    fi
+
+    # loop through all of the executables and collect their mime types
+    for executable in "${executables[@]}"; do
+        mimetype=$(file --mime-type -b "${executable}" 2>/dev/null)
+        mimetypes+=("${mimetype}")
+    done
+
+    # determine if any of the executables is an application
+    local i=0
+    for mimetype in "${mimetypes[@]}"; do
+        if [ "${mimetype}" = "application/x-executable" ]; then
+            echo "${executables[${i}]}"
+            return 0
+        fi
+        let i++
+    done
+
+    # if none of the executables is an application, check to see if any of the
+    # executables is installed in a system directory
+    for executable in "${executables[@]}"; do
+        local directory=$(dirname "${executable}")
+        # use a case statement to check if the directory is a system directory
+        case "${directory}" in
+            /bin|/sbin|/usr/bin|/usr/sbin|/usr/local/bin|/usr/local/sbin)
+                echo "${executable}"
+                return 0
+                ;;
+        esac
+    done
+
+    return 1
+}
+
+# Return the first non-empty string from the given arguments.
+function first-value() {
+    for arg in "${@}"; do
+        if [ -n "${arg}" ]; then
+            echo "${arg}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Returns 0 if the given argument is in the specified path, 1 otherwise.
+function dir-in-path() {
+    local dir="${1}"
+    local path="${2:-${PATH}}"
+
+    [[ ":${PATH}:" == *":${dir}:"* ]]
+}
+
+# Add the given arguments to the PATH environment variable if they are not
+# already in the PATH
+function add-paths() {
+    local usage="usage: $(functionname) [-h|--help] [-P|--path-var PATH_VARIABLE] [-a|--append] [-p|--prepend]"
+
+    # default values
+    local path_name="PATH"
+    local do_append=0
+    local paths=()
+
+    while [[ ${#} -gt 0 ]]; do
+        local arg="$1"
+        case "$arg" in
+            -h|--help)
+                echo ${usage}
+                return 0
+                ;;
+            -P|--path-var)
+                path_name="$2"
+                shift
+                ;;
+            -a|--append)
+                do_append=1
+                shift
+                ;;
+            -p|--prepend)
+                do_append=0
+                shift
+                ;;
+            -*)
+                echo "include-source: invalid option '$arg'" >&2
+                exit 1
+                ;;
+            *)
+                paths+=("$arg")
+                shift
+                ;;
+        esac
+    done
+
+    # if no paths were specified, return 1
+    if [ ${#paths[@]} -eq 0 ]; then
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # Get the current value of the specified PATH variable.
+    local path_value=${!path_name}
+
+    # loop through all of the paths and add them to the PATH if they are not
+    # already in the PATH
+    for path in "${paths[@]}"; do
+        if ! dir-in-path "${path}" "${path_value}"; then
+            if [ ${do_append} -eq 1 ]; then
+                path_value="${path_value}:${path}"
+            else
+                path_value="${path}:${path_value}"
+            fi
+        fi
+    done
+
+    # Store the updated path_value in the specified PATH variable.
+    export "${path_name}"="${path_value}"
+}
+
+# sort an array
+function sort-array() {
+    local array=("${@}")
+    local sorted_array=()
+
+    # sort the array
+    sorted_array=($(printf '%s\0' "${array[@]}" | sort -z | xargs -0))
+
+    # print the sorted array
+    printf '%s' "${sorted_array[@]}"
+}

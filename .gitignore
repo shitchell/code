@@ -2,6 +2,9 @@
 /tutor/
 /gitish/
 
+# opg stuff
+opg-as*
+
 # temporary save files
 *.swp
 

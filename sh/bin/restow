@@ -6,14 +6,27 @@
 
 include-source 'echo.sh'
 
+CODE_DIR="${HOME}/code"
+TARGET_BIN="${CODE_DIR}/bin"
+DOTFILES_DIR="${HOME}/code/git/shitchell/dotfiles"
+
+# find the bin dirs, excluding any git directories and the target bin
+bins=(
+    $(
+        find "${CODE_DIR}/" \
+            -not \( -path "*/git*" -prune \) \
+            -not \( -path "${TARGET_BIN}" \) \
+            -name 'bin' -type d
+    )
+)
 echo "# Restowing ~/code/**/bin/* -> ~/code/bin/"
-for bin in "$HOME"/code/**/bin/; do
+for bin in "${bins[@]}"; do
     # get the base dir and the package name
     basedir=$(dirname "${bin}")
     package=$(basename "${bin}")
 
-    echo-command "stow --restow -v -t '$HOME' -d '${basedir}' '${package}'"
-    stow --restow -v -t "$HOME/code/bin/" -d "${basedir}" "${package}" 2>&1 \
+    echo-command "stow --restow -v -t '${TARGET_BIN}' -d '${basedir}' '${package}'"
+    stow --restow -v -t "${TARGET_BIN}" -d "${basedir}" "${package}" 2>&1 \
             | grep -v "BUG in find_stowed_path" \
             | sed 's/^/  /'
 done
@@ -21,6 +34,6 @@ done
 
 echo "# Restowing ~/code/git/shitchell/dotfiles/packages/* -> ~/"
 (
-    cd "$HOME"/code/git/shitchell/dotfiles
-    ./make install
+    cd "${DOTFILES_DIR}"
+    ./make install | sed 's/^/  /'
 )
