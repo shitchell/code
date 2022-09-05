@@ -23,6 +23,7 @@ function functionname() {
     esac
 }
 
+# @deprecated
 # Checks if an item is in an array.
 # usage: in-array <item> "${array[@]}"
 # returns 0 if the item is in the array, 1 otherwise
@@ -33,6 +34,29 @@ function in-array() {
     for e in ${array[@]}; do
         if [ "${e}" = "${item}" ]; then
             return 0
+        fi
+    done
+    return 1
+}
+
+# Check if an item is in any of the given arguments or arrays
+# usage: is-in <item> <arg1> <arg2> ... <argN>
+# returns 0 if the item is in any of the arguments or arrays, 1 otherwise
+function is-in() {
+    local item=${1}
+    shift
+    local arg
+    for arg in "${@}"; do
+        if [ "${#arg[@]}" -gt 0 ]; then
+            for subarg in "${arg[@]}"; do
+                if [ "${subarg}" = "${item}" ]; then
+                    return 0
+                fi
+            done
+        else
+            if [ "${arg}" = "${item}" ]; then
+                return 0
+            fi
         fi
     done
     return 1
