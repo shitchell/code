@@ -35,13 +35,13 @@ function echo-formatted() {
     format_when="${ECHO_FORMATTED:-auto}"
 
     # if ECHO_FORMATTED is set to "auto", then colorize if we are in a tty
-    if [ "$format_when" = "auto" ]; then
+    if [ "${format_when}" = "auto" ]; then
         if [ -t 1 ]; then
             do_format=1
         else
             do_format=0
         fi
-    elif [ "$format_when" = "always" ]; then
+    elif [ "${format_when}" = "always" ]; then
         do_format=1
     else
         do_format=0
@@ -85,7 +85,10 @@ function echo-formatted() {
                         # echo the color code
                         if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
                         || ! is-int ${VERBOSITY}; then
-                            echo -en "${!color_code}"
+                            # ensure the color code is defined
+                            if [ -n "${!color_code}" ] >/dev/null 2>&1; then
+                                echo -en "${!color_code}"
+                            fi
                         fi
                     done
                 fi
@@ -133,10 +136,7 @@ function echo-formatted() {
 
     # echo the reset code
     if [ ${do_format} -eq 1 ]; then
-        if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
-        || ! is-int ${VERBOSITY}; then
-            echo -en "${code_reset}"
-        fi
+        echo -en "${code_reset}"
     fi
 
     # echo a newline
@@ -247,7 +247,7 @@ function check-command() {
     return ${exit_code}
 }
 
-# Print the given message depending on the VERBOSITY_LEVEL environment variable.
+# Print the given message depending on the VERBOSITY environment variable.
 # Any arguments passed first are passed to echo.
 # usage:
 #   echo-managed <output-level> <message>
