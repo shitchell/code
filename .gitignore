@@ -5,6 +5,11 @@
 # opg stuff
 opg-as*
 
+# go source and compiled binaries
+/go/pkg/mod/
+/go/pkg/sumdb/
+/go/bin/
+
 # temporary save files
 *.swp
 
