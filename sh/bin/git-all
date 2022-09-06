@@ -25,18 +25,20 @@ function help-full() {
     cat << EOF
     -h                     display usage
     --help                 display this help message
-    -v/--verbose           verbose output (can be specified multiple times)
-    -q/--quiet             don't print anything to stdout
     -m/--maxdepth <n>      the maximum depth to search for git repositories
     -d/--directory <path>  the directory to search for git repositories
+    -n/--name              print the name of the repository before the output
+    -v/--verbose           verbose output (can be specified multiple times)
+    -q/--quiet             don't print anything to stdout
 EOF
 }
 
 function parse-args() {
     # Default values
-    VERBOSITY=1
     MAXDEPTH=2
     DIRECTORY=$(pwd)
+    SHOW_NAME=0
+    VERBOSITY=1
     SUBCOMMAND=()
 
     # Loop over the arguments
@@ -58,14 +60,6 @@ function parse-args() {
                 help-epilogue
                 exit 0
                 ;;
-            -v|--verbose)
-                let VERBOSITY+=1
-                shift 1
-                ;;
-            -q)
-                VERBOSITY=0
-                shift 1
-                ;;
             -m|--maxdepth)
                 if ! is-int ${2}; then
                     echo "error: maxdepth must be an integer" >&2
@@ -79,6 +73,18 @@ function parse-args() {
             -d|--directory)
                 DIRECTORY=${2}
                 shift 2
+                ;;
+            -n|--name)
+                SHOW_NAME=1
+                shift
+                ;;
+            -v|--verbose)
+                let VERBOSITY+=1
+                shift 1
+                ;;
+            -q)
+                VERBOSITY=0
+                shift 1
                 ;;
             -*)
                 echo-stderr "error: unknown option: ${1}"
@@ -118,18 +124,49 @@ function main() {
         fi
     done < <(find -L "${DIRECTORY}" -maxdepth ${MAXDEPTH} -type d -not \( -path "*/.git*" -prune \) -printf '%h\n')
 
-    echo-comment -V 3 "Found ${#git_repos[@]} git repositories:"
-    for repo in "${git_repos[@]}"; do
-        echo-formatted -V 3 "  ${repo}"
-    done
+    if [ ${VERBOSITY} -ge 3 ]; then
+        echo-comment "Found ${#git_repos[@]} git repositories in ${DIRECTORY}:"
+        for repo in "${git_repos[@]}"; do
+            echo-comment "  ${repo}"
+        done
+    fi
 
     # Run the specified git command in each repository
     for repo in "${git_repos[@]}"; do
-        echo-formatted -V 2 "$" -g "git -C '${repo}' $(echo ${SUBCOMMAND[@]})"
+        if [ ${VERBOSITY} -ge 2 ]; then
+            echo-formatted "$" -g "git -C '${repo}' $(echo ${SUBCOMMAND[@]})"
+        fi
+        local output
+
         if [ ${VERBOSITY} -eq 0 ]; then
+            # Run the command, but still show errors
             git -C "${repo}" "${SUBCOMMAND[@]}" >/dev/null
         else
-            git -C "${repo}" "${SUBCOMMAND[@]}"
+            # Determine whether to enable color
+            # If config.ui is set, use that value
+            local color_arg
+            local color_ui=$(git -C "${repo}" config --get color.ui)
+            if [ -z "${color_ui}" ]; then
+                # If config.color.ui is not set, its auto is the default, and
+                # we will replicate that by checking whether stdout is a tty
+                if [ -t 1 ]; then
+                    color_arg="-c color.ui=always"
+                fi
+            fi
+
+            # Actually do the thing
+            output=$(git ${color_arg} -C "${repo}" "${SUBCOMMAND[@]}")
+
+            # Prefix each line of output with the name of the repository
+            if [ ${SHOW_NAME} -eq 1 ]; then
+                local name=$(
+                    basename "${repo%/}" \
+                        | sed 's/\.bare//' \
+                        | tr ' ' '_'
+                )
+                output=$(echo "${output}" | awk -v name="${name}" '{print name ": " $0}')
+            fi
+            echo "${output}"
         fi
     done
 }
@@ -138,12 +175,3 @@ function main() {
 ################################################################################
 
 [ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
-
-# if [ -z "$1" ]; then
-#   echo "usage: $(basename $0) git-command"
-#   exit 1
-# fi
-
-# find . -name '\.git' -type d \
-#     -exec sh -c "echo '{}' | sed 's/\.git$//'" \;\
-#     -exec bash -c "include-source 'echo.sh' ; echo-run git -C '{}/..' ""$@" \;
