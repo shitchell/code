@@ -353,14 +353,37 @@ function add-paths() {
     export "${path_name}"="${path_value}"
 }
 
-# sort an array
+# @description: Sorts the given array or list of arguments
+# @positional+: an unsorted list of strings
+# @returns: the input array, sorted
 function sort-array() {
     local array=("${@}")
     local sorted_array=()
+
+    if [ -z "${array[*]}" ]; then
+        return 1
+    fi
 
     # sort the array
     sorted_array=($(printf '%s\0' "${array[@]}" | sort -z | xargs -0))
 
     # print the sorted array
     printf '%s' "${sorted_array[@]}"
+}
+
+# @description: Determines if the current shell is interactive
+# @usage: is-interactive
+# @example: is-interactive && echo "interactive" || echo "not interactive"
+# @returns: 0 if the shell is interactive
+# @returns: 1 if the shell is attached to a pipe
+# @returns: 2 if the shell is attached to a redirection
+function is-interactive() {
+    # STDOUT is attached to a tty
+    [[ -t 1 ]] && return 0
+
+    # STDOUT is attached to a pipe
+    [[ -p /dev/stdout ]] && return 1
+
+    # STDOUT is attached to a redirection
+    [[ ! -t 1 && ! -p /dev/stdout ]] && return 2
 }
