@@ -112,7 +112,7 @@ function git-commit-exists() {
 }
 
 # Find which merge commit a specific commit is part of
-function git-merge-commit() {
+function get-parent-merge-commit() {
     local commit="${1}"
     local ref="${2:-HEAD}"
 
@@ -194,22 +194,26 @@ function get-commit-hashes-and-objects() {
 
 # given a git ref, return its type as one of the following:
 #   "range", "branch", "tag", "commit", "remote", "unknown"
+# TODO: improve this for remote refs
 function get-ref-type() {
     local ref="${1}"
     local ref_type
 
     [ -z "${ref}" ] && return 1
 
+    # remove a remote prefix if it exists
+    ref="${ref#$(git remote)/}"
+
     # determine if the ref is a range
     if [[ "${ref}" =~ ^[a-z0-9~^]+".."[a-z0-9~^]+$ ]]; then
         ref_type="range"
-    elif git show-ref -q --verify "refs/heads/$1" 2>/dev/null; then
+    elif git show-ref -q --verify "refs/heads/${ref}" 2>/dev/null; then
         ref_type="branch"
-    elif git show-ref -q --verify "refs/tags/$1" 2>/dev/null; then
+    elif git show-ref -q --verify "refs/tags/${ref}" 2>/dev/null; then
         ref_type="tag"
-    elif git show-ref -q --verify "refs/remote/$1" 2>/dev/null; then
+    elif git show-ref -q --verify "refs/remote/${ref}" 2>/dev/null; then
         ref_type="remote"
-    elif git rev-parse --verify "$1^{commit}" >/dev/null 2>&1; then
+    elif git rev-parse --verify "${ref}^{commit}" >/dev/null 2>&1; then
         ref_type="commit"
     else
         ref_type="unknown"
@@ -220,6 +224,30 @@ function get-ref-type() {
         return 1
     fi
     return 0
+}
+
+# returns 0 if the ref is a branch, 1 otherwise
+function ref-is-branch() {
+    local ref="${1}"
+    local ref_type=$(get-ref-type "${ref}")
+
+    [ "${ref_type}" = "branch" ] || [ "${ref_type}" = "remote" ]
+}
+
+# returns 0 if the ref is a tag, 1 otherwise
+function ref-is-tag() {
+    local ref="${1}"
+    local ref_type=$(get-ref-type "${ref}")
+
+    [ "${ref_type}" = "tag" ]
+}
+
+# returns 0 if the ref is a commit, 1 otherwise
+function ref-is-commit() {
+    local ref="${1}"
+    local ref_type=$(get-ref-type "${ref}")
+
+    [ "${ref_type}" = "commit" ]
 }
 
 # returns a human readable version of the given git object status
@@ -262,4 +290,108 @@ function git-status-name() {
     esac
 
     echo "${object_mode}"
+}
+
+# determine if an object is a ref or a file (or ambiguous). outputs:
+#   stdout      exit code
+#   ----------  ----------
+#   ref         0
+#   file        0
+#   ambiguous   1
+#               2 (if the object is not a ref or a file)
+# TODO: improve this for remote refs
+function is-ref-or-file() {
+    local object="${1}"
+
+    # determine if this is a ref
+    local ref_type=$(get-ref-type "${object}")
+    # if it's unknown, check to see if it's a currently untracked remote branch
+    if [ "${ref_type}" == "unknown" ]; then
+        if git show-ref -q --verify "refs/remotes/$(git remote)/${object}" 2>/dev/null; then
+            ref_type="branch"
+        fi
+    fi
+
+    local has_been_tracked=$(
+        git log -1 --all -- "${object}" \
+            | grep -q '.'
+        echo  $?
+    )
+
+    local output exit_code
+    if [ "${ref_type}" = "unknown" ]; then
+        if [ "${has_been_tracked}" -eq 0 ]; then
+            # if it's not a ref, but it's been tracked, it's a file
+            output="file"
+            exit_code=0
+        else
+            # if it's not a ref, and it's not been tracked, it's nothing
+            exit_code=2
+        fi
+    else
+        if [ "${has_been_tracked}" -eq 0 ]; then
+            # if it's a ref, and it's been tracked as a file, it's ambiguous
+            output="ambiguous"
+            exit_code=1
+        else
+            # if it's a ref, and it's not been tracked, it's a ref
+            output="ref"
+            exit_code=0
+        fi
+    fi
+
+    [ -n "${output}" ] && echo "${output}"
+    return ${exit_code}
+}
+
+# @description: Determine where a config setting is coming from
+# @param: $1 - the config setting to check
+# @usage: config-source <setting>
+# @example: config-source core.editor
+# @example: [ "$(config-source core.editor)" = "global" ] && echo "set globally"
+# @echoes: "global", "local", "system", "argument", "unset"
+# @returns: 0 = setting found, 1 = setting not found
+function config-source() {
+    local setting="${1}"
+    local source
+
+    if [ -z "${setting}" ]; then
+        echo "usage: config-source <setting>" >&2
+        return 1
+    fi
+
+    # get the current value of the setting
+    local value=$(git config --get "${setting}")
+
+    # if the value is empty, the setting is unset
+    if [ -z "${value}" ]; then
+        echo "unset"
+        return 1
+    fi
+
+    # determine if the value matches the system config
+    local system_value=$(git config --system --get "${setting}")
+    if [ "${value}" = "${system_value}" ]; then
+        echo "system"
+        return 0
+    fi
+
+    # determine if the value matches the global config
+    local global_value=$(git config --global --get "${setting}")
+    if [ "${value}" = "${global_value}" ]; then
+        echo "global"
+        return 0
+    fi
+
+    # determine if the value matches the local config
+    local local_value=$(git config --local --get "${setting}")
+    if [ "${value}" = "${local_value}" ]; then
+        echo "local"
+        return 0
+    fi
+
+    # if the value is set but doesn't match any of the configs, it was set as an
+    # argument
+    echo "argument"
+    return 0
 }
