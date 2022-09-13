@@ -1,0 +1,15 @@
+#!/bin/bash
+
+ifconfig -a \
+    | grep -B1 inet \
+    | sed -E '
+        s/.*inet6? //;
+        s/>.*//;
+        s/: .*</\t/;
+        s/ .*//' \
+    | tr '\n' ' ' \
+    | sed -e '
+        s/ -- /\n/g;
+        s/\t/ /g' \
+    | grep 'UP' \
+    | awk '{print $1 "\t" $3 "\t" $4}'
