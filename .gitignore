@@ -16,12 +16,6 @@ opg-as*
 # config dirs
 .vscode/
 
-# no binary files by default
-*.png
-*.jpg
-*.jpeg
-*.gif
-
 # compiled code
 *.class
 __pycache__/
@@ -102,3 +96,39 @@ dist/
 # 3D Images
 *.3dm
 *.max
+
+### ARCHIVES
+# https://github.com/github/gitignore/blob/main/Global/Archives.gitignore
+
+# It's better to unpack these files and commit the raw source because
+# git has its own built in compression methods.
+*.7z
+*.jar
+*.rar
+*.zip
+*.gz
+*.gzip
+*.tgz
+*.bzip
+*.bzip2
+*.bz2
+*.xz
+*.lzma
+*.cab
+*.xar
+
+# Packing-only formats
+*.iso
+*.tar
+
+# Package management formats
+*.dmg
+*.xpi
+*.gem
+*.egg
+*.deb
+*.rpm
+*.msi
+*.msm
+*.msp
+*.txz
