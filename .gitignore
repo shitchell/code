@@ -1,5 +1,5 @@
 # folders
-/tutor/
+/tutor/*
 /gitish/
 
 # opg stuff
@@ -132,3 +132,8 @@ dist/
 *.msm
 *.msp
 *.txz
+
+
+### KEEP
+# .keep files
+!**/.keep
