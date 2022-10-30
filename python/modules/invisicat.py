@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
 Provides functions for viewing invisible characters in text. When run as a script,
 accepts piped data from stdin or a file and prints the text with invisible
@@ -15,7 +16,7 @@ import re as _re
 
 def convert_to_bytes_str(text: str) -> str:
     # Convert the text to byte format to show all non-standard character codes
-    text_bytes: bytes = text.encode()
+    text_bytes: bytes = text.encode('utf-8', 'surrogatepass')
     # Convert back to a string to keep the char formatting and remove `b'...'`
     text = str(text_bytes)[2:-1]
     # Add a newline after each '\n' for easier reading
