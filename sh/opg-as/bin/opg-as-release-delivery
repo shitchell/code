@@ -186,6 +186,18 @@ while read -r filepath; do
 	# show the current line
 	echo -n $'\r'"${line}"
 	prev_line_len="$(echo "${line}" | wc -c)"
+
+    # check if the file was a java class, in the db directory, or an ftp script
+    if is-java-class "${filepath}" >/dev/null 2>&1; then
+        echo
+        echo "- java class"
+    elif [[ "${filepath}" =~ ^"database/" ]]; then
+        echo
+        echo "- database file"
+    elif [[ "${filepath}" =~ ^"app_config/FTP_SCRIPTS/" ]]; then
+        echo
+        echo "- ftp script"
+    fi
 done <<< "${files}"
 
 shopt -u lastpipe

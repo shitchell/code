@@ -1,0 +1,254 @@
+#!/bin/bash
+#
+# List Marvel movies and TV shows
+
+include-source 'echo.sh'
+
+# Determine whether to colorize the output
+[[ -t 0 && -t 1 ]] && ECHO_FORMATTED=always || ECHO_FORMATTED=no
+
+# @description List movies
+# @echo The Marvel movies and release dates
+# @return 0
+function _subcommand-movies() {
+    local show_header=1
+
+    # Parse the arguments
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            -nh|--no-header)
+                show_header=0
+                shift
+                ;;
+            -H|--header)
+                show_header=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Show the header
+    if [ ${show_header} -eq 1 ]; then
+        echo-formatted -c $'Release Date\tTitle'
+    fi
+
+    # Return a table of Marvel movies and their release dates in the format:
+    #   <release year>-<release month>-<release day>\t<title>
+    curl -s 'https://www.marvel.com/v1/pagination/content_grid_cards?componentId=665076&offset=0&limit=100' 2>/dev/null \
+        | python -m json.tool \
+        | awk '
+            /"headline":/ {
+                # Store the title
+                title = gensub(/.*"headline": "(.*?)".*/, "\\1", 1);
+                next;
+            }
+            /"day":/ {
+                # Store the day
+                day = gensub(/.*"day": "(.*?)".*/, "\\1", 1);
+                next;
+            }
+            /"month":/ {
+                # Store the month
+                month = gensub(/.*"month": "(.*?)".*/, "\\1", 1);
+                next;
+            }
+            /"year":/ {
+                # Store the year
+                year = gensub(/.*"year": "(.*?)".*/, "\\1", 1);
+                next;
+            }
+            # If we have a title, day, month, and year, print them out
+            title != "" && day != "" && month != "" && year != "" {
+                print year "-" month "-" day "\t" title;
+                # Reset the title, day, month, and year
+                title = "";
+                day = "";
+                month = "";
+                year = "";
+            }
+        '
+}
+
+# @description List TV shows
+# @echo The Marvel TV shows and release dates
+# @return 0
+function _subcommand-tv() {
+    local show_header=1
+
+    # Parse the arguments
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            -nh|--no-header)
+                show_header=0
+                shift
+                ;;
+            -H|--header)
+                show_header=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Show the header
+    if [ ${show_header} -eq 1 ]; then
+        echo-formatted -c $'Release Date\tTitle'
+    fi
+
+    # Return a table of Marvel TV shows and their release dates in the format:
+    #   <release year>-<release month>-<release day>\t<title>
+    # "content_type": "tv_show_season"
+    curl -s 'https://www.marvel.com/tv-shows' \
+        | grep -oP '__NEXT_DATA__ = \K.*' \
+        | python -m json.tool \
+        | awk '
+            /"content_type": "tv_show_season"/ {
+                # Only process the below lines if the content type is a TV show
+                is_show = 1;
+            }
+            /"headline":/ && is_show == 1 {
+                # Store the title
+                title = gensub(/.*"headline": "\s*(.*?)\s*",?$/, "\\1", 1);
+                # Check if this title has already been printed
+                if (title in titles) {
+                    # Reset the title
+                    title = "";
+                    # Reset the is_show flag
+                    is_show = 0;
+                    next;
+                } else {
+                    # Store the title in the titles array
+                    titles[title] = 1;
+                }
+                next;
+            }
+            /"day":/ && is_show == 1 {
+                # Store the day
+                day = gensub(/.*"day": ("(.*?)"|(null)),?$/, "\\2\\3", 1);
+                if (day == "null") {
+                    day = "??";
+                }
+                next;
+            }
+            /"month":/ && is_show == 1 {
+                # Store the month
+                month = gensub(/.*"month": ("(.*?)"|(null)),?$/, "\\2\\3", 1);
+                if (month == "null") {
+                    month = "??";
+                }
+                next;
+            }
+            /"year":/ && is_show == 1 {
+                # Store the year
+                year = gensub(/.*"year": "(.*?)",?$/, "\\1", 1);
+                if (year == "0000") {
+                    year = "????";
+                }
+                next;
+            }
+            # If we have a title, day, month, and year, print them out
+            title != "" && day != "" && month != "" && year != "" {
+                print year "-" month "-" day "\t" title;
+                # Reset the title, day, month, and year
+                title = "";
+                day = "";
+                month = "";
+                year = "";
+                is_show = 0;
+            }
+        ' \
+    | sort
+}
+
+# @description List all movies and TV shows
+# @echo The Marvel movies and TV shows and release dates
+# @return 0
+function _subcommand-all() {
+    local show_header=1
+
+    # Parse the arguments
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            -nh|--no-header)
+                show_header=0
+                shift
+                ;;
+            -H|--header)
+                show_header=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Show the header
+    if [ ${show_header} -eq 1 ]; then
+        echo-formatted -c $'Release Date\tTitle\tType'
+    fi
+
+    # Return a table of Marvel movies and their release dates in the format:
+    #   <release year>-<release month>-<release day>\t<title>
+    (
+        _subcommand-movies -nh | awk '{ print $0 "\tmovie" }'
+        _subcommand-tv -nh | awk '{ print $0 "\tseries" }'
+    ) | sort
+}
+
+# @description List subcommands
+# @echo The subcommands
+# @return 0
+function _subcommand-help() {
+    echo "List Marvel movies and TV shows from the Marvel website"
+    echo "Commands:"
+    cat "${0}" \
+        | awk '
+            /# @description/ {
+                # Store the description
+                description = gensub(/.*# @description (.*)/, "\\1", 1);
+                next;
+            }
+            /^function/ {
+                # If the function is a subcommand, print the name and description
+                if (match($0, /_subcommand-/)) {
+                    subcommand = gensub(/function _subcommand-(.*)\(\) \{/, "\\1", 1);
+                    print subcommand "\t" description;
+                }
+                # Reset the name and description
+                subcommand = "";
+                description = "";
+            }
+        ' \
+        | column -t -s $'\t' \
+        | sort \
+        | sed 's/^/    /'
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    local subcommand="${1:-all}"
+    shift
+
+    # Determine if the subcommand exists
+    if ! declare -f "_subcommand-${subcommand}" >/dev/null; then
+        echo-error "Unknown subcommand: ${subcommand}"
+        echo-error "Run '${0} help' for usage."
+        exit 1
+    fi
+
+    # Call the subcommand
+    "_subcommand-${subcommand}" "${@}" | column -t -s $'\t'
+}
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"

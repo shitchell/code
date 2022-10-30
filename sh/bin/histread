@@ -1,0 +1,329 @@
+#!/bin/bash
+#
+# Pretty print a bash history file
+
+include-source 'echo.sh'
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-hcCrR] [--strftime <format>] <history-file>"
+}
+
+function help-epilogue() {
+    echo "pretty print a bash history file"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "If '-' is specified as the history file, read from stdin. If no"
+    echo "history file is specified, read from \$HISTFILE."
+    cat << EOF
+    -h                      display usage
+    --help                  display this help message
+    -c/--color              colorize the output
+    -C/--no-color           don't colorize the output
+    -r/--reverse            reverse the order of the output
+    -R/--no-reverse         don't reverse the order of the output
+    -s/--strftime <format>  use the specified strftime format for the date
+                            (default: %Y-%m-%d %H:%M:%S)
+EOF
+}
+
+function parse-args() {
+    # Default values
+    DO_COLOR=0 # 0 = auto, 1 = yes, 2 = no
+    DO_REVERSE=0 # 0 = no, 1 = yes
+    STRFTIME_FORMAT='%Y-%m-%d %H:%M:%S'
+
+    # Loop over the arguments
+    declare -ga HIST_FILES
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -c|--color)
+                DO_COLOR=1
+                shift 1
+                ;;
+            -C|--no-color)
+                DO_COLOR=2
+                shift 1
+                ;;
+            -r|--reverse)
+                DO_REVERSE=1
+                shift 1
+                ;;
+            -R|--no-reverse)
+                DO_REVERSE=0
+                shift 1
+                ;;
+            -s|--strftime)
+                STRFTIME_FORMAT="${2}"
+                shift 2
+                ;;
+            -)
+                HIST_FILES+=("/dev/stdin")
+                shift 1
+                ;;
+            -*)
+                echo-stderr "error: unknown option ${1}"
+                echo-stderr "$(help-usage)"
+                exit 1
+                ;;
+            *)
+                HIST_FILES+=(${1})
+                shift 1
+                ;;
+        esac
+    done
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function echo-command() {
+    local lineno="${1}"
+    local command="${2}"
+    local timestamp="${3}"
+
+    # Create the line prefix -- the command number and timestamp
+    local prefix
+    if [ ${DO_COLOR} -eq 1 ]; then
+        if [ -n "${timestamp}" ]; then
+            prefix="$(echo -e "\e[1;30m${lineno}\e[0m \e[1;34m${timestamp}\e[0m")"
+        else
+            prefix="$(echo -e "\e[1;30m${lineno}\e[0m")"
+        fi
+    else
+        if [ -n "${timestamp}" ]; then
+            prefix="${lineno} ${timestamp}"
+        else
+            prefix="${lineno}"
+        fi
+    fi
+    
+    # Print the first line of the command
+    if [ ${DO_REVERSE} -eq 1 ]; then
+        printf '%s %s\n' "${prefix}" "${cmd_lines[-1]}"
+    else
+        printf '%s %s\n' "${prefix}" "${cmd_lines[0]}"
+    fi
+
+    # If there are more lines, print them indented
+    if [ "${#cmd_lines[@]}" -gt 1 ]; then
+        for ((i=1; i<${#cmd_lines[@]}; i++)); do
+            if [ ${DO_REVERSE} -eq 1 ]; then
+                printf "%${#prefix}s %s\n" "" "${cmd_lines[${i}]}"
+            else
+                printf "%${#prefix}s %s\n" "" "${cmd_lines[-$((i + 2))]}"
+            fi
+        done
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    # Parse the arguments
+    parse-args "${@}"
+
+    # If no history file is specified, add the default history file
+    if [ ${#HIST_FILES[@]} -eq 0 ]; then
+        HIST_FILES=("${HISTFILE}")
+    fi
+
+    # Determine if we'll colorize the output
+    if [ ${DO_COLOR} -eq 0 ]; then
+        if [ -t 1 ]; then
+            DO_COLOR=1
+        else
+            DO_COLOR=2
+        fi
+    fi
+
+    # Loop over the history files
+    for histfile in "${HIST_FILES[@]}"; do
+        local histdata=$(cat "${histfile}")
+
+        # If we're reversing the output, reverse the history data
+        if [ ${DO_REVERSE} -eq 1 ]; then
+            histdata=$(echo "${histdata}" | /bin/tac)
+        fi
+
+        # Try to detect if the history file uses timestamps
+        # Look at the first 10 lines of the history file and check if at least
+        # 2 of them are in the format '^#[0-9]{8,}$'
+        local includes_timestamps
+        if [[ $(printf '%s' "${histdata}" | head -n 4 | grep -cE '^#[0-9]{8,}$') -ge 2 ]]; then
+            includes_timestamps=1
+        else
+            includes_timestamps=0
+        fi
+
+        # Read the history file
+        local line
+        local timestamp=""
+        local cmd=""
+        local cmd_lines=()
+        local lines=$(printf '%s' "${histdata}" | wc -l)
+        local cmdno=0
+        local lineno=0
+
+        # If we're reversing the output and the history file includes
+        # timestamps, we can guess the number of commands by counting the
+        # number of lines that match #^[0-9]{8,}$.
+        if [ ${DO_REVERSE} -eq 1 ]; then
+            if [ ${includes_timestamps} -eq 1 ]; then
+                cmdno=$(((lines / 2) + 2))
+            else
+                cmdno=${lineno}
+            fi
+        fi
+        while IFS= read -r line; do
+            echo "line ${lineno}: '${line}'" >&2
+            # Determine if the line is a timestamp or command. The line is a
+            # timestamp if:
+            #  - the file includes timestamps AND
+            #    - DO_REVERSE == 0 AND timestamp is empty OR
+            #    - DO_REVERSE == 1 AND cmd is not empty AND line =~ ^#[0-9]{8,}$
+            local is_timestamp
+            if [[
+                ${includes_timestamps} -eq 1
+                && (
+                    (
+                        ${DO_REVERSE} -eq 0
+                        && -z "${timestamp}"
+                    ) ||
+                    (
+                        ${DO_REVERSE} -eq 1
+                        && "${#cmd_lines[@]}" -gt 0
+                        && ${line} =~ ^#[0-9]{8,}$
+                    )
+                )
+            ]]; then
+                is_timestamp=1
+            else
+                is_timestamp=0
+            fi
+
+            # Store the timestamp / command as appropriate
+            if [ ${is_timestamp} -eq 1 ]; then
+                timestamp=$(date -d@${line#\#} +"${STRFTIME_FORMAT}")
+                echo "timestamp: '${timestamp}'" >&2
+            else
+                cmd_lines+=("${line}")
+                echo "cmd: ${cmd_lines[@]@Q}" >&2
+            fi
+
+            # Increment the line number
+            let lineno++
+
+            # If the file includes timestamps, continue if we don't have both
+            # a timestamp and a command
+            if [ ${includes_timestamps} -eq 1 ]; then
+                if [ -z "${timestamp}" ] || [ "${#cmd_lines[@]}" -eq 0 ]; then
+                    [ -z "${timestamp}" ] && echo -n "no timestamp, " >&2
+                    [ "${#cmd_lines[@]}" -eq 0 ] && echo -n "no cmd, " >&2
+                    echo "continuing" >&2
+                    continue
+                fi
+            else
+                # We're ready to print, so increment/decrement the cmdno
+                [ ${DO_REVERSE} -eq 0 ] && let cmdno++ || let cmdno--
+                echo "printing cmd ${cmdno}" >&2
+            fi
+
+            # # Create the line prefix -- the command number and timestamp
+            # local prefix
+            # if [[ ${DO_COLOR} -eq 1 ]]; then
+            #     prefix=$(
+            #         printf "\e[1;34m%-${#lines}d\e[0m \e[1;36m%s\e[0m" \
+            #             ${cmdno} "${timestamp}"
+            #     )
+            # else
+            #     prefix=$(printf "%-${#lines}d %s" ${cmdno} "${timestamp}")
+            # fi
+            
+            # # Print the first line of the command
+            # if [ ${DO_REVERSE} -eq 1 ]; then
+            #     printf '%s %s\n' "${prefix}" "${cmd_lines[-1]}"
+            # else
+            #     printf '%s %s\n' "${prefix}" "${cmd_lines[0]}"
+            # fi
+
+            # # If there are more lines, print them indented
+            # if [ "${#cmd_lines[@]}" -gt 1 ]; then
+            #     for ((i=0; i<${#cmd_lines[@]}; i++)); do
+            #         if [ ${DO_REVERSE} -eq 1 ]; then
+            #             printf "%${#prefix}s %s\n" "" "${cmd_lines[i]}"
+            #         else
+            #             printf "%${#prefix}s %s\n" "" "${cmd_lines[-$((i + 1))]}"
+            #         fi
+            #     done
+            # fi
+
+            # Reset the timestamp and command
+            timestamp=
+            cmd=
+            cmd_lines=()
+        done <<< "${histdata}"
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+# [ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
+
+awk '
+    function print_cmd(timestamp, lines) {
+        timestamp = strftime("%Y-%m-%d %H:%M:%S", timestamp);
+        print "\033[36;1m" timestamp "\033[0m " command_lines[1];
+        for (i = 2; i <= length(command_lines); i++) {
+            print "                    " command_lines[i];
+        }
+    }
+    BEGIN {
+        timestamp = "";
+        command_lines[0] = "";
+        got_command = 0;
+    }
+    {
+        # If the line matches the timestamp pattern AND we dont have a command
+        # yet, then this is a timestamp line
+        if ($0 ~ /^#[0-9]{8,}$/ && got_command == 1) {
+            # If we have a timestamp and command_lines, print them out
+            if (timestamp != "" && length(command_lines) > 0) {
+                print_cmd(timestamp, command_lines);
+            }
+            # Store the timestamp and reset the command_lines
+            timestamp = substr($0, 2);
+            split("", command_lines);
+            got_command = 0;
+        } else {
+            command_lines[length(command_lines) + 1] = $0;
+            got_command = 1
+
+        }
+    }
+    END {
+        # Print out the last timestamp + command
+        if (timestamp != "" && length(command_lines) > 0) {
+            print_cmd(timestamp, command_lines);
+        }
+    }' "${@}"

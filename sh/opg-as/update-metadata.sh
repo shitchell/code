@@ -215,8 +215,8 @@ function get-object-range {
     return 1
 }
 
-function insert-cust() {
-    debug 'insert-cust() '"$@"
+function add-cust() {
+    debug 'add-cust() '"$@"
     cust_name="${1}"
     cust_meta="${2}"
 
@@ -294,7 +294,7 @@ function update-metadata() {
     # If the customization does not exist, create it
     if [ "${cust_exists}" = "false" ]; then
         debug "customization '${cust_name}' not found in '${META_FILE}', adding it"
-        insert-cust "${cust_name}" "${META_FILE}"
+        add-cust "${cust_name}" "${META_FILE}"
     fi
 
     # Append this object's metadata to the end of its customization's <objects> list
@@ -316,7 +316,7 @@ function main() {
     #   - mode: last modification type (create, update, or delete)
     #   - timestamp: last modification time (in seconds since the epoch)
     #   - checksum: md5 hash
-    cat "${DATA_FILE}" | while read -r line; do
+    while IFS=$'\n' read -r line; do
         # Parse the line, removing any quotes or trailing/leading whitespace
         # parsed_line="$(parse-line "${line}")"
         line="$(echo "${line}" | tr -d '\r\n')"
@@ -355,7 +355,7 @@ function main() {
         fi
 
         let i++
-    done
+    done < "${DATA_FILE}"
 }
 
 # Run the main function if this script is being run directly

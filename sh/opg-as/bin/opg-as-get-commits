@@ -35,7 +35,7 @@ function process_customization {
 	# clean up the customization name
 	cust=`echo $CUSTOMIZATION | tr -d '\r\n'`
 	echo -n "$CUSTOMIZATION"
-	datums=`$commit_fetch_cmd "$cust" "$TARGET_BRANCH"`
+	datums=`LAST_PICK_TRIGGER_TIME=0 $commit_fetch_cmd "$cust" "$TARGET_BRANCH"`
 	timestamp_u=`echo "${datums}" | cut -d ' ' -f 1`
 	timestamp="`date -d@${timestamp_u} +"${DATE_FORMAT}" 2>/dev/null`"
 	[ -n "$timestamp" ] && timestamp="\"${timestamp}\""

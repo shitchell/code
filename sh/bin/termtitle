@@ -1,0 +1,5 @@
+#!/bin/bash
+#
+# In supporting terminals, set the terminal title using escape sequences
+
+echo -ne "\033]0;${@}\a"

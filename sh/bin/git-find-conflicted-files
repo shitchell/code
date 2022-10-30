@@ -1,0 +1,282 @@
+#!/bin/bash
+#
+# Use pattern detection to find the files that are merge conflicted
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo "find merge conflicted files"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h                      display usage
+    --help                  display this help message
+    -d/--depth <level>      only search for files <level> subdirectories deep
+    -n/--line-numbers       print the line numbers of the conflict markers
+    -s/--show-conflicts     show the conflicts in the files
+    -o/--orig               search for files with the .orig extension
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [-d|--depth <level>] [-n|--line-numbers] [-s|--show-conflicts] [-o|--orig] [path]"
+}
+
+function parse-args() {
+    # Default values
+    DEPTH=""
+    DO_ORIG=0
+    DO_SHOW_CONFLICTS=0
+    DO_LINE_NUMBERS=0
+
+    # Loop over the arguments
+    declare -ga SEARCH_PATHS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -d|--depth)
+                # Ensure that the next argument is a number
+                if [[ ${2} =~ ^[0-9]+$ ]]; then
+                    DEPTH="-maxdepth ${2}"
+                    shift 2
+                else
+                    echo "error: --depth must be an integer" >&2
+                    exit 1
+                fi
+                ;;
+            -o|--orig)
+                DO_ORIG=1
+                shift 1
+                ;;
+            -s|--show-conflicts)
+                DO_SHOW_CONFLICTS=1
+                shift 1
+                ;;
+            -n|--line-numbers)
+                DO_LINE_NUMBERS=1
+                shift 1
+                ;;
+            -*)
+                echo "error: unknown option ${1}" >&2
+                echo "$(help-usage)" >&2
+                exit 1
+                ;;
+            *)
+                SEARCH_PATHS+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    if [[ ${#SEARCH_PATHS[@]} -eq 0 ]]; then
+        SEARCH_PATHS+=(".")
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Find conflicts in a file
+# @arg $1 The file to search
+# @stdout The conflicts in the file if any
+# @return 0 if there are conflicts, 1 if there are not
+function find-conflicts() {
+    local show_line_numbers=0
+    local show_conflicts=0
+    local conflict_separator=""
+    local file
+    local file_data
+
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -l|--line-numbers)
+                show_line_numbers=1
+                shift 1
+                ;;
+            -c|--show-conflicts)
+                show_conflicts=1
+                shift 1
+                ;;
+            -s|--separator)
+                conflict_separator=${2}
+                shift 2
+                ;;
+            -*)
+                echo "error: unknown option ${1}" >&2
+                return 1
+                ;;
+            *)
+                file="${1}"
+                shift 1
+                ;;
+        esac
+    done
+
+    if [ "${file}" == "-" ]; then
+        file_data="$(cat -)"
+    elif [ -f "${file}" ]; then
+        file_data="$(cat "${file}")"
+    else
+        echo "error: ${file} is not a file" >&2
+        return 1
+    fi
+
+    # Use awk to search for the conflict markers
+    echo "${file_data}" | awk \
+        -v ln="${show_line_numbers}" \
+        -v sc="${show_conflicts}" \
+        -v cs="${conflict_separator}" \
+        '
+        function reset() {
+            found_conflict_start = 0;
+            found_conflict_middle = 0;
+            found_conflict_end = 0;
+            conflict_start_line = 0;
+            conflict_end_line = 0;
+            conflict = "";
+        }
+        BEGIN {
+            reset();
+        }
+        {
+            if ($0 ~ /^<<<<<<</) {
+                # If we are already in a conflict, append the line
+                if (found_conflict_start) {
+                    conflict = conflict "\n" $0;
+                } else {
+                    found_conflict_start = 1;
+                    conflict_start_line = FNR;
+                    conflict = $0;
+                }
+            } else if ($0 ~ /^=======/) {
+                if (found_conflict_start) {
+                    found_conflict_middle = 1;
+                    conflict = conflict "\n" $0;
+                }
+            } else if ($0 ~ /^>>>>>>>/) {
+                if (found_conflict_start && found_conflict_middle) {
+                    # We have found the end of the conflict
+                    found_conflict_end = 1;
+                    conflict_end_line = FNR;
+                    conflict = conflict "\n" $0;
+                    conflict_count++;
+                }
+            } else {
+                if (found_conflict_start) {
+                    conflict = conflict "\n" $0;
+                }
+            }
+            if (found_conflict_start && found_conflict_middle && found_conflict_end) {
+                # Print the separator if it is not the first conflict
+                if (conflict_count > 1 && cs != "") {
+                    printf("%s", cs);
+                }
+                if (ln) {
+                    print "Lines " conflict_start_line "-" conflict_end_line;
+                }
+                if (sc) {
+                    print conflict;
+                }
+                reset();
+            }
+        }
+        END {
+            # Exit cleanly if conflicts were found, otherwise exit with an error
+            if (conflict_count > 0) {
+                exit 0;
+            } else {
+                exit 1;
+            }
+        }
+    '
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    local search_files=()
+    local orig_files=()
+
+    # Find all files in the search paths
+    for search_path in "${SEARCH_PATHS[@]}"; do
+        if [ -f "${search_path}" ]; then
+            search_files+=("${search_path}")
+        elif [ -d "${search_path}" ]; then
+            IFS=$'\n' read -rd '' \
+                -a search_files < <(find "${search_path}" ${DEPTH} -type f)
+        else
+            echo "error: ${search_path} is not a file or directory" >&2
+        fi
+    done
+
+    # If the --orig flag is set, then find all files with the .orig extension
+    if [[ ${DO_ORIG} -eq 1 ]]; then
+        for search_path in "${SEARCH_PATHS[@]}"; do
+            local search_path_orig_files=()
+            IFS=$'\n' read -rd '' \
+                -a search_path_orig_files < <(find "${search_path}" ${DEPTH} -type f -name "*.orig")
+            orig_files+=("${search_path_orig_files[@]}")
+        done
+    fi
+
+    # Loop over the files and find the conflicts
+    local header_printed=0
+    for file in "${search_files[@]}"; do
+        local conflicts
+        local find_conflict_opts=()
+        if [[ ${DO_LINE_NUMBERS} -eq 1 ]]; then
+            find_conflict_opts+=("--line-numbers")
+        fi
+        if [[ ${DO_SHOW_CONFLICTS} -eq 1 ]]; then
+            find_conflict_opts+=("--show-conflicts")
+        fi
+        conflicts=$(find-conflicts "${find_conflict_opts[@]}" "${file}")
+        local exit_code=${?}
+        if [[ ${exit_code} -eq 0 ]]; then
+            if [[ ${header_printed} -eq 0 ]]; then
+                echo "Files with conflicts:"
+                header_printed=1
+            fi
+            echo "- ${file#"./"}"
+            if [[ ${DO_SHOW_CONFLICTS} -eq 1 ]]; then
+                echo "${conflicts}" | sed 's/^/  /'
+            fi
+        fi
+    done
+
+    # Print any orig files
+    if [[ ${#orig_files[@]} -gt 0 ]]; then
+        if [[ ${header_printed} -eq 1 ]]; then
+            echo
+        fi
+        echo "Backup files with .orig extensions:"
+        for file in "${orig_files[@]}"; do
+            echo "- ${file#"./"}"
+        done
+    fi
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"

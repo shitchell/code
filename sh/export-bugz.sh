@@ -11,20 +11,22 @@
 # Jira settings:
 #  - File encoding: ISO-8859-1
 #  - CSV Delimiter: ,
-#  - Date format: yyyy-MM-dd hh:mm:ss
+#  - Date format:
+#    - yyyy-MM-dd hh:mm:ss | default
+#    - M/dd/yyyy  h:mm:ss a | %-m/%-d/%-Y %l:%M:%S %p
 #  - Fields
 #    - Attachment: Attachment / Map field value
 #    - Comment: Comment Body / Map field value
 #    - Description: Description / Map field value
 #
 # Bugzilla statuses:
-#  - CLOSED
-#  - CONFIRMED
-#  - IN_PROGRESS
-#  - ON_HOLD
-#  - PENDING_VERIFICATION
-#  - RESOLVED
-#  - UNCONFIRMED
+#  [X] CLOSED
+#  [ ] CONFIRMED
+#  [ ] IN_PROGRESS
+#  [X] ON HOLD
+#  [X] PENDING VERIFICATION
+#  [ ] RESOLVED
+#  [ ] UNCONFIRMED
 
 
 include-source 'csv.sh'
@@ -49,7 +51,7 @@ function help-full() {
     -h                      display usage
     --help                  display this help message
     -a/--attachments-dir    directory to export attachments to
-    -A/--no-attachments     don't export attachments
+    -A/--no-attachments     don'select export attachments
     -c/--comments           include comments in the description
     -C/--no-comments        don't include comments in the description
     -r/--attachment-prefix  prefix to add to attachment filepath in JSON output
@@ -61,6 +63,8 @@ function help-full() {
     -l/--limit              SQL LIMIT clause to limit the number of results
     -o/--order-by           SQL ORDER BY clause to order the results
                             (e.g. `-o "bugs.bug_id DESC"`)
+    -s/--date-format        strftime format to use for dates in the output
+                            (e.g. `-s "%Y-%m-%d %H:%M:%S"`)
     -d/--db                 database to use
     -u/--user               database username
     -p/--password           database password
@@ -74,6 +78,7 @@ function parse-args() {
     # Default values
     ATTACHMENTS_DIR="./attachments"
     ATTACHMENTS_PREFIX=""
+    DATE_FORMAT=""
     EXPORT_ATTACHMENTS=0
     INCLUDE_COMMENTS=0
     URL_ENCODE_ATTACHMENTS=0
@@ -141,6 +146,10 @@ function parse-args() {
                 ;;
             -o|--order-by)
                 SQL_ORDER_BY="ORDER BY ${2}"
+                shift 2
+                ;;
+            -s|--date-format)
+                DATE_FORMAT="${2}"
                 shift 2
                 ;;
             -d|--db)
@@ -519,14 +528,173 @@ function main() {
         ${SQL_LIMIT}
     "
 
-    # Determine how many bugs are in the Asset Suite product and Issue component
-    local asset_suite_bugs_count_query="
-        SELECT COUNT(*), bugs.bug_status FROM bugs
+    # Determine all Asset Suite Issues that have been updated since '2022-09-27 12:00:00'
+    local asset_suite_bugs_updated_query="
+        SELECT bugs.bug_id, bugs.delta_ts as last_modified, bugs.short_desc as summary FROM bugs
         LEFT JOIN components ON components.id = bugs.component_id
         LEFT JOIN products ON products.id = bugs.product_id
-        WHERE products.name = 'Asset Suite' AND components.name = 'Issue' AND bugs.bug_status = 'PENDING_VERIFICATION'
-        GROUP BY bugs.bug_status;
+        WHERE products.name = 'Asset Suite' AND components.name = 'Issue' AND bugs.delta_ts > '2022-09-27 12:00:00'
+        ORDER BY bugs.bug_id ASC;
     "
+
+    # Create a table that includes all of the bug ids that have been exported
+    # with a timestamp of when they were exported, where the bug_id is a foreign
+    # key to the bugs table
+    # Exported:
+    # +-------------+--------------+------+-----+---------+----------------+
+    # | Field       | Type         | Null | Key | Default | Extra          |
+    # +-------------+--------------+------+-----+---------+----------------+
+    # | bug_id      | mediumint(9) | NO   | PRI | NULL    |                |
+    # | export_ts   | datetime     | NO   |     | NULL    |                |
+    # | bug_status  | varchar(64)  | NO   | MUL | NULL    |                |
+    # +-------------+--------------+------+-----+---------+----------------+
+    local create_exported_table_query="
+        CREATE TABLE IF NOT EXISTS exported (
+            bug_id mediumint(9) NOT NULL,
+            export_ts datetime NOT NULL,
+            bug_status varchar(64) NOT NULL,
+            PRIMARY KEY (bug_id),
+            FOREIGN KEY (bug_id) REFERENCES bugs(bug_id)
+        );
+    "
+    # Read the 'trizilla-pv-ids.txt' file and insert the bug_ids into the table with a timestamp of '2022-09-27 11:38:38'
+    # 'trizilla-pv-ids.txt' is in the format of:
+    #  1483
+    #  1738
+    #  1913
+    #  ...
+    local insert_exported_table_query="
+        INSERT INTO exported (bug_id, export_ts, bug_status) VALUES $(sed -e 's/^/(/' -e 's/$/, "2022-09-27 11:38:38", "PENDING VERIFICATION"),/' trizilla-pv-ids.txt | sed '$ s/,$//')
+    "
+
+    # Determine all Asset Suite Issues that have been updated since they were exported
+    local asset_suite_bugs_updated_since_exported_query="
+        SELECT bugs.bug_id as 'Bug ID', bugs.delta_ts as 'Last Modified', exported.bug_status as 'Exported Status', bugs.bug_status AS 'Status', bugs.short_desc as 'Summary' FROM bugs
+        LEFT JOIN components ON components.id = bugs.component_id
+        LEFT JOIN products ON products.id = bugs.product_id
+        LEFT JOIN exported ON exported.bug_id = bugs.bug_id
+        WHERE products.name = 'Asset Suite' AND components.name = 'Issue' AND bugs.delta_ts > exported.export_ts
+        ORDER BY bugs.bug_id ASC;
+    "
+
+    # Determine all Asset Suite Issues that have been created since '2022-09-27 11:38:38'
+    local asset_suite_bugs_created_since_exported_query="
+        SELECT bugs.bug_id as 'Bug ID', bugs.delta_ts as 'Last Modified', exported.bug_status as 'Exported Status', bugs.bug_status AS 'Status', bugs.short_desc as 'Summary' FROM bugs
+        LEFT JOIN components ON components.id = bugs.component_id
+        LEFT JOIN products ON products.id = bugs.product_id
+        LEFT JOIN exported ON exported.bug_id = bugs.bug_id
+        WHERE products.name = 'Asset Suite' AND components.name = 'Issue' AND bugs.creation_ts > '2022-09-27 11:38:38'
+        ORDER BY bugs.bug_id ASC;
+    "
+
+    # Determine how many bugs there are in the Asset Suite product and Issue component,
+    # grouped by status, along with a total count of all bugs in the product/component
+    local asset_suite_bugs_status_query="
+        SELECT bugs.bug_status, COUNT(*) FROM bugs
+            LEFT JOIN components ON components.id = bugs.component_id
+            LEFT JOIN products ON products.id = bugs.product_id
+            WHERE products.name = 'Asset Suite' AND components.name = 'Issue'
+            GROUP BY bugs.bug_status
+        UNION SELECT 'Total', COUNT(*) FROM bugs
+            LEFT JOIN components ON components.id = bugs.component_id
+            LEFT JOIN products ON products.id = bugs.product_id
+            WHERE products.name = 'Asset Suite' AND components.name = 'Issue';
+    "
+
+    # Get every bug_id of every bug in the Asset Suite product and Issue component
+    local asset_suite_bugs_query="
+        SELECT bugs.bug_id FROM bugs
+        LEFT JOIN components ON components.id = bugs.component_id
+        LEFT JOIN products ON products.id = bugs.product_id
+        WHERE products.name = 'Asset Suite' AND components.name = 'Issue'
+        ORDER BY bugs.bug_id ASC;
+    "
+
+    # Determine all Asset Suite Issues that have been updated since '2022-10-04 09:30:00'
+    local asset_suite_bugs_updated_query="
+        SELECT bugs.bug_id, bugs.delta_ts as last_modified, bugs.bug_status, bugs.short_desc as summary FROM bugs
+        LEFT JOIN components ON components.id = bugs.component_id
+        LEFT JOIN products ON products.id = bugs.product_id
+        WHERE products.name = 'Asset Suite' AND components.name = 'Issue' AND bugs.delta_ts > '2022-10-05 09:00:00'
+        ORDER BY bugs.bug_id ASC;
+    "
+
+    # Find all attachments for bug 1954
+    local asset_suite_bug_1954_attachments_query="
+        SELECT attachments.attach_id, attachments.bug_id, attachments.creation_ts, attachments.description, attachments.filename, attachments.ispatch, attachments.isobsolete, attachments.isprivate, attachments.mimetype, attachments.submitter_id, attachments.thedata, attachments.thedata AS 'Attachment Data' FROM attachments
+        WHERE attachments.bug_id = 1954;
+    "
+    # Find all issues opened by "quinn.gribben@trinoor.com", including their summary and how many attachments they have
+    local asset_suite_issues_opened_by_quinn_query="
+        SELECT bugs.bug_id as 'Bug ID', bugs.cf_c2e_ref as 'OPG Ref', bugs.creation_ts as 'Created', bugs.short_desc as 'Summary', COUNT(attachments.attach_id) AS 'Number of Attachments' FROM bugs
+        LEFT JOIN attachments ON attachments.bug_id = bugs.bug_id
+        LEFT JOIN profiles ON profiles.userid = bugs.reporter
+        WHERE profiles.login_name = 'quinn.gribben@trinoor.com'
+        GROUP BY bugs.bug_id
+        ORDER BY bugs.bug_id ASC;
+    "
+
+    # List all products and components
+    local products_and_components_query="
+        SELECT products.name AS 'Product', components.name AS 'Component' FROM products
+        LEFT JOIN components ON components.product_id = products.id
+        ORDER BY products.name ASC, components.name ASC;
+    "
+
+    # List the issue count grouped by product, component, and status
+    local issue_count_by_product_component_status_query="
+        SELECT products.name AS 'Product', components.name AS 'Component', bugs.bug_status AS 'Status', COUNT(*) AS 'Count' FROM bugs
+        LEFT JOIN components ON components.id = bugs.component_id
+        LEFT JOIN products ON products.id = bugs.product_id
+        GROUP BY products.name, components.name, bugs.bug_status
+        ORDER BY products.name ASC, components.name ASC, bugs.bug_status ASC;
+    "
+
+    # Show the character encoding used for all columns in the bugs table
+    local bugs_table_character_encoding_query="
+        SELECT column_name, character_set_name FROM information_schema.columns
+        WHERE table_schema = 'bugs' AND table_name = 'bugs';
+    "
+
+    # Show the character encoding used for the trizilla database
+    local trizilla_database_character_encoding_query="
+        SELECT default_character_set_name FROM information_schema.schemata
+        WHERE schema_name = 'bugs';
+    "
+
+    # +------------------------+-------------+----------------------+-------+
+    # | Product                | Component   | Status               | Count |
+    # +------------------------+-------------+----------------------+-------+
+    # | TAShelix Documentation | Asset Suite | CONFIRMED            |    34 |
+    # | TAShelix Documentation | eSoms       | CONFIRMED            |     5 |
+    # | TAShelix Documentation | Maximo      | CONFIRMED            |    15 |
+    # | TAShelix Documentation | Maximo      | RESOLVED             |     3 |
+    # +------------------------+-------------+----------------------+-------+
+    # Loop over all of the TAShelix Documentation Components and Statuses, calling `export-bugz.sh` to export each bug
+    # products=("TAShelix Documentation" "TAShelix Documentation" "TAShelix Documentation" "TAShelix Documentation")
+    # components=("Asset Suite" "eSoms" "Maximo" "Maximo")
+    # statuses=("CONFIRMED" "CONFIRMED" "CONFIRMED" "RESOLVED")
+    # for ((i=0; i<${#products[@]}; i++)); do
+    #     product=${products[$i]}
+    #     component=${components[$i]}
+    #     status=${statuses[$i]}
+    #     MYSQL_PWD="${DB_PASSWORD}" ~/code/sh/export-bugz.sh -u trizilla -d trizilla -r https://devops.trinoor.com/bugzilla \
+    #         -w "products.name = '${product}' AND components.name = '${component}' AND bugs.bug_status = '${status}'" \
+    #         -c -a "./attachments" -e \
+    #             | tee trizilla-${product// /_}-${component// /_}-"${status// /_}".csv
+    # done
+
+    # Loop over all of the TAShelix Documentation Statuses, calling `export-bugz.sh` to export each bug, grouped by product and status
+    # products=("TAShelix Documentation" "TAShelix Documentation")
+    # statuses=("CONFIRMED" "RESOLVED")
+    # for ((i=0; i<${#products[@]}; i++)); do
+    #     product=${products[$i]}
+    #     status=${statuses[$i]}
+    #     MYSQL_PWD="${DB_PASSWORD}" ~/code/sh/export-bugz.sh -u trizilla -d trizilla -r https://devops.trinoor.com/bugzilla \
+    #         -w "products.name = '${product}' AND bugs.bug_status = '${status}'" \
+    #         -c -a "./attachments" -e \
+    #             | tee trizilla-${product// /_}-"${status// /_}".csv
+    # done
 
     # Read the query into an array, replacing tabs with field separators
     IFS=$'\n' read -r -d '' -a bugs_output < <(get-sql "${bugs_query}" $'\034')
@@ -608,6 +776,17 @@ function main() {
             elif [ "${key}" = "comments_count" ]; then
                 let value--
                 comments_count=${value}
+            elif [ -n "${DATE_FORMAT}" ] && (
+                [ "${key}" = "created" ] \
+                || [ "${key}" = "modified" ] \
+                || [ "${key}" = "deadline" ] \
+                || [ "${key}" = "lastdiffed" ]
+            ); then
+                # Format the date using the specified format
+                value=$(
+                    date -d "${value}" +"${DATE_FORMAT}" \
+                        | sed -E 's/^\s*//;s/\s*$//'
+                )
             fi
 
             # CSV quote value if necessary
@@ -685,6 +864,13 @@ function main() {
 
                 # Echo the comment if the body is not empty
                 if [ -n "${body}" ]; then
+                    # If a date format was specified, format the date
+                    if [ -n "${DATE_FORMAT}" ]; then
+                        created=$(
+                            date -d "${created}" +"${DATE_FORMAT}" \
+                                | sed -E 's/^\s*//;s/\s*$//'
+                        )
+                    fi
                     # Unescape any escaped characters
                     body=$(printf '%b' "${body}")
                     # Jira requires newlines in comments to have a \\ on the second line

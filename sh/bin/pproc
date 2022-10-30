@@ -1,0 +1,28 @@
+#!/bin/bash
+#
+# Find information about a process using a port
+
+PORT="${1}"
+
+if [ -z "${PORT}" ]; then
+    echo "usage: $(basename "${0}") port" >&2
+    exit 1
+fi
+
+# Get the process ID
+pid=$(netstat -ltnp \
+    | awk -v port="${PORT}" '
+        ($4 ~ ":"port"$") {
+            print gensub(/\/.*/, "", "g", $7);
+        }
+    '
+)
+
+# If a process ID wasn't found, error and exit
+if ! [[ "${pid}" =~ ^[0-9]+$ ]]; then
+    echo "No process found listening on port '$PORT'" >&2
+    exit 1
+fi
+
+# Print infoz
+ps --forest -o pid,args -g "${pid}"

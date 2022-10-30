@@ -1,0 +1,46 @@
+#!/bin/bash
+#
+# Checkout a branch based on the Jira Key prefix
+
+function get-branch-by-key() {
+    local key="${1}"
+    local branch
+
+    # Use `git branch -a` to check all fetched branches
+    branch=$(git branch -a | grep -Po "[ /]\K${key}([^\d].*|\$)")
+
+    if [ -z "${branch}" ]; then
+        # Check the remote branches
+        branch=$(git ls-remote --heads 2>/dev/null | grep -Po "[ /]\K${key}([^\d].*|\$)")
+        if [ -z "${branch}" ]; then
+            return 1
+        else
+            # If the branch is remote, then we need to fetch it before we can
+            # check it out
+            git fetch --quiet $(git remote) "${branch}" >/dev/null 2>&1
+        fi
+    fi
+
+    # If there are multiple branches, return the first
+    echo "${branch}" | awk NR==1
+}
+
+function main() {
+    local key="${1}"
+
+    if [ -z "${key}" ]; then
+        echo "usage: $(basename ${0}) <jira key>"
+        return 1
+    fi
+
+    local branch=$(get-branch-by-key "${key}")
+
+    if [ -z "$branch" ]; then
+        echo "error: pathspec '${key}' did not match any file(s) known to git"
+        return 1
+    fi
+
+    git checkout "${branch}"
+}
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"

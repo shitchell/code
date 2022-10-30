@@ -1,0 +1,102 @@
+#!/bin/bash
+#
+# Convert a tsv file to a csv file
+
+include-source 'csv.sh'
+include-source 'echo.sh'
+
+# @description Convert a tsv file to a csv file
+# @arg $1 The tsv file to convert
+# @arg $2 The csv file to create (default is stdout)
+# @opt -f Overwrite the csv file if it exists
+# @opt -a Append to the csv file if it exists
+# @exit 0
+# @exit 1 If the tsv file does not exist
+# @exit 2 If the csv file already exists and -f was not specified
+# @exit 3 If the tsv file exists but is empty
+# @exit 4 If the tsv file is malformed
+# @exit 5 If the tsv file is not readable
+function _tsv2csv() {
+    local tsv_file="${1}"
+    local csv_file="${2}"
+    local tsv_data=''
+    local overwrite=0
+    local append=0
+
+    # Parse the arguments
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            -f)
+                overwrite=1
+                shift
+                ;;
+            -a)
+                append=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # If the tsv file is "-", read from stdin
+    if [ "${tsv_file}" == "-" ]; then
+        tsv_data=$(cat)
+    else
+        # Make sure the tsv file exists
+        if [ ! -f "${tsv_file}" ]; then
+            echo "${tsv_file}: error: file does not exist" >&2
+            return 1
+        fi
+
+        # Make sure the csv file does not exist if one was provided and -f was not
+        # specified
+        if [[ -n "${csv_file}" && -f "${csv_file}" && ${overwrite} -eq 0 ]]; then
+            echo "${csv_file}: error: file already exists" >&2
+            return 2
+        fi
+
+        # Make sure the tsv file is not empty
+        if [ ! -s "${tsv_file}" ]; then
+            echo "${tsv_file}: error: file is empty" >&2
+            return 3
+        fi
+
+        # Make sure the tsv file is readable
+        if [ ! -r "${tsv_file}" ]; then
+            echo "${tsv_file}: error: file is not readable" >&2
+            return 5
+        fi
+
+        # If the tsv file is not "-", read the tsv file
+        if [ "${tsv_file}" != "-" ]; then
+            tsv_data=$(cat "${tsv_file}")
+        fi
+    fi
+
+
+    # Loop over the lines in the tsv file
+    while IFS= read -r line; do
+        # Read the line into an array
+        local -a items
+        IFS=$'\t' read -r -a items <<< "${line}"
+
+        # Convert the line to a csv line
+        line=$(csv-echo -d ',' "${items[@]}")
+
+        # If a csv file was provided, write the line to the csv file
+        if [ -n "${csv_file}" ]; then
+            if [ ${append} -eq 1 ]; then
+                echo "${line}" >> "${csv_file}"
+            else
+                echo "${line}" > "${csv_file}"
+            fi
+        else
+            # Otherwise, write the line to stdout
+            echo "${line}"
+        fi
+    done <<< "${tsv_data}"
+}
+
+[ -z "${BASH_SOURCE[0]}" ] || _tsv2csv "${@}"

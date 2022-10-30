@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# List all python packages imported in directories or files
+
+LOCATIONS=("${@}")
+
+# Use the current directory if no locations provided
+if [ ${#LOCATIONS[@]} -eq 0 ]; then
+    LOCATIONS+=(".")
+fi
+
+(for location in "${LOCATIONS[@]}"; do
+    if [ "${location}" = "-" ]; then
+        data=$(cat)
+    elif [ -f "${location}" ]; then
+        recurse=""
+    elif [ -d "${location}" ]; then
+        recurse="R"
+    else
+        echo "error: '${location}' is not a file or directory" >&2
+        continue
+    fi
+    
+    if [ "${location}" = "-" ]; then
+        grep -hP${recurse}oI 'from \K\w+(?=.*import)|^[^\w]*import \K[\w]+' <<< "${data}"
+    else
+        grep -hP${recurse}oI 'from \K\w+(?=.*import)|^[^\w]*import \K[\w]+' "${location}"
+    fi
+done) | sort | uniq

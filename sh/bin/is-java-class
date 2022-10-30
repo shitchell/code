@@ -1,0 +1,270 @@
+#!/bin/bash
+#
+# Determines whether the specified files are Java class files.
+# Default exit codes:
+#  0: all files are Java class files
+#  1: at least one file is not a Java class file
+#  2: none of the specified files exist or are readable
+
+## Usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-haAfsSqv] <file|dir> [<file|dir> ...]"
+}
+
+function help-epilogue() {
+    echo "determine if the specified file is a java class"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Reports whether the specified file(s) are java classes. Will report:"
+    echo "  - jar files"
+    echo "  - class files"
+    echo "  - java files with a class declaration"
+    echo "  - groovy files with a class declaration"
+    echo
+    echo "If '-' is passed as a filepath, piped data is used instead. Exits"
+    echo "with a 0 status if the file(s) are java classes, else 1."
+    echo
+    cat << EOF
+    -h/--help                show help info
+    -a/--any                 exit with a 0 status if any file is a java class
+    -A/--all                 exit with a 0 status if all files are java classes
+    -f/--fast                exit as early as possible for the selected mode
+                             (default if --quiet is specified)
+    -F/--full                exit only after all files have been checked
+                             (default if --quiet is not specified)
+    -s/--follow-symlinks     follow symlinks
+    -S/--no-follow-symlinks  don't follow symlinks (default)
+    -v/--verbose             print info about each backup file
+    -q/--quiet               don't print anything to stdout
+EOF
+}
+
+function parse-args() {
+    # Default values
+    EXIT_MODE="all" # "any" or "all"
+    EXIT_FAST=0
+    FOLLOW_SYMLINKS=0
+    VERBOSITY=1
+
+    # Create an array to hold positional arguments
+    declare -ga FILEPATHS
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -a|--any)
+                EXIT_MODE="any"
+                shift
+                ;;
+            -A|--all)
+                EXIT_MODE="all"
+                shift
+                ;;
+            -f|--fast)
+                EXIT_FAST=1
+                shift
+                ;;
+            -F|--full)
+                EXIT_FAST=0
+                shift
+                ;;
+            -s|--follow-symlinks)
+                FOLLOW_SYMLINKS=1
+                shift
+                ;;
+            -S|--no-follow-symlinks)
+                FOLLOW_SYMLINKS=0
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSITY=1
+                EXIT_FAST=0
+                shift
+                ;;
+            -q|--quiet)
+                VERBOSITY=0
+                EXIT_FAST=1
+                shift
+                ;;
+            -*)
+                echo-stderr "error: unknown option '${1}'"
+                exit 1
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                shift
+                ;;
+        esac
+    done
+
+    # If no files were specified, print the usage and exit
+    if [ ${#FILEPATHS[@]} -eq 0 ]; then
+        help-usage
+        exit 1
+    fi
+
+    # Set positional args in the global array $@
+    set -- "${FILEPATHS[@]}"
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# Checks if a single file is a java class.
+# Exit codes:
+#   0: file is a java class
+#   1: file is not a java class
+#   2: no file was specified
+#   3: file does not exist or is not readable
+#   4: file is a directory
+#   5: file is a symlink
+#   6: no extension
+#   7: invalid extension
+function _is_java_class() {
+    local filepath="${1}"
+    local filename=$(basename "${filepath%.*}")
+    local extension
+
+    # Determine the extension
+    if [[ "${filepath}" =~ \. ]]; then
+        extension="${filepath##*.}"
+    else
+        echo "${filepath}: error: no extension" >&2
+        return 5
+    fi
+
+    # Make sure a filepath was given
+    if [ -z "${filepath}" ]; then
+        echo "error: no filepath specified" >&2
+        return 2
+    fi
+
+    # Check if it's a directory
+    if [ -d "${filepath}" ]; then
+        echo "${filepath}: error: is a directory" >&2
+        return 4
+    fi
+
+    # Check if it's a symlink
+    if [ -L "${filepath}" ]; then
+        echo "${filepath}: error: is a symlink" >&2
+        return 5
+    fi
+
+    # If not reading from stdin...
+    if [ "${filepath}" != "-" ]; then
+        # ...check that the extension is "java", "class", "jar", or "groovy"
+        if [ "${extension}" != "java" ] \
+        && [ "${extension}" != "class" ] \
+        && [ "${extension}" != "jar" ] \
+        && [ "${extension}" != "groovy" ]; then
+            echo "${filepath}: error: invalid extension '.${extension}'" >&2
+            return 7
+        fi
+
+        # ...and that the file exists
+        if [ ! -f "${filepath}" ]; then
+            echo-stderr "${filepath}: error: file '${filepath}' does not exist" >&2
+            return 3
+        fi
+
+        # If the extension is "jar" or "class", do a `file` check
+        if [ "${extension}" == "jar" ] || [ "${extension}" == "class" ]; then
+            file_info=$(file "${filepath}")
+            if [[ "${file_info}" =~ "Java class data" ]]; then
+                echo "${filepath}: compiled java class"
+                return 0
+            elif [[ "${file_info}" =~ "Java archive data" ]]; then
+                echo "${filepath}: compiled java archive"
+                return 0
+            else
+                echo "${filepath}: error: file is not a java class" >&2
+                return 1
+            fi
+        fi
+
+        # Then read the file
+        data=$(cat "${filepath}")
+        if [ $? -ne 0 ]; then
+            echo-stderr "${filepath}: error: failed to read file '${filepath}'" >&2
+            return 1
+        fi
+    else
+        # Read from stdin
+        data=$(cat)
+    fi
+
+    # Make sure there's data
+    if [ -z "${data}" ]; then
+        echo-stderr "${filepath}: error: no file content to check" >&2
+        return 1
+    fi
+
+    # Grep for the class declaration
+    class_name=$(
+        echo "${data}" \
+            | grep -zoP '\n?class\s+\K([^\s]+)(?=\s+{)' 2>/dev/null \
+            | tr -d '\0' # bash don't like no null bytes in variable assignments
+    )
+
+    # Finally, check that the class name matches the filename
+    if [ "${filename}" = "${class_name}" ]; then
+        echo "${filepath}: java class"
+        return 0
+    else
+        return 1
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # Loop over the piped in files
+    local exit_code=0
+    for filepath in "${FILEPATHS[@]}"; do
+        local result
+        result=$(_is_java_class "${filepath}" 2>&1)
+        exit_code=$?
+        if [ ${VERBOSITY} -eq 1 ]; then
+            echo "${result}"
+        fi
+        if [ ${exit_code} -eq 0 ]; then
+            if [ "${EXIT_MODE}" = "any" ]; then
+                if [ ${EXIT_FAST} -eq 1 ]; then
+                    break
+                fi
+            fi
+        else
+            if [ "${EXIT_MODE}" = "all" ]; then
+                if [ ${EXIT_FAST} -eq 1 ]; then
+                    break
+                fi
+            fi
+        fi
+    done
+
+    exit ${exit_code}
+}
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"

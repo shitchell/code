@@ -38,7 +38,6 @@ function git-branch-name() {
                 name_only=1
                 shift
                 ;;
-
             -d|--detached-commit)
                 name_only=0
                 shift
@@ -394,4 +393,50 @@ function config-source() {
     # argument
     echo "argument"
     return 0
+}
+
+# @description: Return insertion/deletion stats for each user in a git repo
+function git-user-stats() {
+    local git_opts=( "$@" )
+
+    git log "${git_opts[@]}" --format='author: %ae' --numstat \
+        | tr '[A-Z]' '[a-z]' \
+        | grep -v '^$' \
+        | grep -v '^-' \
+        | awk '
+            {
+                if ($1 == "author:") {
+                    author = $2;
+                    commits[author]++;
+                } else {
+                    insertions[author] += $1;
+                    deletions[author] += $2;
+                    total[author] += $1 + $2;
+                    # if this is the first time seeing this file for this
+                    # author, increment their file count
+                    author_file = author ":" $3;
+                    if (!(author_file in seen)) {
+                        seen[author_file] = 1;
+                        files[author]++;
+                    }
+                }
+            }
+            END {
+                # Print a header in the format:
+                #   Email\tCommits\tFiles\tInsertions\tDeletions\tTotal Lines\n
+                printf("%-30s\t%-10s\t%-10s\t%-10s\t%-10s\t%-10s\n",
+                       "Email", "Commits", "Files", "Insertions", "Deletions", "Total Lines");
+                printf("%-30s\t%-10s\t%-10s\t%-10s\t%-10s\t%-10s\n",
+                       "-----", "-------", "-----", "----------", "---------", "-----------");
+
+                # Print the stats for each user, sorted by total lines
+                n = asorti(total, sorted_emails, "@val_num_desc");
+                for (i = 1; i <= n; i++) {
+                    email = sorted_emails[i];
+                    printf("%-30s\t%-10s\t%-10s\t%-10s\t%-10s\t%-10s\n",
+                           email, commits[email], files[email],
+                           insertions[email], deletions[email], total[email]);
+                }
+            }
+    '
 }

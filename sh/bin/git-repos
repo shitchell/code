@@ -26,6 +26,7 @@ function help-full() {
     -h                     display usage
     --help                 display this help message
     -m/--maxdepth <n>      the maximum depth to search for git repositories
+                           (default: 2)
     -d/--directory <path>  the directory to search for git repositories
     -n/--name              print the name of the repository before the output
     -v/--verbose           verbose output (can be specified multiple times)

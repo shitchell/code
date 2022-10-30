@@ -1,0 +1,77 @@
+#!/bin/bash
+#
+# Create a commit as a different user
+
+## usage functions #############################################################
+################################################################################
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h/--help               display this help message
+    -n/--name <name>        the name to commit with
+    -e/--email <email>      the email to commit with
+    -a/--author <author>    uses `git log --author=<author>` to find an existing
+                            author and use that author's name and email
+EOF
+}
+
+function help-
+
+function parse-args() {
+    # Default values
+    DO_COLOR=0 # 0 = auto, 1 = yes, 2 = no
+    DO_REVERSE=0 # 0 = no, 1 = yes
+    STRFTIME_FORMAT='%Y-%m-%d %H:%M:%S'
+
+    # Loop over the arguments
+    declare -ga HIST_FILES
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -c|--color)
+                DO_COLOR=1
+                shift 1
+                ;;
+            -C|--no-color)
+                DO_COLOR=2
+                shift 1
+                ;;
+            -r|--reverse)
+                DO_REVERSE=1
+                shift 1
+                ;;
+            -R|--no-reverse)
+                DO_REVERSE=0
+                shift 1
+                ;;
+            -s|--strftime)
+                STRFTIME_FORMAT="${2}"
+                shift 2
+                ;;
+            -)
+                HIST_FILES+=("/dev/stdin")
+                shift 1
+                ;;
+            -*)
+                echo-stderr "error: unknown option ${1}"
+                echo-stderr "$(help-usage)"
+                exit 1
+                ;;
+            *)
+                HIST_FILES+=(${1})
+                shift 1
+                ;;
+        esac
+    done
+}

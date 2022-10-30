@@ -12,7 +12,7 @@ include-source 'shell.sh'
 ################################################################################
 
 function help-usage() {
-    echo "usage: $(basename $0) [-hdq] [ref1] [ref2] ... -- file1 [file2] ..."
+    echo "usage: $(basename $0) [-hmdq] [ref1] [ref2] ... -- file1 [file2] ..."
 }
 
 function help-epilogue() {
@@ -50,12 +50,12 @@ function parse-args() {
     declare -ga FILEPATHS
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
-            -h)
-                help-usage
-                help-epilogue
-                exit 0
-                ;;
-            --help)
+            # -h)
+            #     help-usage
+            #     help-epilogue
+            #     exit 0
+            #     ;;
+            -h | --help)
                 help-full
                 exit 0
                 ;;

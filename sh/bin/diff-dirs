@@ -33,20 +33,46 @@
 #
 # -p/-o/-g will force comparison of permissions/owner/group
 
-if [[ -z $2 ]] ; then
-    echo "USAGE: $0 dir1 dir2 [optional rsync arguments]"
+set -e
+
+LEFT_DIR="${1%/}"
+RIGHT_DIR="${2%/}"
+shift 2
+OPTIONS=("${@}")
+
+if [ -z "${LEFT_DIR}" ] || [ -z "${RIGHT_DIR}" ]; then
+    echo "usage: $(basename "${0}") dir1 dir2 [optional rsync arguments]"
     exit 1
 fi
 
-set -e
-
-LEFT_DIR="${1}"
-RIGHT_DIR="${2}"
-OPTIONS="${@}"
+echo "Location Symbols:"
+echo "  L: file only exists in '$(realpath "${LEFT_DIR}")'"
+echo "  R: file only exists in '$(realpath "${RIGHT_DIR}")'"
+echo "  X: file exists in both but is different"
+echo
+echo "Filetype Symbols:"
+echo "  f: the item is a file"
+echo "  d: the item is a directory"
+echo "  L: the item is a symlink"
+echo "  D: the item is a device"
+echo "  S: the item is a special file"
+echo
+echo "Change Symbols:"
+echo "  c: the content differs"
+echo "  s: the size differs"
+echo "  T: the modification time differs"
+echo "  p: the permissions differ"
+echo "  o: the owner differs"
+echo "  g: the group differs"
+echo "  a: the ACL information differs"
+echo "  x: the extended attributes differ"
+echo
 
 # Files that don't exist in Right_Dir
-rsync ${@} -rin --ignore-existing "$LEFT_DIR"/ "$RIGHT_DIR"/|sed -e 's/^[^ ]* /L             /' \
+rsync -S -rin --ignore-existing "${@}" "${LEFT_DIR}/" "${RIGHT_DIR}/" | sed -e 's/^[^ ]* /L            /'
+
 # Files that don't exist in Left_Dir
-rsync ${@} -rin --ignore-existing "$RIGHT_DIR"/ "$LEFT_DIR"/|sed -e 's/^[^ ]* /R             /'
+rsync -S -rin --ignore-existing "${@}" "${RIGHT_DIR}/" "${LEFT_DIR}/" | sed -e 's/^[^ ]* /R            /'
+
 # Files that exist in both dirs but have differences
-rsync ${@} -rin --existing "$LEFT_DIR"/ "$RIGHT_DIR"/|sed -e 's/^/X /'
+rsync -S -rin --existing "${@}" "${LEFT_DIR}/" "${RIGHT_DIR}/" | sed -e 's/^./X /'

@@ -1,0 +1,33 @@
+#!/bin/bash
+
+query="${*}"
+
+if [ -z "${query}" ]; then
+    echo "usage: $(basename "${0}") seed text" >&2
+    exit 1
+fi
+
+# URL encode the specified string
+function urlencode() {
+    local string="${1}"
+    local data
+
+    if [[ $# != 1 ]]; then
+        echo "usage: urlencode <string>" >&2
+        return 1
+    fi
+
+    data="$(curl -s -o /dev/null -w %{url_effective} --get --data-urlencode "${string}" "")"
+    if [[ $? != 3 ]]; then
+        echo "Unexpected error" 1>&2
+        return 2
+    fi
+
+    echo "${data##/?}"
+}
+
+curl -s 'https://www.poemofquotes.com/tools/poetry-generator/ai-poem-generator?step3=yes&gosubmit=1&step0=ok&step1=ok&step2='"$(urlencode "${query}")" \
+    | grep -zoP '(?s)<div class="poem">.*?</div>' \
+    | perl -pe 's/<.*?>/\n/g' \
+    | sed '1,3d' \
+    | head -n -4

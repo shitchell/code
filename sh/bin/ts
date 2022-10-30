@@ -1,0 +1,585 @@
+#!/bin/bash
+#
+# Manage a timesheet file using `python -m tabular`
+
+include-source 'echo.sh'
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename ${0}) [-h] [<args>] [add|rm|update|done|show|interact|edit|help] [<subcommand-args>]"
+}
+
+function help-epilogue() {
+    echo "manage a timesheet file using the python tabular module"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Subcommands:"
+    echo "    add        add a new entry to the timesheet"
+    echo "    rm         remove an entry from the timesheet"
+    echo "    update     update an entry in the timesheet"
+    echo "    done       mark an entry as done"
+    echo "    show       show the timesheet"
+    echo "    interact   start a REPL to interact with the timesheet"
+    echo "    edit       edit the timesheet file with \${EDITOR}"
+    echo "    backup     backup the timesheet file"
+    echo "    help       show this or a subcommand's help message"
+    echo
+    echo "Global options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -F/--file <file>         use the specified file as the timesheet
+                             (default: $TIMESHEET_FILE)
+
+EOF
+    echo "rm|update|show options:"
+    cat << EOF
+    -w/--where <query>       filter the timesheet by the specified criteria
+    --since <date>           filter the timesheet by entries since the specified
+                             date (alias for -w "start >= <date>")
+    --before <date>          filter the timesheet by entries before the specified
+                             date (alias for -w "start < <date>")
+    -f/--field <name>        limit the command to specific fields
+                             (can be used multiple times for multiple fields)
+    -r/--row <index>         limit the command to a specific row
+    -s/--summary <summary>   alias for --field description=<summary>
+    -d/--details <details>   alias for --field details=<details>
+    -j/--job-code <code>     alias for --field code=<code>
+    -t/--type <type>         alias for --field type=<type>
+    -b/--begin <begin>       alias for --field start=<begin>
+    -e/--end <end>           alias for --field end=<end>
+
+EOF
+    echo "Update options:"
+    cat << EOF
+    -f/--field <name=value>  update the specified field with the specified value
+                             (can be used multiple times for multiple fields)
+EOF
+}
+
+function parse-args() {
+    # Default values
+    DATE_FORMAT='%Y-%m-%d %H:%M:%S'
+    SUBCOMMAND=""
+    SUBCOMMAND_DEFAULT=show
+    BEGIN_TIME=""
+    END_TIME=""
+    WHERE=()
+    WHERE_SPECIFIED=0
+    FIELDS=()
+    ROWS=()
+    TIMESHEET_FILE="${HOME}/.timesheet.csv"
+    
+    echo "parsing args: " $(printf "'%s' " "$@") >&3
+
+    # Loop over the arguments
+    declare -ag POSITIONAL_ARGS
+    while [[ ${#} -gt 0 ]]; do
+        echo "-- parsing arg '${1}'" >&3
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -F|--file)
+                TIMESHEET_FILE="${2}"
+                shift 2
+                ;;
+            -w|--where)
+                WHERE+=("${2}")
+                WHERE_SPECIFIED=1
+                shift 2
+                ;;
+            --since)
+                local timestamp=$(date -d "${2}" +"${DATE_FORMAT}")
+                WHERE+=("start >= '${timestamp}'")
+                WHERE_SPECIFIED=1
+                shift 2
+                ;;
+            --before)
+                local timestamp=$(date -d "${2}" +"${DATE_FORMAT}")
+                WHERE+=("start < '${timestamp}'")
+                WHERE_SPECIFIED=1
+                shift 2
+                ;;
+            -f|--field)
+                FIELDS+=("${2}")
+                shift 2
+                ;;
+            -r|--row)
+                ROWS+=("${2}")
+                shift 2
+                ;;
+            -s|--summary)
+                FIELDS+=("description=${2}")
+                shift 2
+                ;;
+            -d|--details)
+                FIELDS+=("details=${2}")
+                shift 2
+                ;;
+            -c|--code)
+                FIELDS+=("code=${2}")
+                shift 2
+                ;;
+            -t|--type)
+                FIELDS+=("type=${2}")
+                shift 2
+                ;;
+            -b|--begin|--start)
+                # Process the argument using the $(date) command
+                local timestamp=$(date -d "${2}" +"%Y-%m-%d %H:%M:%S")
+                FIELDS+=("start=${timestamp}")
+                BEGIN_TIME="${timestamp}"
+                shift 2
+                ;;
+            -e|--end|--finish|--done)
+                # Process the argument using the $(date) command
+                local timestamp=$(date -d "${2}" +"%Y-%m-%d %H:%M:%S")
+                FIELDS+=("end=${timestamp}")
+                END_TIME="${timestamp}"
+                shift 2
+                ;;
+            -[^0-9]*)
+                echo-stderr "error: unknown option ${1}"
+                echo-stderr "$(help-usage)"
+                exit 1
+                ;;
+            *)
+                if [ -z "${SUBCOMMAND}" ]; then
+                    # If the provided argument is a subcommand, use it as such
+                    if declare -f "_ts_${1}" > /dev/null; then
+                        echo "-- setting subcommand to '${1}'" >&3
+                        SUBCOMMAND="${1}"
+                        shift 1
+                    else
+                        # Otherwise, set the subcommand to "add" and use the
+                        # argument as the first positional argument
+                        echo "-- setting subcommand to 'add'" >&3
+                        SUBCOMMAND="add"
+                    fi
+                else
+                    echo "-- adding '${1}' to positional args" >&3
+                    POSITIONAL_ARGS+=("${1}")
+                    shift 1
+                fi
+                echo "-- remaining args: " $(printf "'%s' " "$@") >&3
+                ;;
+        esac
+    done
+
+    # If no subcommand was specified, use the default
+    if [ -z "${SUBCOMMAND}" ]; then
+        SUBCOMMAND="${SUBCOMMAND_DEFAULT}"
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# Build a command from the variables:
+#  SUBCOMMAND, WHERE, FIELDS, TIMESHEET_FILE, and POSITIONAL_ARGS
+function run-tabular-command() {
+    local args=()
+
+    # Add the subcommand argument
+    case "${SUBCOMMAND}" in
+        a|add)
+            args+=("--add")
+            ;;
+        r|rm)
+            args+=("--delete")
+            ;;
+        d|done)
+            args+=("--update")
+            ;;
+        u|update)
+            args+=("--update")
+            ;;
+        s|show)
+            args+=("--list")
+            ;;
+        i|interact)
+            args+=("--interact")
+            ;;
+    esac
+
+    # Add the where argument
+    if [ ${#WHERE[@]} -gt 0 ]; then
+        echo "build-tabular-command(): adding where clauses:" `printf "'%s' " "${WHERE[@]}"` >&3
+        for where in "${WHERE[@]}"; do
+            args+=("--where" "${where}")
+        done
+    fi
+
+    # Add the field arguments
+    for field in "${FIELDS[@]}"; do
+        echo "build-tabular-command(): adding field '--col ${field}'" >&3
+        args+=("--col" "${field}")
+    done
+
+    # Add the row argument
+    if [ ${#ROWS[@]} -gt 0 ]; then
+        echo "build-tabular-command(): adding rows" `printf "'%s' " "${ROWS[@]}"` >&3
+        for row in "${ROWS[@]}"; do
+            args+=("--row" "${row}")
+        done
+    fi
+
+    # Add the timesheet file argument
+    if [ -n "${TIMESHEET_FILE}" ]; then
+        echo "build-tabular-command(): setting timesheet file to '${TIMESHEET_FILE}'" >&3
+        args+=("${TIMESHEET_FILE}")
+    fi
+
+    # Add the positional arguments
+    if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
+        echo "build-tabular-command(): adding positional args: " $(printf "'%s' " "$@") >&3
+        args+=("${POSITIONAL_ARGS[@]}")
+    fi
+
+    # Run the command
+    echo python -m tabular "${args[@]}" >&3 #&& exit
+    python -m tabular "${args[@]}"
+}
+
+
+## subcommands #################################################################
+################################################################################
+
+# @description Add a new row to the timesheet
+# @args <summary> [<type>] [<details>] [<job code>]
+# @example add "Fixed a bug" "bug" "Fixed a bug in the foo module" "1234"
+function _ts_add() {
+    local timestamp="${BEGIN_TIME:-$(date +"%Y-%m-%d %H:%M:%S")}"
+
+    # Check the number of arguments
+    if [[ ${#POSITIONAL_ARGS[@]} -lt 1 || ${#POSITIONAL_ARGS[@]} -gt 4 ]]; then
+        echo-stderr "error: invalid number of arguments"
+        exit 1
+    fi
+
+    # Check the end time of the last row and, if it is not set, set it to the
+    # begin time or the current time
+    if "${0}" show --field end --row -1 | grep -Eqi 'nan|nat'; then
+        "${0}" update -1 end "${timestamp}"
+    fi
+
+    # Look for and set the summary, details, job code, and type
+    [ -n "${POSITIONAL_ARGS[0]}" ] \
+        && FIELDS+=("description=${POSITIONAL_ARGS[0]}") \
+        && unset POSITIONAL_ARGS[0]
+    [ -n "${POSITIONAL_ARGS[1]}" ] \
+        && FIELDS+=("type=${POSITIONAL_ARGS[1]}") \
+        && unset POSITIONAL_ARGS[1]
+    [ -n "${POSITIONAL_ARGS[2]}" ] \
+        && FIELDS+=("details=${POSITIONAL_ARGS[2]}") \
+        && unset POSITIONAL_ARGS[2]
+    [ -n "${POSITIONAL_ARGS[3]}" ] \
+        && FIELDS+=("code=${POSITIONAL_ARGS[3]}") \
+        && unset POSITIONAL_ARGS[3]
+    
+    # If "where" is not specified, then set it to the last entry
+    if [ ${WHERE_SPECIFIED} -eq 0 ]; then
+        WHERE="index == (index.size - 1)"
+    fi
+
+    # Add the begin time
+    FIELDS+=("start=${timestamp}")
+}
+function _ts_a() { _ts_add "$@"; }
+
+# @description Remove a row or column from the timesheet
+# @args <row index | column name>
+function _ts_rm() {
+    # Check that the row index or column name was specified
+    if [ ${#POSITIONAL_ARGS[@]} -ne 1 ]; then
+        echo-stderr "error: no row index or column name specified"
+        return 1
+    fi
+
+    # If the argument is a number, then it is a row index, otherwise it is a
+    # column name
+    if [ ${#POSITIONAL_ARGS[@]} -eq 1 ]; then
+        if [[ "${POSITIONAL_ARGS[0]}" =~ ^-?[0-9]+$ ]]; then
+            ROWS+=("${POSITIONAL_ARGS[0]}")
+        else
+            WHERE+=("${POSITIONAL_ARGS[0]}")
+        fi
+        unset POSITIONAL_ARGS[0]
+    fi
+}
+
+# @description Update a row in the timesheet
+# @args <row index | query> [<field> <value>]
+# @usage ts update <row index | query> <field> <value>
+# @usage ts update --row <index> --field foo=bar
+# @example ts update "foo == bar" --field foo=notbar
+# @example ts update -1 foo notbar
+function _ts_update() {
+    local row where field value
+
+    # Determine if a row index or query was specified either as a positional
+    # argument or as a flag
+    if [ -n "${POSITIONAL_ARGS[0]}" ]; then
+        if [[ "${POSITIONAL_ARGS[0]}" =~ ^-?[0-9]+$ ]]; then
+            ROWS+=("${POSITIONAL_ARGS[0]}")
+            unset POSITIONAL_ARGS[0]
+        else
+            WHERE+=("${POSITIONAL_ARGS[0]}")
+            unset POSITIONAL_ARGS[0]
+        fi
+    fi
+
+    # Don't allow both a row index and a query to be specified
+    if [ ${#ROWS[@]} -gt 0 ] && [ ${#WHERE[@]} -gt 0 ]; then
+        echo-stderr "error: cannot specify both a row index and a query"
+        return 1
+    fi
+
+    # If a field and value were specified as positional arguments, then add them
+    # to the fields array
+    if [ ${#POSITIONAL_ARGS[@]} -ge 2 ]; then
+        FIELDS+=("${POSITIONAL_ARGS[1]}=${POSITIONAL_ARGS[2]}")
+        unset POSITIONAL_ARGS[1]
+        unset POSITIONAL_ARGS[2]
+    fi
+}
+function _ts_u() { _ts_update "${@}"; }
+
+# @description Mark a row as complete
+# @args [<row index | query>] [<details>]
+function _ts_done() {
+    local end_time="${END_TIME:-$(date +"%Y-%m-%d %H:%M:%S")}"
+
+    # Check that the correct number of arguments were provided
+    if [[ ${#POSITIONAL_ARGS[@]} -gt 2 ]]; then
+        echo-stderr "error: incorrect number of arguments"
+        return 1
+    fi
+
+    # If the first argument is provided, check if it is a number or a query
+    if [ ${#POSITIONAL_ARGS[@]} -ge 1 ]; then
+        if [[ "${POSITIONAL_ARGS[0]}" =~ ^-?[0-9]+$ ]]; then
+            ROWS+=("${POSITIONAL_ARGS[0]}")
+        else
+            WHERE+=("${POSITIONAL_ARGS[0]}")
+        fi
+        unset POSITIONAL_ARGS[0]
+    else
+        # If no arguments are provided, then set the where to the last entry
+        WHERE+=("index == (index.size - 1)")
+    fi
+
+    # Set the end time to now
+    FIELDS+=("end=${end_time}")
+
+    # If the second argument is provided, then it is the details
+    if [ -n "${POSITIONAL_ARGS[1]}" ]; then
+        FIELDS+=("details=${POSITIONAL_ARGS[1]}")
+        unset POSITIONAL_ARGS[1]
+    fi
+}
+
+# @description Start an interactive session with the timesheet
+function _ts_interact() {
+    # Do nothing
+    :
+}
+function _ts_i() { _ts_interact "${@}"; }
+
+# @description Edit the timesheet with the default editor
+function _ts_edit() {
+    # Open the timesheet file in the default editor
+    ${EDITOR:-nano} "${TIMESHEET_FILE}"
+    exit ${?}
+}
+function _ts_e() { _ts_edit "${@}"; }
+
+# @description Backup the timesheet file
+# @args [<backup file>]
+function _ts_backup() {
+    local backup_file="${1:-${POSITIONAL_ARGS[0]}}"
+
+    # Check that the correct number of arguments were provided
+    if [[ ${#POSITIONAL_ARGS[@]} -gt 1 ]]; then
+        echo-stderr "error: incorrect number of arguments"
+        return 1
+    fi
+
+    # If the backup file is not specified, then use the default
+    if [ -z "${backup_file}" ]; then
+        backup_file="${TIMESHEET_FILE}.bak"
+    fi
+
+    # Copy the timesheet file to the backup file
+    cp "${TIMESHEET_FILE}" "${backup_file}"
+    local exit_code=${?}
+
+    case ${exit_code} in
+        0)
+            echo "Timesheet backed up to ${backup_file}"
+            ;;
+        *)
+            echo-stderr "error: could not backup timesheet"
+            ;;
+    esac
+
+    exit ${exit_code}
+}
+
+# @description Show the timesheet
+# @args [<query>]
+function _ts_show() {
+    if [ ${#POSITIONAL_ARGS[@]} -eq 1 ]; then
+        WHERE+=("${POSITIONAL_ARGS[0]}")
+        unset POSITIONAL_ARGS[0]
+    fi
+}
+function _ts_s() { _ts_show "${@}"; }
+
+# @description Print the usage message or the help message for a subcommand
+# @args [<subcommand>]
+function _ts_help() {
+    local subcommand="${1:-${POSITIONAL_ARGS[0]}}"
+    echo "running _ts_help() with subcommand = '${subcommand}'" >&3
+
+    # If no subcommand was specified, then print the help message
+    if [ -z ${subcommand} ]; then
+        help-full
+    else
+        # Determine if the subcommand is an alias for another subcommand
+        local code=$(type "_ts_${subcommand}")
+        if grep -qE "^    _ts_" <<< "${code}"; then
+            subcommand=$(echo "${code}" | grep -oP "^    _ts_\K[a-z_-]+")
+        fi
+
+        # Otherwise, use awk to print the help message for the specified
+        # subcommand
+        awk -v subcommand="${subcommand}" -v prog="$(basename "${0}")" '
+            # Store any lines that start with "# @"
+            /^# @/ {
+                help_name = gensub(/^# @([a-z-]+).*/, "\\1", "g", $0);
+                help_text = gensub(/^# @([a-z-]+) (.*)/, "\\2", "g", $0);
+                help[help_name] = help_text;
+            }
+            # If we find a function, either print the help message or clear the
+            # help message
+            /^function/ {
+                found_cmd = gensub(/^function _ts_([a-z]+).*/, "\\1", "g", $0);
+                if (found_cmd == subcommand) {
+                    # If there is no help message, then say as much
+                    if (length(help) == 0) {
+                        exit 2;
+                    }
+                    # If there is a description, print and delete it
+                    if (help["description"]) {
+                        print help["description"];
+                        delete help["description"];
+                    } else {
+                        delete help["description"];
+                    }
+                    # If there are args, print and delete them
+                    if (help["args"] != "") {
+                        print "usage: " prog " " subcommand " " help["args"];
+                        delete help["args"];
+                    } else {
+                        delete help["args"];
+                    }
+                    # Loop over the remaining help messages and print them
+                    for (help_name in help) {
+                        print help_name ": " help[help_name];
+                    }
+                    exit;
+                } else {
+                    split("", help);
+                }
+            }
+            END {
+                if (found_cmd != subcommand) {
+                    exit 1;
+                }
+            }
+        ' "${BASH_SOURCE[0]}"
+        local exit_code=${?}
+        case ${exit_code} in
+            0)
+                # Do nothing
+                ;;
+            1)
+                echo-stderr "error: no such subcommand '${subcommand}'"
+                ;;
+            2)
+                echo-stderr "error: no help message found for subcommand '${subcommand}'"
+                ;;
+            *)
+                echo-stderr "error: awk exited with code ${exit_code}"
+                ;;
+        esac
+    fi
+    exit ${exit_code}
+}
+function _ts_h() { _ts_help "${@}"; }
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    # Parse the command line arguments
+    echo "received args: " $(printf "'%s' " "$@") >&3
+    parse-args "${@}"
+
+    echo "SUBCOMMAND: ${SUBCOMMAND}" >&3
+    echo "WHERE: `printf "'%s' " "${WHERE[@]}"`" >&3
+    echo "WHERE_SPECIFIED: ${WHERE_SPECIFIED}" >&3
+    echo "ROWS: `printf "'%s' " "${ROWS[@]}"`" >&3
+    echo "FIELDS: `printf "'%s' " "${FIELDS[@]}"`" >&3
+    echo "TIMESHEET_FILE: ${TIMESHEET_FILE}" >&3
+    echo "POSITIONAL_ARGS: `printf "'%s' " "${POSITIONAL_ARGS[@]}"`" >&3
+
+    # Find the subcommand function "_ts_<subcommand>"
+    local subcommand_func="_ts_${SUBCOMMAND}"
+    echo "subcommand_func: ${subcommand_func}" >&3
+
+    # Determine if the subcommand function exists
+    if ! declare -f "${subcommand_func}" > /dev/null; then
+        echo-stderr "error: unknown subcommand ${SUBCOMMAND}"
+        echo-stderr "$(help-usage)"
+        exit 1
+    fi
+
+    ${subcommand_func}
+    if [ ${?} -ne 0 ]; then
+        _ts_help "${SUBCOMMAND}"
+        exit ${?}
+    fi
+
+    run-tabular-command
+    return ${?}
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && (
+    if [ -n "${DEBUG}" ]; then
+        exec 3>&2
+        main "${@}"
+    else
+        main "${@}" 3>/dev/null
+    fi
+)

@@ -62,7 +62,7 @@ function echo-formatted() {
                 if [ "${arg}" = "--" ]; then
                     if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
                     || ! is-int ${VERBOSITY}; then
-                        echo -en "${code_reset}"
+                        printf "%b" "${code_reset}"
                     fi
                 elif [ "${arg}" = "-n" ]; then
                     print_newline=0
@@ -87,7 +87,7 @@ function echo-formatted() {
                         || ! is-int ${VERBOSITY}; then
                             # ensure the color code is defined
                             if [ -n "${!color_code}" ] >/dev/null 2>&1; then
-                                echo -en "${!color_code}"
+                                printf "%b" "${!color_code}"
                             fi
                         fi
                     done
@@ -129,14 +129,14 @@ function echo-formatted() {
         if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
         || ! is-int ${VERBOSITY}; then
             local piped_data=$(cat -)
-            echo -n "${piped_data}"
+            printf "%s" "${piped_data}"
             has_printed_anything=1
         fi
     fi
 
     # echo the reset code
     if [ ${do_format} -eq 1 ]; then
-        echo -en "${code_reset}"
+        printf "%b" "${code_reset}"
     fi
 
     # echo a newline
@@ -178,6 +178,11 @@ function echo-comment() {
 # echo something to stdout in green
 function echo-command() {
     echo-formatted "\$" -g "$(echo ${@})"
+}
+
+# echo something to stdout in yellow
+function echo-warning() {
+    echo-formatted -y "${@}"
 }
 
 # echo something to stdout in red

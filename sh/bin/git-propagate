@@ -5,11 +5,14 @@
 # A set of "core" branches can be configured via branches.core to use as default
 # branches to propagate to.
 
+include-source 'echo.sh'
+include-source 'git.sh'
+
 ## usage functions #############################################################
 ################################################################################
 
 function help-usage() {
-    echo "usage: $(basename $0) [-halftcpPmq] [--from <ref>] -- filepath1 [filepath2 ...]"
+    echo "usage: $(basename $0) [-huUalpP] [-s|--source <ref>] [-t|--to <branch>] [-m|--message <commit message>] [<to branch>|filepath] -- filepath1 [filepath2 ...]"
 }
 
 function help-epilogue() {
@@ -22,18 +25,21 @@ function help-full() {
     echo
     echo "This git command will propagate a set of objects or commits across"
     echo "multiple branches. If no branches are specified, it will propagate"
-    echo "across all branches. "
+    echo "across all locally checked out branches. "
     echo
     cat << EOF
     -h                display usage
     --help            display this help message
+    -u/--update       update the refs before propagating (fetch --all --tags --prune)
+    -U/--no-update    do not update the refs before propagating
+    -s/--source       the ref to fetch the object(s) from
+    -t/--to           a branch to propagate to (can be specified multiple times)
     -a/--all          propagate across all branches
-    -l/--local        propagate across local branches
-    -f/--from         the ref to fetch the object(s) from
-    -t/--to           a comma separated list of branches to propagate to
+    -l/--local        propagate across all branches checked out locally
     -p/--push         push the changes to the remote
     -P/--no-push      do not push the changes to the remote
     -m/--message      the commit message to use for the push
+    -v/--verbose      be verbose
     -q/--quiet        don't print anything to stdout
 EOF
 }
@@ -43,27 +49,77 @@ function parse-args() {
     local positional_filepaths=0
 
     # Default values
-    TARGET_BRANCHES="all" # all, local, or a comma separated list of branches
+    local target_branches_src="local" # all, local, or custom
+    TARGET_BRANCHES=()
     SRC_REF=$(git-branch-name)
-    MESSAGE="propagated from ${SRC_REF}"
-    declare -ga REFS
+    COMMIT_MESSAGE="Changes propagated from '${SRC_REF}'"
+    COMMIT_MESSAGE_SPECIFIED=0
+    DO_PUSH=1
+    DO_UPDATE=1
+    VERBOSITY=1
     declare -ga FILEPATHS
 
     # Loop over the arguments
     declare -a positional_args
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
-            -h)
-                help-usage
-                help-epilogue
-                exit 0
-                ;;
-            --help)
+            # -h)
+            #     help-usage
+            #     help-epilogue
+            #     exit 0
+            #     ;;
+            -h|--help)
                 help-full
                 exit 0
                 ;;
-            -v)
-                verbose=1
+            -u|--update)
+                DO_UPDATE=1
+                shift 1
+                ;;
+            -U|--no-update)
+                DO_UPDATE=0
+                shift 1
+                ;;
+            -s|--source)
+                SRC_REF="${2}"
+                shift 2
+                ;;
+            -t|--to)
+                TARGET_BRANCHES+=("${2}")
+                target_branches_src="custom"
+                shift 2
+                ;;
+            -a|--all)
+                target_branches_src="all"
+                shift 1
+                ;;
+            -l|--local)
+                target_branches_src="local"
+                shift 1
+                ;;
+            -p|--push)
+                DO_PUSH=1
+                shift 1
+                ;;
+            -P|--no-push)
+                DO_PUSH=0
+                shift 1
+                ;;
+            -m|--message)
+                COMMIT_MESSAGE="${2}"
+                COMMIT_MESSAGE_SPECIFIED=1
+                shift 2
+                ;;
+            -v|--verbose)
+                VERBOSITY=2
+                shift 1
+                ;;
+            -q|--quiet)
+                VERBOSITY=0
+                shift 1
+                ;;
+            --)
+                positional_filepaths=1
                 shift 1
                 ;;
             -*)
@@ -72,14 +128,77 @@ function parse-args() {
                 exit 1
                 ;;
             *)
-                positional_args+=(${1})
+                if [ "${positional_filepaths}" -eq 1 ]; then
+                    FILEPATHS+=("${1}")
+                else
+                    case "$(is-ref-or-file "${1}")" in
+                        ref)
+                            TARGET_BRANCHES+=("${1}")
+                            target_branches_src="custom"
+                            ;;
+                        file)
+                            FILEPATHS+=("${1}")
+                            ;;
+                        ambiguous)
+                            echo-stderr "error: ambiguous argument ${1}, please use -t or --"
+                            echo-stderr "$(help-usage)"
+                            exit 1
+                            ;;
+                        *)
+                            echo-stderr "error: ${1} does not appear to be a ref or file"
+                            echo-stderr "$(help-usage)"
+                            exit 1
+                            ;;
+                    esac
+                fi
                 shift 1
                 ;;
         esac
     done
 
+    # Do an update if requested
+    if [[ ${DO_UPDATE} -eq 1 ]]; then
+        echo-comment "Updating refs ..."
+        git fetch --all --tags --prune >/dev/null
+    fi
+
+    # Determine the correct branches to propagate to
+    if [[ ${target_branches_src} == "all" ]]; then
+        echo-comment "Using all remote branches:"
+        TARGET_BRANCHES=($(
+            git branch --remote --abbrev --no-color \
+                | grep -v 'HEAD -' \
+                | sed "s/  $(git remote)\///"
+        ))
+    elif [[ ${target_branches_src} == "local" ]]; then
+        echo-comment "Using all local branches:"
+        TARGET_BRANCHES=($(
+            git branch --abbrev --no-color \
+                | grep -v 'HEAD -' \
+                | sed -E 's/\*? *//'
+        ))
+    else
+        echo-comment "Using custom branches:"
+    fi
+    printf "  %s\n" "${TARGET_BRANCHES[@]}"
+
+    # If a commit was specified but no filepaths, then use the files in the
+    # commit as the filepaths
+    if [ $(get-ref-type "${SRC_REF}") == "commit" ] && [ ${#FILEPATHS[@]} -eq 0 ]; then
+        FILEPATHS=($(git log -1 --name-only --format="" "${SRC_REF}"))
+    fi
+
+    # Convert the filepaths to actual filepaths (in case some are directories)
+    IFS=$'\n' FILEPATHS=($(git ls-files "${SRC_REF}" -- "${FILEPATHS[@]}"))
+
+    # If we're propagating a commit and a commit message was not specified,
+    # use the commit message of the commit to propagate.
+    if [ $(get-ref-type "${SRC_REF}") == "commit" ] && [ ${COMMIT_MESSAGE_SPECIFIED} -eq 0 ]; then
+        COMMIT_MESSAGE=$(git log -1 --pretty=%B "${SRC_REF}")
+    fi
+
     # Set the positional arguments in the global array
-    set -- ${positional_args[@]}
+    set -- ${FILEPATHS[@]}
 }
 
 ## main ########################################################################
@@ -88,5 +207,92 @@ function parse-args() {
 function main() {
     parse-args "${@}"
 
+    # Store the current branch name to return to after the operation
+    local current_branch=$(git-branch-name)
+    trap "git checkout --quiet ${current_branch}" EXIT
 
+    # If the working directory is not clean, then warn the user
+    if ! git diff-index --quiet HEAD; then
+        echo-warning "Working directory is not clean, some updates might not work"
+        sleep 3
+    fi
+
+    # Display the statuses for the files to be propagated
+    echo-comment "Propagating ${#FILEPATHS[@]} files fromz ${SRC_REF}:"
+    for filepath in "${FILEPATHS[@]}"; do
+        git log -1 --name-status --format="" "${SRC_REF}" -- "${filepath}" \
+            | sed -E 's/^(.)/[\1]/' \
+            | sed 's/^/  /' \
+            | tr '\t' ' '
+    done
+
+    # Determine which of the filepaths should be deleted and which should be
+    # checked out
+    local filepaths_delete=()
+    local filepaths_update=()
+    while IFS= read -r file_status; do
+        # get the name status and filepath
+        local status=$(echo "${file_status}" | sed 's/ .*//')
+        local filepath=$(echo "${file_status}" | sed -E 's/^\w\t//')
+        if [ "${status}" = "D" ]; then
+            filepaths_delete+=("${filepath}")
+        else
+            filepaths_update+=("${filepath}")
+        fi
+    done < <(git log -1 --name-status --format="" "${SRC_REF}" -- "${FILEPATHS[@]}")
+
+    # Loop over each target branch and propagate the objects
+    for branch in "${TARGET_BRANCHES[@]}"; do
+        echo-comment -n "Checking out '${branch}' ..."
+        git checkout --quiet "${branch}" \
+            && echo \
+            || { echo-error "error, skipping"; continue; }
+
+        # If the branch is setup to track a remote branch, do a pull to ensure
+        # that the branch is up to date
+        if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+            check-command "git pull --quiet >/dev/null" "  pulling updates" \
+                || continue
+        fi
+
+        # Delete what needs deleting
+        if [ "${#filepaths_delete[@]}" -gt 0 ]; then
+            local filepaths_delete_str="$(printf "'%s' " "${filepaths_delete[@]}")"
+            check-command "rm ${filepaths_delete_str}" "  deleting files"
+        fi
+
+        # Update what needs updating
+        if [ "${#filepaths_update[@]}" -gt 0 ]; then
+            local filepaths_update_str="$(printf "'%s' " "${filepaths_update[@]}")"
+            check-command \
+                "git checkout --quiet --force '${SRC_REF}' -- ${filepaths_update_str}" \
+                "  updating files" \
+                || continue
+        fi
+
+        # Add all of the specified files to the index
+        check-command \
+            "git add ${filepaths_update_str} ${filepaths_delete_str}" \
+            "  adding files to index" \
+            || continue
+
+        # Commit the changes if there are any
+        if ! git diff --cached --quiet; then
+            local commit_message=$(echo "${COMMIT_MESSAGE}" | sed 's/"/\\"/g')
+            check-command \
+                "git commit --quiet --message \"${commit_message}\" --allow-empty --allow-empty-message" \
+                "  committing changes"
+
+            # Push the changes to the remote if requested
+            if [[ ${DO_PUSH} -eq 1 ]]; then
+                check-command \
+                    "git push --quiet $(git remote) '${branch}'" \
+                    "  pushing changes"
+            fi
+        else
+            echo "  no changes to commit, continuing"
+        fi
+    done
 }
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"

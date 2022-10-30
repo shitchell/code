@@ -9,7 +9,7 @@ function case-insensitive-pattern() {
     local no_change=0 # flag to indicate whether to change the character
     local prev_char="" # track the previous character to account for escaped ']' characters
     while read -r char; do
-        if [ ${no_change} -eq 0 ] && [[ "${char}" =~ [A-Za-z] ]]; then
+        if [ ${no_change} -eq 0 ] && [[ "${char}" =~ [A-Za-z] ]] && [ "${prev_char}" != "\\" ]; then
             # if we're actively changing the character and reach a letter, replace it with its case-insensitive counterpart
             insensitive_pattern="${insensitive_pattern}[${char^^}${char,,}]"
         else
@@ -45,6 +45,14 @@ function is-int() {
 # Return 0 if the specified string is a valid floating point number, 1 otherwise
 function is-float() {
     [[ "${1}" =~ ^[0-9]+\.[0-9]+$ ]]
+}
+
+# Remove leading/trailing whitespace from the specified string
+function trim() {
+    local string="${1}"
+    string="${string#"${string%%[![:space:]]*}"}" # remove leading whitespace characters
+    string="${string%"${string##*[![:space:]]}"}" # remove trailing whitespace characters
+    echo "${string}"
 }
 
 

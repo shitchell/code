@@ -388,8 +388,10 @@ function source-lib() {
 
 # Import a shell script from ${<SHELL>_LIB_PATH:-${PATH}} given a filename
 function include-source() {
+    local filename="${1}"
+    local exit_code=0
+
     __include_source_parse_args "$@"
-    # exit cleanly if help was displayed or with the exit code if non-zero
     case $? in 0);; 3) return 0 ;; *) return $?;; esac
 
     local filename="${POSITIONAL_ARGS[0]}"
@@ -397,18 +399,21 @@ function include-source() {
     # ensure the filename is not empty
     if [ -z "$filename" ]; then
         __include_source_help_usage >&2
-        return 1
+        exit_code=1
+    else
+        # determine whether to treat the filename as a filepath or url
+        if [[ "${filename}" =~ ^https?:// ]]; then
+            # treat the filename as a url
+            source-url "${filename}"
+            exit_code=${?}
+        else
+            source-lib "${filename}"
+            exit_code=${?}
+        fi
     fi
 
-    # determine whether to treat the filename as a filepath or url
-    if [[ "${filename}" =~ ^https?:// ]]; then
-        # treat the filename as a url
-        source-url "${filename}"
-        return $?
-    else
-        source-lib "${filename}"
-        return $?
-    fi
+    unset POSITIONAL_ARGS SHOW_LOCATION VERBOSE DO_CAT DO_SOURCE
+    return ${exit_code}
 }
 
 
@@ -669,6 +674,9 @@ function __compile_sources() {
 ###
 
 function compile-sources() {
+    local exit_code=0
+    local filepath="${1}"
+
     __compile_sources_parse_args "$@"
     # exit cleanly if help was displayed or with the exit code if non-zero
     case $? in 0);; 3) return 0 ;; *) return $?;; esac
@@ -677,11 +685,11 @@ function compile-sources() {
     for filepath in "${POSITIONAL_ARGS[@]}"; do
         # compile the file
         local compiled_file=$(__compile_sources "${filepath}")
-        local exit_code=$?
+        exit_code=$?
 
         # if the exit code is non-zero, exit with that code
         if [ "${exit_code}" -ne 0 ]; then
-            return "${exit_code}"
+            break
         fi
 
         # output the compiled file or overwrite the original file as appropriate
@@ -695,6 +703,9 @@ function compile-sources() {
             echo "${compiled_file}"
         fi
     done
+
+    unset DO_CAT DO_LIST DO_HELP IN_PLACE IN_PLACE_BACKUPS INCLUDE_TAGS POSITIONAL_ARGS
+    return ${exit_code}
 }
 
 
