@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+# Kill a windows process by name
+# TODO: allow pattern matching
+
+taskkill.exe /F /T /IM "${@}"

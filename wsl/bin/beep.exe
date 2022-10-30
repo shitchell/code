@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+# Beep boop
+# usage: beep [frequency] [duration in milliseconds]
+
+powershell.exe -command "[console]::beep(${1:-500},${2:-500})"

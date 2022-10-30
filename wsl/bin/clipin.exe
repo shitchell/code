@@ -1,0 +1,125 @@
+#!/bin/bash
+#
+# Set the Windows clipboard using Powershell's `Set-Clipboard` command
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-haHe] [content]"
+}
+
+function help-epilogue() {
+    echo "set the Windows clipboard"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h                     display usage
+    --help                 display this help message
+    -a/--append            append the content to the clipboard instead of
+                           replacing it
+    -H/--as-html           treat the content as HTML
+    -e/--echo              echo the content of the clipboard after setting it
+EOF
+}
+
+function parse-args() {
+    # Default values
+    DO_APPEND=0
+    DO_HTML=0
+    DO_ECHO=0
+    CONTENT=()
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -a|--append)
+                DO_APPEND=1
+                shift 1
+                ;;
+            -H|--as-html)
+                DO_HTML=1
+                shift 1
+                ;;
+            -e|--echo)
+                DO_ECHO=1
+                shift 1
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                exit 1
+                ;;
+            *)
+                CONTENT=("${@}")
+                break
+                ;;
+        esac
+    done
+
+    # If there is no content and stdin is available, read from stdin
+    if [[ ${#CONTENT[@]} -eq 0 ]] && [[ -p /dev/stdin ]]; then
+        CONTENT=("$(cat -)")
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Escape a string for use in a Powershell command and enclose it in single quotes
+# @arg $1 string to escape
+# @stdin string to escape
+# @return escaped string
+function quote-powershell() {
+    local string="${1:-$(cat -)}"
+
+    # Escape single quotes
+    echo "'${string//\'/\'\'}'"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # Set the `Set-Clipboard` args
+    local clipboard_args=()
+    if [[ ${DO_APPEND} -eq 1 ]]; then
+        clipboard_args+=("-Append")
+    fi
+    if [[ ${DO_HTML} -eq 1 ]]; then
+        clipboard_args+=("-AsHtml")
+    fi
+
+    # Quote the content
+    local quoted_content="$(quote-powershell "${CONTENT[@]}")"
+
+    # Set the clipboard
+    powershell.exe -Command "Set-Clipboard ${clipboard_args[*]} ${quoted_content}"
+
+    # Echo the clipboard
+    if [[ ${DO_ECHO} -eq 1 ]]; then
+        powershell.exe -Command "Get-Clipboard"
+    fi
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"

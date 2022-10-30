@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+# List all processes in Windows
+# TODO: filter by categories
+
+WMIC.exe process get Description \
+            | sort \
+            | uniq \
+            | sed -e 's/\s*$//'

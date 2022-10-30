@@ -1,0 +1,14 @@
+#!/bin/bash
+#
+# Open files in File Explorer or their default app
+# TODO: options to force file explorer or a default app
+
+paths=("${@}")
+
+for path in "${paths[@]}"; do
+    win_path=$(wslpath -am "${path}")
+    if [ -n "${DEBUG}" ]; then
+        echo "cmd.exe /c start $(printf "%q" "${win_path}")" >&2
+    fi
+    cmd.exe /c start "${win_path}"
+done

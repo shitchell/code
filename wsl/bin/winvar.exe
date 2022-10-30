@@ -1,0 +1,6 @@
+#!/bin/bash
+#
+# Display the value of a windows variable
+
+[ -z "$1" ] && echo "usage: $(basename $0) <windows environment variable>"
+cmd.exe /c echo %$1% 2>/dev/null
