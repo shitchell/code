@@ -3,7 +3,7 @@
 /gitish/
 
 # opg stuff
-opg-as*
+*opg-as*
 
 # go source and compiled binaries
 /go/pkg/mod/
