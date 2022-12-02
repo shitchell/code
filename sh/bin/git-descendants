@@ -1,0 +1,8 @@
+#!/bin/bash
+#
+# Show all of the direct descendants of (commits that came immediately after) a
+# given commit
+
+git rev-list --all --parents \
+	| grep "^.\{40\}.*${1}.*" \
+	| awk '{print $1}'

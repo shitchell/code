@@ -1,0 +1,5 @@
+#!/bin/bash
+#
+# simple awk pattern to treat csv fields correctly
+
+awk -v FPAT="([^,]*)|(\"[^\"]*\")" "${@}"

@@ -63,8 +63,8 @@ function parse-args() {
                 exit 1
                 ;;
             *)
-                CONTENT=("${@}")
-                break
+                CONTENT+=("${@1}")
+                shift 1
                 ;;
         esac
     done

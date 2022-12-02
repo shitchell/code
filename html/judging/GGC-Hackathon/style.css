@@ -1,0 +1,97 @@
+html, body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  background-image: url(./Images/spooky_forest.jpg);
+}
+
+
+nav{
+	margin: 0;
+  padding: 0;
+	text-align: center;
+  height: 5em;
+  font-family: 'Brush Script MT', cursive;
+  background-color: #000000;
+}
+
+nav a:link
+	{
+    color: #FF7518;
+    font-size: 4em;
+    padding: 1em;
+  }
+
+a:visited {
+  color: #FF7518;
+}
+
+a:hover{
+  color: #FFFFFF;
+}
+
+ul{
+  list-style-type: none;
+  text-align: center;
+  padding: 0;
+}
+
+#spooky{
+  text-align: center;
+  color: #FF7518;
+  font-family: 'Brush Script MT', cursive;
+  font-size: 8em;
+}
+
+#title{
+  text-align: center;
+  color: #FF7518;
+  font-family: 'Brush Script MT', cursive;
+  font-size: 4em;
+  padding: 0;
+}
+
+#explain{
+  width: 80%;
+  background: black;
+  margin: auto;
+  border-radius: 25px;
+  text-align: center;
+  color: white;
+  line-height: 2;
+  font-size: 1.2em;
+  padding: 3em;
+  font-family: 'Times New Roman', serif;
+}
+
+#pumpkin{
+  text-align: center;
+}
+
+#me{
+  text-align: center;
+  font-size: 5em;
+  color: #FF7518;
+}
+
+#descript{
+  width: 65%;
+  background: black;
+  margin: auto;
+  border-radius: 25px;
+  text-align: center;
+  color: white;
+  line-height: 2;
+  font-size: 1.2em;
+  padding: 1em;
+  font-family: 'Times New Roman', serif;
+}
+
+#facts{
+  width: 80%;
+  border-radius: 15px;
+  background: white;
+  color: black;
+  margin: auto;
+  text-align: center;
+}

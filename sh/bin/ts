@@ -48,7 +48,7 @@ EOF
     -f/--field <name>        limit the command to specific fields
                              (can be used multiple times for multiple fields)
     -r/--row <index>         limit the command to a specific row
-    -s/--summary <summary>   alias for --field description=<summary>
+    -s/--summary <summary>   alias for --field summary=<summary>
     -d/--details <details>   alias for --field details=<details>
     -j/--job-code <code>     alias for --field code=<code>
     -t/--type <type>         alias for --field type=<type>
@@ -122,7 +122,7 @@ function parse-args() {
                 shift 2
                 ;;
             -s|--summary)
-                FIELDS+=("description=${2}")
+                FIELDS+=("summary=${2}")
                 shift 2
                 ;;
             -d|--details)
@@ -251,7 +251,7 @@ function run-tabular-command() {
     fi
 
     # Run the command
-    echo python -m tabular "${args[@]}" >&3 #&& exit
+    echo python -m tabular "$(printf "%q " "${args[@]}")" >&3 #&& exit
     python -m tabular "${args[@]}"
 }
 
@@ -278,16 +278,20 @@ function _ts_add() {
     fi
 
     # Look for and set the summary, details, job code, and type
-    [ -n "${POSITIONAL_ARGS[0]}" ] \
-        && FIELDS+=("description=${POSITIONAL_ARGS[0]}") \
+    [ ${#POSITIONAL_ARGS[@]} -ge 1 ] \
+        && echo "_ts_add(): setting summary to '${POSITIONAL_ARGS[0]}'" >&3 \
+        && FIELDS+=("summary=${POSITIONAL_ARGS[0]}") \
         && unset POSITIONAL_ARGS[0]
-    [ -n "${POSITIONAL_ARGS[1]}" ] \
+    [ ${#POSITIONAL_ARGS[@]} -ge 1 ] \
+        && echo "_ts_add(): setting type to '${POSITIONAL_ARGS[1]}'" >&3 \
         && FIELDS+=("type=${POSITIONAL_ARGS[1]}") \
         && unset POSITIONAL_ARGS[1]
-    [ -n "${POSITIONAL_ARGS[2]}" ] \
+    [ ${#POSITIONAL_ARGS[@]} -ge 1 ] \
+        && echo "_ts_add(): setting details to '${POSITIONAL_ARGS[2]}'" >&3 \
         && FIELDS+=("details=${POSITIONAL_ARGS[2]}") \
         && unset POSITIONAL_ARGS[2]
-    [ -n "${POSITIONAL_ARGS[3]}" ] \
+    [ ${#POSITIONAL_ARGS[@]} -ge 1 ] \
+        && echo "_ts_add(): setting job code to '${POSITIONAL_ARGS[3]}'" >&3 \
         && FIELDS+=("code=${POSITIONAL_ARGS[3]}") \
         && unset POSITIONAL_ARGS[3]
     
@@ -387,7 +391,7 @@ function _ts_done() {
     FIELDS+=("end=${end_time}")
 
     # If the second argument is provided, then it is the details
-    if [ -n "${POSITIONAL_ARGS[1]}" ]; then
+    if [ ${#POSITIONAL_ARGS[@]} -ge 2 ]; then
         FIELDS+=("details=${POSITIONAL_ARGS[1]}")
         unset POSITIONAL_ARGS[1]
     fi
@@ -413,12 +417,6 @@ function _ts_e() { _ts_edit "${@}"; }
 function _ts_backup() {
     local backup_file="${1:-${POSITIONAL_ARGS[0]}}"
 
-    # Check that the correct number of arguments were provided
-    if [[ ${#POSITIONAL_ARGS[@]} -gt 1 ]]; then
-        echo-stderr "error: incorrect number of arguments"
-        return 1
-    fi
-
     # If the backup file is not specified, then use the default
     if [ -z "${backup_file}" ]; then
         backup_file="${TIMESHEET_FILE}.bak"
@@ -433,7 +431,7 @@ function _ts_backup() {
             echo "Timesheet backed up to ${backup_file}"
             ;;
         *)
-            echo-stderr "error: could not backup timesheet"
+            echo-stderr "error: ${exit_code}: could not backup timesheet"
             ;;
     esac
 
@@ -548,7 +546,7 @@ function main() {
     echo "ROWS: `printf "'%s' " "${ROWS[@]}"`" >&3
     echo "FIELDS: `printf "'%s' " "${FIELDS[@]}"`" >&3
     echo "TIMESHEET_FILE: ${TIMESHEET_FILE}" >&3
-    echo "POSITIONAL_ARGS: `printf "'%s' " "${POSITIONAL_ARGS[@]}"`" >&3
+    echo "POSITIONAL_ARGS (${#POSITIONAL_ARGS[@]}): `printf "'%s' " "${POSITIONAL_ARGS[@]}"`" >&3
 
     # Find the subcommand function "_ts_<subcommand>"
     local subcommand_func="_ts_${SUBCOMMAND}"

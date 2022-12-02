@@ -11,10 +11,6 @@ include-source 'shell.sh'
 ## usage functions #############################################################
 ################################################################################
 
-function help-usage() {
-    echo "usage: $(basename $0) [-hmdq] [ref1] [ref2] ... -- file1 [file2] ..."
-}
-
 function help-epilogue() {
     echo "get the md5 hash for file(s) across commits or branches."
 }
@@ -24,26 +20,47 @@ function help-full() {
     help-epilogue
     echo
     cat << EOF
-    -h               display usage
-    --help           display this help message
-    -m/--md5-only    only return the md5 hash
-    -d/--diff        compare the md5 hashes of the files and exit with 0 if they
-                     are the same, 1 otherwise
-    --color          colorize the output (auto, always, never. default: auto)
-    -q/--quiet       don't print anything to stdout
+    -h                 display usage
+    --help             display this help message
+    -m/--md5-only      only return the md5 hash
+    -u/--unique        only return unique hashes
+    -<int>/-n <int>    show the first <int> matching commits. to show all
+                       commits, use '*' or 'all'. default: 1
+    --format <fmt>     replace the default output with the specified git log
+                       format. see 'git log --help' for more information. three
+                       addtional format specifiers are available:
+                          - %fp (filepath)
+                          - %ref (ref)
+                          - %md5 (the md5 hash of the file)
+                       ex: --format "%h %fp %md5"
+    -a/--alternate     use alternating colors for different md5 hashes
+    -A/--no-alternate  don't use alternating colors for different md5 hashes'
+    -c/--color <always|never|auto>
 EOF
 }
 
+function help-usage() {
+    echo "usage: $(basename $0) [-hmuaA] [-<int>/-n <int>] [--format <fmt>] [ref] [filepath]..."
+}
+
+# We have to determine if the script is using any redirections or pipes at the
+# top level rather than in the main function
+([[ ! -t 1 && ! -p /dev/stdout ]] || [[ -p /dev/stdout ]]) && __IS_PIPED=1 || __IS_PIPED=0
+
 function parse-args() {
     # Track whether positional arguments should be treated as files or not
-    local positional_files=0
+    local positional_filepaths=0
 
     # Default values
-    QUIET=0
-    DO_DIFF=0
-    COLOR=auto
-    HASH_ONLY=0
+    DO_ALTERNATE=1
+    DO_UNIQUE=0
+    COLOR=$(git config --get color.ui || echo auto)
+    NUM_COMMITS=1
     GIT_LOG_OPTS=()
+    USE_REL_PATH=1
+    DEFAULT_FORMAT="%md5 %ref %fp"
+    FORMAT="${DEFAULT_FORMAT}"
+    USE_ECHO_FORMATTED=1
 
     # Loop over the arguments
     declare -ga REFS
@@ -59,20 +76,52 @@ function parse-args() {
                 help-full
                 exit 0
                 ;;
-            -q)
-                QUIET=1
-                shift 1
-                ;;
-            -d)
-                DO_DIFF=1
-                shift 1
-                ;;
             -m|--md5-only)
-                HASH_ONLY=1
+                FORMAT="%md5"
                 shift 1
                 ;;
+            -u|--unique)
+                DO_UNIQUE=1
+                shift 1
+                ;;
+            -n)
+                if [[ ${2} =~ ^-?[0-9]+$ ]]; then
+                    NUM_COMMITS=${2}
+                    shift 2
+                elif [[ "${2}" == "all" || "${2}" == "*" ]]; then
+                    NUM_COMMITS="-1"
+                    shift 2
+                else
+                    echo "error: invalid argument for -n/--num-commits: ${2}"
+                    exit 1
+                fi
+                ;;
+            -[0-9]+)
+                NUM_COMMITS=${1:1}
+                shift 1
+                ;;
+            --format)
+                FORMAT=${2}
+                shift 2
+                ;;
+            --format=*)
+                FORMAT=${1:9}
+                shift 1
+                ;;
+            -a | --alternate)
+                DO_ALTERNATE=1
+                shift 1
+                ;;
+            -A | --no-alternate)
+                DO_ALTERNATE=0
+                shift 1
+                ;;
+            -c | --color)
+            	COLOR="${1}"
+            	shift 1
+            	;;
             --)
-                positional_files=1
+                positional_filepaths=1
                 shift 1
                 ;;
             -*)
@@ -80,10 +129,35 @@ function parse-args() {
                 exit 1
                 ;;
             *)
-                if [ ${positional_files} -eq 0 ]; then
-                    REFS+=("${1}")
-                else
+                # For any positional arguments before the '--' argument, try to
+                # determine if they're refs or filepaths. If they're refs, add
+                # them to the REFS array. If they're filepaths, add them to the
+                # FILEPATHS array. If they're neither or ambiguous, exit with
+                # an error.
+                # If the '--' argument has been seen, treat all remaining
+                # positional arguments as filepaths.``
+                if [ "${positional_filepaths}" -eq 1 ]; then
                     FILEPATHS+=("${1}")
+                else
+                    case "$(is-ref-or-file "${1}")" in
+                        ref)
+                            REFS+=("${1}")
+                            target_branches_src="custom"
+                            ;;
+                        file)
+                            FILEPATHS+=("${1}")
+                            ;;
+                        ambiguous)
+                            echo-stderr "error: ambiguous argument ${1}, please use -t or --"
+                            echo-stderr "$(help-usage)"
+                            exit 1
+                            ;;
+                        *)
+                            echo-stderr "error: ${1} does not appear to be a ref or file"
+                            echo-stderr "$(help-usage)"
+                            exit 1
+                            ;;
+                    esac
                 fi
                 shift 1
                 ;;
@@ -95,6 +169,28 @@ function parse-args() {
         REFS+=("HEAD")
     fi
 
+    # If a specific number of commits is requested, replace REFS with the
+    # appropriate number of commits
+    if [ ${NUM_COMMITS} != 1 ]; then
+        local new_refs=()
+        for ref in "${REFS[@]}"; do
+            local commits
+            local commits_arg=""
+            if [[ "${NUM_COMMITS}" == 'all' || "${NUM_COMMITS}" == "*" ]]; then
+                commits_arg=""
+            else
+                commits_arg="-n ${NUM_COMMITS}"
+            fi
+            commits=$(git log "${ref}" --format="%h" -n "${NUM_COMMITS}")
+            if [ ${NUM_COMMITS} = 'all' ]; then
+                new_refs+=(${commits})
+            else
+                new_refs+=($(echo "${commits}" | head -n ${NUM_COMMITS}))
+            fi
+        done
+        REFS=("${new_refs[@]}")
+    fi
+
     # If no files are provided, then check if the ref is a commit. If it is, use
     # the files modified in that commit.
     if [ ${#FILEPATHS[@]} -eq 0 ]; then
@@ -102,13 +198,43 @@ function parse-args() {
             local ref="${REFS[0]}"
             if [ $(get-ref-type "${ref}") == "commit" ]; then
                 IFS=$'\n' FILEPATHS+=($(git log -1 --pretty=format: --name-only "${ref}"))
+                USE_REL_PATH=0
             fi
         fi
     fi
 
-    # Set the positional arguments in the global array
-    set -- ${REFS[@]}
-    set -- ${FILEPATHS[@]}
+    # Determine whether to use echo-formatted or git log to print the output
+    if [ "${FORMAT}" == "${DEFAULT_FORMAT}" ]; then
+        USE_ECHO_FORMATTED=1
+    else
+        # Determine if the format string contains any git log format specifiers
+        local test_format=$(
+            echo "${FORMAT}" \
+                | sed -e 's/%md5//g' -e 's/%fp//g' -e 's/%ref//g'
+        )
+        if [[ "${test_format}" =~ % ]]; then
+            # If it does, use git log
+            USE_ECHO_FORMATTED=0
+        else
+            # If it doesn't, use echo-formatted
+            USE_ECHO_FORMATTED=1
+        fi
+    fi
+
+    ECHO_FORMATTED_WHEN=$(git config --get color.ui || echo auto)
+
+    echo "REFS: $(printf "'%s' " "${REFS[@]}")" >&3
+    echo "FILEPATHS: $(printf "'%s' " "${FILEPATHS[@]}")" >&3
+    echo "NUM_COMMITS: ${NUM_COMMITS}" >&3
+    echo "DO_ALTERNATE: ${DO_ALTERNATE}" >&3
+    echo "DO_UNIQUE: ${DO_UNIQUE}" >&3
+    echo "COLOR: ${COLOR}" >&3
+    echo "__IS_PIPED: ${__IS_PIPED}" >&3
+    echo "USE_REL_PATH: ${USE_REL_PATH}" >&3
+    echo "USE_ECHO_FORMATTED: ${USE_ECHO_FORMATTED}" >&3
+    echo "ECHO_FORMATTED_WHEN: ${ECHO_FORMATTED_WHEN}" >&3
+    echo "GIT_LOG_OPTS: $(printf "'%s' " "${GIT_LOG_OPTS[@]}")" >&3
+    echo "FORMAT: ${FORMAT}" >&3
 }
 
 ## main ########################################################################
@@ -131,17 +257,72 @@ function main() {
 
     local file
     local md5s=()
-    local formats=("g" "r" "b" "p" "c" "gB" "rB" "bB" "pB" "cB" "gU" "rU" "bU" "pU" "cU" "gR" "rR" "bR" "pR" "cR")
+    # local echo_colors=(
+    #     "g" "r" "b" "p" "c"
+    #     "gB" "rB" "bB" "pB" "cB"
+    #     "gU" "rU" "bU" "pU" "cU"
+    #     "gR" "rR" "bR" "pR" "cR"
+    #     "gBU" "rBU" "bBU" "pBU" "cBU"
+    #     "gBR" "rBR" "bBR" "pBR" "cBR"
+    #     "gUR" "rUR" "bUR" "pUR" "cUR"
+    #     "gBUR" "rBUR" "bBUR" "pBUR" "cBUR"
+    # )
+    local echo_colors=(
+        "\033[0;32m" "\033[0;31m" "\033[0;34m" "\033[0;35m" "\033[0;36m"
+        "\033[1;32m" "\033[1;31m" "\033[1;34m" "\033[1;35m" "\033[1;36m"
+        "\033[4;32m" "\033[4;31m" "\033[4;34m" "\033[4;35m" "\033[4;36m"
+        "\033[7;32m" "\033[7;31m" "\033[7;34m" "\033[7;35m" "\033[7;36m"
+        "\033[1;4;32m" "\033[1;4;31m" "\033[1;4;34m" "\033[1;4;35m" "\033[1;4;36m"
+        "\033[1;7;32m" "\033[1;7;31m" "\033[1;7;34m" "\033[1;7;35m" "\033[1;7;36m"
+        "\033[4;7;32m" "\033[4;7;31m" "\033[4;7;34m" "\033[4;7;35m" "\033[4;7;36m"
+        "\033[1;4;7;32m" "\033[1;4;7;31m" "\033[1;4;7;34m" "\033[1;4;7;35m" "\033[1;4;7;36m"
+    )
+    local git_colors=(
+        "green" "red" "yellow" "blue" "magenta" "cyan"
+        
+        "bold green" "bold red" "bold yellow"
+        "bold blue" "bold magenta" "bold cyan" "bold white"
+        
+        "underline green" "underline red" "underline yellow" "underline blue"
+        "underline magenta" "underline cyan" "underline white"
+        
+        "reverse green" "reverse red" "reverse yellow" "reverse blue"
+        "reverse magenta" "reverse cyan" "reverse white"
+        
+        "bold underline green" "bold underline red" "bold underline yellow"
+        "bold underline blue" "bold underline magenta" "bold underline cyan"
+        "bold underline white"
+        
+        "bold reverse green" "bold reverse red" "bold reverse yellow"
+        "bold reverse blue" "bold reverse magenta" "bold reverse cyan"
+        "bold reverse white"
+        
+        "underline reverse green" "underline reverse red"
+        "underline reverse yellow" "underline reverse blue"
+        "underline reverse magenta" "underline reverse cyan"
+        "underline reverse white"
+        
+        "bold underline reverse green" "bold underline reverse red"
+        "bold underline reverse yellow" "bold underline reverse blue"
+        "bold underline reverse magenta" "bold underline reverse cyan"
+        "bold underline reverse white"
+    )
     for filepath in "${FILEPATHS[@]}"; do
         local ref
         for ref in "${REFS[@]}"; do
-            # Get the relative path to the file from the git root
-            local relpath=$(git-relpath "${filepath}")
+            # Get the relative path to the file from the git root if the file
+            # paths were not gathered from a commit
+            local relpath
+            if [ "${USE_REL_PATH}" -eq 1 ]; then
+                relpath=$(git-relpath "${filepath}")
+            else
+                relpath="${filepath}"
+            fi
 
             # Get the file contents at that ref
             local contents=$(git show "${ref}:${relpath}" 2>/dev/null)
 
-            # Use a stupid "00000000000000000000000000000000" hash if the file is empty
+            # Use a silly "00000000000000000000000000000000" hash if the file is empty
             local md5
             if [ -z "${contents}" ]; then
                 md5="00000000000000000000000000000000"
@@ -149,41 +330,77 @@ function main() {
                 md5=$(echo "${contents}" | md5sum - | cut -d' ' -f1)
             fi
 
-            # If we're doing a diff, check if the md5 hash is is already in the
-            # array
+            # If this is a new md5, add it to the list
             if ! in-array "${md5}" "${md5s[@]}"; then
-                # This is a new md5 hash. If --quiet is set, then we don't need
-                # to continue past this point and can simply exit with a 1.
-                if [ ${QUIET} -eq 1 ]; then
-                    exit 1
-                fi
-
                 # Add the md5 hash to the array
                 md5s+=("${md5}")
+            else
+                if [ ${DO_UNIQUE} -eq 1 ]; then
+                    continue
+                fi
             fi
 
-            # Print the md5 hash for the file and ref
-            if [ ${QUIET} -eq 0 ]; then
-                # If printing colorized output, then use the appropriate format
-                if [ ${COLOR} != "never" ]; then
-                    # Get the index of the md5 hash in the array
-                    local md5_index=$(index-of "${md5}" "${md5s[@]}")
-                    # Get the format at that index
-                    local format="${formats[${md5_index}]}"
+            # Get the index of the md5 hash in the array
+            local md5_index=$(index-of "${md5}" "${md5s[@]}")
 
-                    # Print the md5 hash in the appropriate format
-                    if [ ${HASH_ONLY} -eq 1 ]; then
-                        echo-formatted -${format} "${md5}"
-                    else
-                        echo-formatted -${format} "${md5}" -- ${ref} ${filepath}
-                    fi
-                else
-                    if [ ${HASH_ONLY} -eq 1 ]; then
-                        echo "${md5}"
-                    else
-                        echo "${md5}" ${ref} ${filepath}
-                    fi
-                fi
+            # Determine the color to use
+            local color_format
+            local color_reset
+            if [[ "${COLOR}" == "always" || ( "${COLOR}" == "auto" && __IS_PIPED -eq 0 ) ]]; then
+	            if [ ${USE_ECHO_FORMATTED} -eq 1 ]; then
+	                if [ ${DO_ALTERNATE} -eq 1 ]; then
+	                    color_format="${echo_colors[${md5_index}]}"
+	                else
+	                    color_format="${echo_colors[0]}"
+	                fi
+	                color_reset="\033[0m"
+	            else
+	                if [ ${DO_ALTERNATE} -eq 1 ]; then
+	                    color_format="%C(${git_colors[${md5_index}]})"
+	                else
+	                    color_format="%C(${git_colors[0]})"
+	                fi
+	                color_reset="%C(reset)"
+	            fi
+	        fi
+
+            local format=$(
+                echo "${FORMAT}" \
+                    | awk \
+                        -v md5="${md5}" \
+                        -v fp="${relpath}" \
+                        -v ref="${ref}" \
+                        -v color="${color_format}" \
+                        -v reset="${color_reset}" '
+                            {
+                                # Replace `"%md5"` with `color md5 reset`
+                                gsub(/%md5/, color md5 reset);
+                                # Replace `"%fp"` with `fp`
+                                gsub(/%fp/, fp);
+                                # Replace `"%ref"` with `ref`
+                                gsub(/%ref/, ref);
+                                # Print the result
+                                print;
+                            }
+                    '
+            )
+
+            echo "md5: ${md5}" >&3
+            echo "filepath: ${filepath}" >&3
+            echo "relpath: ${relpath}" >&3
+            echo "color_format: ${color_format}" >&3
+            echo "color_reset: ${color_reset}" >&3
+            echo "format: ${format}" >&3
+
+            # Then print the formatted line
+            if [ "${USE_ECHO_FORMATTED}" -eq 1 ]; then
+                # echo "<echoing data='${format}'>" >&3
+                # export FMT_TEST="${format}"
+                # ECHO_FORMATTED=${ECHO_FORMATTED_WHEN} echo-formatted $(echo ${format} | xargs)
+                # echo "</echoing>" >&3
+                printf "%s\n" "${format}"
+            else
+                git -c color.ui="${COLOR}" log -1 "${ref}" --format="${format}"
             fi
         done
     done
@@ -192,4 +409,11 @@ function main() {
 ## run #########################################################################
 ################################################################################
 
-[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
+[ "${BASH_SOURCE[0]}" == "${0}" ] && (
+    if [ -n "${DEBUG}" ]; then
+        exec 3>&2
+        main "${@}"
+    else
+        main "${@}" 3>/dev/null
+    fi
+)

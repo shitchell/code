@@ -1,0 +1,222 @@
+#!/bin/bash
+#
+# Adds the ability to create a `.ls` file in any directory which, when `ls` is
+# used in that directory, defines options to be passed to the command
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo "ls with '.ls' file support"
+}
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [ls options] [filepath1] [filepath2]..."
+}
+
+function parse-args() {
+    # Once a "--" has been used, all arguments are treated as filepaths
+    local no_opts=0
+
+    # Track positional arguments (files) and options to pass to `ls`
+    declare -ga LS_OPTS
+    declare -ga FILEPATHS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            -h | --help)
+                ls --help
+                exit 0
+                ;;
+            -*)
+                if [[ ${no_opts} -eq 0 ]]; then
+                    LS_OPTS+=("${1}")
+                    shift 1
+                else
+                    FILEPATHS+=("${1}")
+                    shift 1
+                fi
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # Determine if there are any extra aliased options to pass to `ls`
+    local alias_opts
+    IFS=" " alias_opts=( $(type -a ls) )
+
+    echo "FILEPATHS: $(printf "%q " "${FILEPATHS[@]}")" >&3
+    echo "LS_OPTS: $(printf "%q " "${LS_OPTS[@]}")" >&3
+    echo "alias_opts: $(printf "%q " "${alias_opts[@]}")" >&3
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    # Parse the arguments
+    parse-args "${@}"
+
+    # If there are no filepaths, use the current directory
+    if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
+        FILEPATHS+=(".")
+    fi
+
+    # Loop over the filepaths
+    local is_first=1
+    for filepath in "${FILEPATHS[@]}"; do
+        # If this is not the first filepath, add a newline
+        [[ ${is_first} -eq 0 ]] && echo || is_first=0
+
+        # If the filepath is a directory, check for a .ls file, else if it is a
+        # file, check for a .ls file in its parent directory
+        local ls_file
+        local ls_file_opts
+        if [[ -d "${filepath}" ]]; then
+            ls_file="${filepath}/.ls"
+        elif [[ -f "${filepath}" ]]; then
+            ls_file="$(dirname "${filepath}")/.ls"
+        fi
+        if [[ -f "${ls_file}" ]]; then
+            ls_file_opts=$(cat "${ls_file}")
+        fi
+
+        # Remove any comments and blank lines. Then remove any '^ls\b' from the
+        # beginning of each line
+        ls_file_opts=$(sed -e 's/#.*$//' -e '/^$/d' -e 's/^ls\b//' <<< "${ls_file_opts}")
+
+        # Run `ls` with the options from the .ls file and the options from the
+        # command line
+        /bin/ls ${ls_file_opts} "${LS_OPTS[@]}" "${filepath}"
+   done
+}
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && (
+    if [ -n "${DEBUG}" ]; then
+        exec 3>&2
+        main "${@}"
+    else
+        main "${@}" 3>/dev/null
+    fi
+)
+
+
+## standalone function #########################################################
+################################################################################
+
+function ls() {
+    local help_epilogue="ls with per directory '.ls' options support"
+    local help_usage="usage: ls [-h] [ls options] [filepath1] [filepath2]..."
+
+    # Once a "--" has been used, all arguments are treated as filepaths
+    local no_opts=0
+
+    # Track how many directories have been found
+    local num_dirs=0
+
+    # Track positional arguments (files) and options to pass to `ls`
+    local ls_opts=()
+    local filepaths=()
+
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                echo "${help_usage}"
+                echo "${help_epilogue}"
+                return 0
+                ;;
+            --help)
+                /bin/ls --help
+                return 0
+                ;;
+            -*)
+                if [[ ${no_opts} -eq 0 ]]; then
+                    ls_opts+=("${1}")
+                    shift 1
+                else
+                    filepaths+=("${1}")
+                    if [[ -d "${1}" ]]; then
+                        let num_dirs++
+                    fi
+                    shift 1
+                fi
+                ;;
+            *)
+                filepaths+=("${1}")
+                if [[ -d "${1}" ]]; then
+                    let num_dirs++
+                fi
+                shift 1
+                ;;
+        esac
+    done
+
+    # Determine if there are any extra aliased options to pass to `ls`
+    local alias_opts
+    IFS=" " alias_opts=( $(type -a ls | grep -oP "(?<=aliased to \`ls )[^']+") )
+    ls_opts+=("${alias_opts[@]}")
+
+    if [[ -n "${DEBUG}" ]]; then
+        echo "FILEPATHS:  $(printf "%q " "${filepaths[@]}")" >&2
+        echo "ls_opts:    $(printf "%q " "${ls_opts[@]}")" >&2
+        echo "alias_opts: $(printf "%q " "${alias_opts[@]}")" >&2
+    fi
+
+    # If there are no filepaths, use the current directory
+    if [[ ${#filepaths[@]} -eq 0 ]]; then
+        filepaths+=(".")
+    fi
+
+    # Loop over the filepaths
+    local is_first=1
+    for filepath in "${filepaths[@]}"; do
+        # If this is not the first filepath, add a newline
+        [[ ${is_first} -eq 0 ]] && echo || is_first=0
+
+        # If this is a directory, and there are multiple directories, print the
+        # directory name and a colon
+        local is_dir
+        [[ -d "${filepath}" ]] && is_dir=1 || is_dir=0
+        if [[ ${is_dir} -eq 1 && ${num_dirs} -gt 1 ]]; then
+            printf "%s:\n" "${filepath}"
+        fi
+
+        # If the filepath is a directory, check for a .ls file, else if it is a
+        # file, check for a .ls file in its parent directory
+        local ls_file
+        local ls_file_opts
+        if [[ ${is_dir} -eq 1 ]]; then
+            ls_file="${filepath}/.ls"
+        elif [[ -f "${filepath}" ]]; then
+            ls_file="$(dirname "${filepath}")/.ls"
+        fi
+        [[ -n "${DEBUG}" ]] && echo "ls_file: ${ls_file}" >&2
+        if [[ -f "${ls_file}" ]]; then
+            [[ -n "${DEBUG}" ]] && echo "Found .ls file: ${ls_file}" >&2
+            ls_file_opts=$(
+                cat "${ls_file}" 2>/dev/null \
+                    | sed -e 's/#.*$//' -e '/^$/d' -e 's/^ls\b//' \
+                    | tr '\n' ' ' \
+                    | xargs
+            )
+        else
+            ls_file_opts=""
+        fi
+        [[ -n "${DEBUG}" ]] && echo "ls_file_opts: ${ls_file_opts}" >&2
+
+        # Run `ls` with the options from the .ls file and the options from the
+        # command line
+        /bin/ls "${ls_opts[@]}" ${ls_file_opts} "${filepath}"
+    done
+}

@@ -23,11 +23,12 @@ class TabularFormat(_Enum):
     """
 
     CSV = 1
-    SQLITE = 2
-    XML = 3
-    XLSX = 4
-    HTML = 5
-    JSON = 6
+    TSV = 2
+    SQLITE = 3
+    XML = 4
+    XLSX = 5
+    HTML = 6
+    JSON = 7
 
 
 class TableFile:
@@ -59,7 +60,7 @@ class TableFile:
         column_names: list[str] = [],
         data: dict | _DataFrame = None,
         detect_types: bool = True,
-        na_values: list[str] = ["nan", ""],
+        na_values: list[str] = ["nan", "nat", "NaN", "NaT"],
         con: _Connection = None,
     ) -> None:
         """
@@ -93,13 +94,13 @@ class TableFile:
         self.format = format
         self.name = name
         self._default_columns = column_names
+        self.na_values = na_values
         self.load(name=name)
         if data is not None:
             self.data = self._to_df(data)
             self.add(data)
         if detect_types:
             self.set_column_types()
-        self.na_values = na_values
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.path}, type={self.format.name})"
@@ -172,6 +173,8 @@ class TableFile:
             return self._format
         if self.path.suffix == ".csv":
             return TabularFormat.CSV
+        elif self.path.suffix == ".tsv":
+            return TabularFormat.TSV
         elif self.path.suffix in [".sql", ".sqlite", ".sqlite3", "db"]:
             return TabularFormat.SQLITE
         elif self.path.suffix == ".xml":
@@ -293,7 +296,7 @@ class TableFile:
                     value_type = bool
                 elif _re.match(r"^\d{4}-\d{2}-\d{2}$", value):
                     value_type = _datetime.date
-                elif _re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", value):
+                elif _re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$", value):
                     value_type = _datetime.datetime
                 elif _re.match(r"^\d{2}:\d{2}:\d{2}$", value):
                     value_type = _datetime.timedelta
@@ -419,6 +422,8 @@ class TableFile:
 
         if format == TabularFormat.CSV:
             self.data = _pd.read_csv(filepath)
+        elif format == TabularFormat.TSV:
+            self.data = _pd.read_csv(filepath, sep="\t")
         elif format == TabularFormat.SQLITE:
             with _sqlite3.connect(filepath) as conn:
                 # A name is required to load a table from a sqlite database

@@ -54,6 +54,7 @@ function echo-formatted() {
     local has_printed_anything=0
     while [[ ${#} -gt 0 ]]; do
         local arg="${1}"
+
         shift 1
         # if the argument starts with a dash, use it as the color code
         if [ "${arg:0:1}" = "-" ]; then

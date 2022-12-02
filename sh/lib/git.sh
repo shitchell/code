@@ -12,7 +12,7 @@ function git-root() {
 function git-relpath() {
     local filepath="${1}"
     local git_root=$(git-root)
-    local rel_path=$(realpath "${filepath}" --relative-to="${git_root}")
+    local rel_path=$(realpath -m "${filepath}" --relative-to="${git_root}")
     echo "${rel_path}"
 }
 

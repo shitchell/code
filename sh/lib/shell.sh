@@ -29,12 +29,16 @@ function functionname() {
 # returns 0 if the item is in the array, 1 otherwise
 function in-array() {
     local item=${1}
-    local array=${2}
-    local e
-    for e in ${array[@]}; do
-        if [ "${e}" = "${item}" ]; then
-            return 0
-        fi
+    shift
+
+    local arg
+    local subarg
+    for arg in "${@}"; do
+        for subarg in ${arg}; do
+            if [ "${subarg}" == "${item}" ]; then
+                return 0
+            fi
+        done
     done
     return 1
 }

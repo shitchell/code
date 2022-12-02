@@ -11,18 +11,23 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-# if no branches provided, pull all branches that exist on the remote
+# if no branches are specified, pull all branches that exist both locally and on
+# the remote
 if [ -z "$1" ]; then
-	branches="$(comm -12 <(git branch | sed 's|* |  |' | sort) <(git branch -r | sed 's|origin/||' | sort) | sed -E 's/^ +//')"
+	readarray -t branches < <(
+		comm -12 \
+			<(git branch | sed 's|* |  |' | sort) \
+			<(git branch -r | sed 's|origin/||' | sort) | sed -E 's/^ +//'
+	)
 else
-	branches="$@"
+	branches=( "${@}" )
 fi
 
 # we have to use a different command for the current branch
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 
-for branch in ${branches}; do
-	if [ "$branch" = "$current_branch" ]; then
+for branch in "${branches[@]}"; do
+	if [ "${branch}" = "${current_branch}" ]; then
 		echo -e "\e[32mgit pull\e[0m"
 		git pull
 	else

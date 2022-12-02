@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+
+import argparse
+import keyring
+import textwrap
+
+from getpass import getpass
+from pprint import pformat
+from trinoor.jira import JIRA
+from jira import resources
+
+email: str = "maurice.moss@trinoor.com"
+keyinfo: str = ("system", "jira-mmoss")
+
+def login() -> JIRA:
+    jira: JIRA = None
+    password: str
+    attempts: int = 3
+    logged_in: bool = False
+    store_password: bool = False
+
+    # Get the password
+    password = keyring.get_password(*keyinfo)
+    if not password:
+        password = getpass("Password: ")
+        store_password = True
+
+    while attempts and not logged_in:
+        try:
+            jira = JIRA(email, password)
+        except Exception as e:
+            print(f"Failed to login: {e}")
+            password = getpass(f"Please enter the password for '{email}': ")
+            store_password = True
+        else:
+            logged_in = True
+            if store_password:
+                keyring.set_password(*keyinfo, password)
+    
+    if not jira:
+        raise Exception(f"Failed to authenticate '{email}'")
+
+    return jira
+
+def normalize_value(value):
+    valuestr = str(value)
+    if isinstance(value, list):
+        valuelist = []
+        for subvalue in value:
+            valuelist.append(normalize_value(subvalue))
+        value = pformat(valuelist)
+    elif isinstance(value, dict):
+        valuedict = {}
+        for k, v in value.items():
+            valuedict[k] = normalize_value(v)
+        value = pformat(valuedict)
+    elif isinstance(value, resources.Watchers):
+        value = value.watchCount
+    elif isinstance(value, resources.TimeTracking):
+        value = value.raw
+    elif isinstance(value, resources.Comment):
+        value = f"{value.author} ({value.created}): {value.body}"
+    elif isinstance(value, resources.PropertyHolder):
+        value = normalize_value(value.__dict__)
+    elif isinstance(value, resources.UnknownResource):
+        if hasattr(value, "comments"):
+            value = normalize_value(value.comments)
+    elif isinstance(value, resources.Resource):
+        value = valuestr
+    elif not isinstance(value, (int, float, str, bool)):
+        value = valuestr
+    elif isinstance(value, str):
+        value = value.replace(r"\\ ", "\n")
+        if value in ("NA", "N/A", "NULL"):
+            value = None
+    return value
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="jira pycli")
+    parser.add_argument("issues", nargs="+",
+                        help="issues to look up")
+    # p_continue.add_argument("-c", "--continue", dest="cont", action="store_true",
+                        # help="continue displaying the time since the timestring after it passes")
+    # p_continue.add_argument("-s", "--stop", action="store_true",
+                        # help="stop displaying the time until the timestring after it passes")
+    # parser.add_argument("-d", "--delay", type=float, default=1,
+                        # help="time between updates (in seconds)")
+    # parser.add_argument("-n", "--max-intervals", type=int, default=0,
+                        # help="stop counting down after n intervals")
+    # parser.add_argument("-p", "--precision", type=int, default=0,
+                        # help="round the smallest unit to this many decimal places")
+    # p_output.add_argument("-q", "--quiet", action="store_true",
+                        # help="don't print any output")
+    # p_output.add_argument("-r", "--readable", action="store_true",
+                        # help="display time in human readable format")
+    # p_output.add_argument("-T", "--tenths", action="store_true",
+                        # help="display time in seconds including tenths of a second")
+    # p_output.add_argument("-S", "--seconds", action="store_true",
+                        # help="display time in seconds")
+    # p_output.add_argument("-H", "--hours", action="store_true",
+                        # help="display time in hours")
+    # p_output.add_argument("-D", "--days", action="store_true",
+                        # help="display time in days")
+    # p_output.add_argument("-W", "--weeks", action="store_true",
+                        # help="display time in weeks")
+    # p_output.add_argument("-M", "--months", action="store_true",
+                        # help="display time in months")
+    # p_output.add_argument("-Y", "--years", action="store_true",
+                        # help="display time in years")
+    args = parser.parse_args()
+    
+    # Log in
+    jira: JIRA = login()
+    
+    for issue_key in args.issues:
+        issue = jira.issue(issue_key)
+        print(issue.key)
+        print("-"*10)
+        # Get all fields in the issue that have values
+        fields: dict[str, object] = {}
+        for field in issue.raw['fields']:
+            value = getattr(issue.fields, field)
+            if field.startswith("customfield_"):
+                field = jira.get_custom_field_name(field)
+            else:
+                field = field.capitalize()
+            if value:
+                value = normalize_value(value)
+                fields[field] = value
+                if isinstance(value, str) and "\n" in value:
+                    lines = []
+                    valuelines = value.splitlines()
+                    lines.append(valuelines[0])
+                    for line in valuelines[1:]:
+                        lines.append(" "*21 + line)
+                    value = "\n".join(lines)
+                print(f"{field + ':':<20}", value)
+            
+if __name__ == "__main__":
+    main()
