@@ -4,9 +4,7 @@
 # filepaths are provided and the ref is a commit, the files modified in that
 # commit will be used.
 #
-# TODO: checkout files to a temp directory and use that to get the md5 hash.
-#       using git show to get the file contents is not reliable because it
-#       adds a newline to the end of the file if it doesn't already have one.
+# TODO: use `git cat-file` to get the exact file contents sans any extra newline
 
 include-source 'echo.sh'
 include-source 'git.sh'
