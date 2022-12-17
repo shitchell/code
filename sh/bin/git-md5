@@ -33,8 +33,8 @@ function help-full() {
                        addtional format specifiers are available:
                           - %fp (filepath)
                           - %ref (ref)
-                          - %md5 (the md5 hash of the file)
-                       ex: --format "%h %fp %md5"
+                          - %MD5 (the md5 hash of the file)
+                       ex: --format "%h %fp %MD5"
     -a/--alternate     use alternating colors for different md5 hashes
     -A/--no-alternate  don't use alternating colors for different md5 hashes'
     -c/--color <always|never|auto>
@@ -50,6 +50,8 @@ function help-usage() {
 ([[ ! -t 1 && ! -p /dev/stdout ]] || [[ -p /dev/stdout ]]) && __IS_PIPED=1 || __IS_PIPED=0
 
 function parse-args() {
+    echo "parse-args($(printf "'%s' " "${@}" | sed 's/.$//'))" >&3
+
     # Track whether positional arguments should be treated as files or not
     local positional_filepaths=0
 
@@ -60,7 +62,7 @@ function parse-args() {
     NUM_COMMITS=1
     GIT_LOG_OPTS=()
     USE_REL_PATH=1
-    DEFAULT_FORMAT="%md5 %ref %fp"
+    DEFAULT_FORMAT="%MD5 %ref %fp"
     FORMAT="${DEFAULT_FORMAT}"
     USE_ECHO_FORMATTED=1
 
@@ -68,6 +70,7 @@ function parse-args() {
     declare -ga REFS
     declare -ga FILEPATHS
     while [[ ${#} -gt 0 ]]; do
+        echo "parse-args: ${1}" >&3
         case ${1} in
             # -h)
             #     help-usage
@@ -79,7 +82,7 @@ function parse-args() {
                 exit 0
                 ;;
             -m|--md5-only)
-                FORMAT="%md5"
+                FORMAT="%MD5"
                 shift 1
                 ;;
             -u|--unique)
@@ -88,7 +91,7 @@ function parse-args() {
                 ;;
             -n)
                 if [[ ${2} =~ ^-?[0-9]+$ ]]; then
-                    NUM_COMMITS=${2}
+                    NUM_COMMITS="${2}"
                     shift 2
                 elif [[ "${2}" == "all" || "${2}" == "*" ]]; then
                     NUM_COMMITS="-1"
@@ -119,16 +122,16 @@ function parse-args() {
                 shift 1
                 ;;
             -c | --color)
-            	COLOR="${1}"
-            	shift 1
-            	;;
+                COLOR="${2}"
+                shift 2
+                ;;
             --)
                 positional_filepaths=1
                 shift 1
                 ;;
             -*)
                 GIT_LOG_OPTS+=("${1}")
-                exit 1
+                shift 1
                 ;;
             *)
                 # For any positional arguments before the '--' argument, try to
@@ -195,6 +198,7 @@ function parse-args() {
 
     # If no files are provided, then check if the ref is a commit. If it is, use
     # the files modified in that commit.
+    echo "checking for files..." >&3
     if [ ${#FILEPATHS[@]} -eq 0 ]; then
         if [ ${#REFS[@]} -eq 1 ]; then
             local ref="${REFS[0]}"
@@ -206,13 +210,14 @@ function parse-args() {
     fi
 
     # Determine whether to use echo-formatted or git log to print the output
+    echo "determining format handler..." >&3
     if [ "${FORMAT}" == "${DEFAULT_FORMAT}" ]; then
         USE_ECHO_FORMATTED=1
     else
         # Determine if the format string contains any git log format specifiers
         local test_format=$(
             echo "${FORMAT}" \
-                | sed -e 's/%md5//g' -e 's/%fp//g' -e 's/%ref//g'
+                | sed -e 's/%MD5//g' -e 's/%fp//g' -e 's/%ref//g'
         )
         if [[ "${test_format}" =~ % ]]; then
             # If it does, use git log
@@ -239,10 +244,32 @@ function parse-args() {
     echo "FORMAT: ${FORMAT}" >&3
 }
 
+
+## helpful functions ###########################################################
+################################################################################
+
+function get-equals-or-space-arg() {
+    # get the argument to an option that can be specified with either a space or
+    # an equals sign
+    # e.g. --option=arg or --option arg
+    # usage: get-equals-or-space-arg "${@}"
+    local arg="${1}"
+    local maybe_arg="${2}"
+    if [[ "${arg}" =~ = ]]; then
+        echo "${arg}" | cut -d '=' -f 2-
+        return 1
+    else
+        echo "${maybe_arg}"
+        return 2
+    fi
+}
+
+
 ## main ########################################################################
 ################################################################################
 
 function main() {
+    echo "main($(printf "'%s' " "${@}" | sed 's/.$//'))" >&3
     parse-args "${@}"
 
     # If no files were specified, show the help
@@ -375,8 +402,8 @@ function main() {
                         -v color="${color_format}" \
                         -v reset="${color_reset}" '
                             {
-                                # Replace `"%md5"` with `color md5 reset`
-                                gsub(/%md5/, color md5 reset);
+                                # Replace `"%MD5"` with `color md5 reset`
+                                gsub(/%MD5/, color md5 reset);
                                 # Replace `"%fp"` with `fp`
                                 gsub(/%fp/, fp);
                                 # Replace `"%ref"` with `ref`
@@ -402,6 +429,7 @@ function main() {
                 # echo "</echoing>" >&3
                 printf "%s\n" "${format}"
             else
+                echo "git -c color.ui='${COLOR}' log -1 '${ref}' --format='${format}'" >&3
                 git -c color.ui="${COLOR}" log -1 "${ref}" --format="${format}"
             fi
         done
