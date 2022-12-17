@@ -411,7 +411,7 @@ function main() {
                                 # Print the result
                                 print;
                             }
-                    '
+                        '
             )
 
             echo "md5: ${md5}" >&3
