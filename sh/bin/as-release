@@ -1,0 +1,998 @@
+#!/usr/bin/env bash
+#
+# Promote files from one repo to another based on Customization ID or filepath
+
+## settings ####################################################################
+################################################################################
+
+function setup() {
+    CUSTOMIZATION_PATTERN="AS9-CUS[A-Z]*-[A-Z]{,5}-[0-9]{4}|INC[0-9]{12}"
+    SOURCE_COMMIT_PATTERN="Cherry-picking for {{CUST}}"
+    DEST_COMMIT_PATTERN="{{CUST}} Release"
+    FILEPATHS_PREVIEW_COUNT=15  # show this many files from the list before copying
+    setup-colors
+}
+
+function setup-colors() {
+    C_BLACK="\e[30m"
+    C_RED="\e[31m"
+    C_GREEN="\e[32m"
+    C_YELLOW="\e[33m"
+    C_BLUE="\e[34m"
+    C_MAGENTA="\e[35m"
+    C_CYAN="\e[36m"
+    C_WHITE="\e[37m"
+    S_RESET="\e[0m"
+    S_BOLD="\e[1m"
+    S_DIM="\e[2m"
+    S_UNDERLINE="\e[4m"
+    S_BLINK="\e[5m"
+    S_REVERSE="\e[7m"
+    S_HIDDEN="\e[8m"
+    S_STRIKETHROUGH="\e[9m"
+    S_DEFAULT="\e[10m"
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo "promote files from one repo to another"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "If a source is not specified, then the current directory is used. A"
+    echo "destination must be specified either as the first argument or with"
+    echo "the -d/--dest option."
+    echo
+    echo "At least one source of filepaths must be specified, either a"
+    echo "customization, filepath, file list, or directory."
+    echo
+    echo "General options:"
+    cat << EOF
+    -h                    display usage
+    --help                display this help message
+    -c / --cust <customization>
+                          search the left repo for files with this customization.
+                          can be specified multiple times. if --commit is
+                          specified, then each customization will be committed
+                          to the destination separately.
+    -P / --cust-pattern <extended regex>
+                          use this regex to match customizations. defaults to:
+                          $CUSTOMIZATION_PATTERN
+    -f / --file <path>    copy file at <path> from the source to the destination
+                          repo
+    -F / --file-list <path>
+                          copy files listed in <path> from the source to the
+                          destination repo
+    -d / --dir <path>     copy all files in <path> from the source to the
+                          destination repo
+EOF
+
+    echo "Git options:"
+    cat << EOF
+    -s / --src <path>     path to the source repo
+    -b / --src-branch <branch>
+                          branch to use in the source repo
+    -d / --dest <path>    path to the destination repo
+    -B / --dest-branch <branch>
+                          branch to use in the destination repo
+    --clean               remove uncommitted and untracked changes from the
+                          source and destination repos before copying
+    --no-clean            do not remove uncommitted and untracked changes from
+                          the source and destination repos before copying
+    --pull                pull the latest changes from the source repo before
+                          copying
+    --no-pull             do not pull the latest changes from the source repo
+    --since <date>        only copy files committed after <date>
+    --until <date>        only copy files committed before <date>
+    --before <date>       only copy files committed before <date>
+    --after <date>        only copy files committed after <date>
+    -n / --num <num>      only copy the first <num> release commits
+    -l / --logopt <arg>   pass <arg> to the git log command used to search the
+                          source repo for customizations
+    --commit              commit the changes to the destination repo. will
+                          perform a pull prior to committing
+    --no-commit           do not commit the changes to the destination repo
+    -C <customization>    when committing to the destination, use this as the
+                          customization ID in the commit message
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [options] [source] destination [customization|filepath|directory] ..."
+}
+
+usage() {
+	echo "usage: $(basename "$0") <trinoor repo> <opg repo> [file list]"
+}
+
+function parse-args() {
+    # Default values
+    CUSTOMIZATIONS=()
+    FILEPATHS=()
+    FILELISTS=()
+    DIRPATHS=()
+    SOURCE_REPO="./"
+    SOURCE_REPO_NAME=""
+    SOURCE_BRANCH=""
+    SOURCE_SPECIFIED=0  # to track if the source was specified or the default
+    DEST_REPO=""
+    DEST_REPO_NAME=""
+    DEST_BRANCH=""
+    DEST_CUSTOMIZATION=""
+    COMMIT_COUNT_LIMIT=""
+    DO_COMMIT=0
+    DO_CLEAN=1
+    DO_PULL=1
+    SINCE=""
+    UNTIL=""
+    GIT_LOG_OPTS=()
+
+    # Loop over the arguments
+    declare -a POSITIONAL_ARGS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -c | --cust)
+                CUSTOMIZATIONS+=("${2}")
+                shift 2
+                ;;
+            -f | --file)
+                FILEPATHS+=("${2}")
+                shift 2
+                ;;
+            -F | --file-list)
+                FILELISTS+=("${2}")
+                shift 2
+                ;;
+            -d | --dir)
+                DIRPATHS+=("${2}")
+                shift 2
+                ;;
+            -s | --src)
+                SOURCE_REPO=${2}
+                SOURCE_SPECIFIED=1
+                shift 2
+                ;;
+            -b | --src-branch)
+                SOURCE_BRANCH=${2}
+                shift 2
+                ;;
+            -d | --dest)
+                DEST_REPO=${2}
+                shift 2
+                ;;
+            -B | --dest-branch)
+                DEST_BRANCH=${2}
+                shift 2
+                ;;
+            --clean)
+                DO_CLEAN=1
+                shift 1
+                ;;
+            --no-clean)
+                DO_CLEAN=0
+                shift 1
+                ;;
+            --pull)
+                DO_PULL=1
+                shift 1
+                ;;
+            --no-pull)
+                DO_PULL=0
+                shift 1
+                ;;
+            --since | --until)
+                local timestring
+                if [[ "${2}" =~ ^[0-9]+$ ]]; then
+                    # if the argument is a number, assume it's a unix timestamp
+                    timestring="@${2}"
+                else
+                    timestring="${2}"
+                fi
+                SINCE=$(date -d "${timestring}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+                if [ $? -ne 0 ]; then
+                    echo "error: invalid date '${2}'" >&2
+                    help-usage >&2
+                    exit 1
+                fi
+                shift 2
+                ;;
+            --before | --after)
+                UNTIL=$(date -d "${2}" "+%Y-%m-%d %H:%M:%S")
+                if [ $? -ne 0 ]; then
+                    echo "error: invalid date '${2}'" >&2
+                    help-usage >&2
+                    exit 1
+                fi
+                shift 2
+                ;;
+            -n | --num)
+                COMMIT_COUNT_LIMIT=${2}
+                shift 2
+                ;;
+            -l | --logopt)
+                GIT_LOG_OPTS+=("${2}")
+                shift 2
+                ;;
+            --commit)
+                DO_COMMIT=1
+                DO_PULL=1
+                shift 1
+                ;;
+            --no-commit)
+                DO_COMMIT=0
+                shift 1
+                ;;
+            -C)
+                DEST_CUSTOMIZATION="${2}"
+                shift 2
+                ;;
+            -*)
+                echo "error: unknown option ${1}" >&2
+                help-usage >&2
+                exit 1
+                ;;
+            *)
+                POSITIONAL_ARGS+=("${1}")
+                # Determine if the argument is a filepath, repo, or customization
+                case $(arg-type "${1}") in
+                    customization)
+                        CUSTOMIZATIONS+=("${1}")
+                        ;;
+                    repo)
+                        # If a single repo is specified, it is the destination.
+                        # If 2 repos are specified, the first is the source,
+                        #   and the second is the destination.
+                        # If 3+ repos are specified, error out.
+                        if [[ -z "${DEST_REPO}" ]]; then
+                            # this is the first repo specified
+                            DEST_REPO="${1}"
+                        elif [[ -n "${DEST_REPO}" && ${SOURCE_SPECIFIED} -eq 0 ]]; then
+                            # this is the second repo specified. since two have been
+                            # specified, but we already assigned the first as the destination,
+                            # we need  to reassign the first as the source and set this one
+                            # as the destination
+                            SOURCE_REPO="${DEST_REPO}"
+                            DEST_REPO="${1}"
+                            SOURCE_SPECIFIED=1
+                        elif [[ -n "${DEST_REPO}" && ${SOURCE_SPECIFIED} -eq 1 ]]; then
+                            # 3 repos?? nah bruh
+                            echo "error: too many repos specified" >&2
+                            help-usage >&2
+                            exit 1
+                        else
+                            echo "error: unknown error at '${2}'" >&2
+                            exit 1
+                        fi
+                        ;;
+                    filepath)
+                        FILEPATHS+=("${1}")
+                        ;;
+                    directory)
+                        DIRPATHS+=("${1}")
+                        ;;
+                    *)
+                        echo "error: unknown argument ${1}" >&2
+                        help-usage >&2
+                        exit 1
+                        ;;
+                esac
+                shift 1
+                ;;
+        esac
+    done
+
+    # Ensure a destination was provided
+    if [[ -z "${DEST_REPO}" ]]; then
+        echo "error: no destination repo specified" >&2
+        help-usage >&2
+        exit 1
+    fi
+
+    # Add the --since / --until options to the git log command
+    if [[ -n "${SINCE}" ]]; then
+        GIT_LOG_OPTS+=("--since=${SINCE}")
+    fi
+    if [[ -n "${UNTIL}" ]]; then
+        GIT_LOG_OPTS+=("--until=${UNTIL}")
+    fi
+
+    # Add the --num option to the git log command
+    if [[ -n "${COMMIT_COUNT_LIMIT}" ]]; then
+        GIT_LOG_OPTS+=("-n" "${COMMIT_COUNT_LIMIT}")
+    fi
+
+    # Paths provided on the command line will probably be relative to the cwd,
+    # so let's make them relative to the source repo
+    for i in "${!FILEPATHS[@]}"; do
+        local relpath=$(realpath --relative-to="${SOURCE_REPO}" "${FILEPATHS[$i]}" 2>/dev/null)
+        if [[ $? -eq 0 ]]; then
+            FILEPATHS[$i]="${relpath}"
+        fi
+    done
+
+    # Add each line of each file list to the filepaths array
+    for filelist in "${FILELISTS[@]}"; do
+        printf "* loading file list ${C_BLUE}${S_BOLD}${filelist}${S_RESET} ... "
+        local filelist_count=0
+        while read -r filepath; do
+            # filepaths in file lists are assumed to be relative to the source already
+            FILEPATHS+=("${filepath}")
+            let filelist_count++
+        done < "${filelist}"
+        echo -e "${C_GREEN}done${S_RESET} ${C_MAGENTA}(${filelist_count} files)${S_RESET}"
+    done
+
+    # Add each file in each directory to the filepaths array
+    for dirpath in "${DIRPATHS[@]}"; do
+        printf "* loading directory ${C_BLUE}${S_BOLD}${dirpath}${S_RESET} ... "
+        local dirpath_count=0
+        while read -r filepath; do
+            local relpath=$(realpath --relative-to="${SOURCE_REPO}" "${filepath}" 2>/dev/null)
+            FILEPATHS+=("${relpath}")
+            let dirpath_count++
+        done < <(find "${dirpath}" -type f)
+        echo -e "${C_GREEN}done${S_RESET} ${C_MAGENTA}(${dirpath_count} files)${S_RESET}"
+    done
+
+    # Ensure that at least one file source was specified
+    if [[
+        ${#FILEPATHS[@]} -eq 0
+        && ${#FILELISTS[@]} -eq 0
+        && ${#DIRPATHS[@]} -eq 0
+        && ${#CUSTOMIZATIONS[@]} -eq 0
+    ]]; then
+        echo "error: no file sources specified" >&2
+        help-usage >&2
+        exit 1
+    fi
+
+    # Set the repo names
+    SOURCE_REPO_NAME=$(basename "$(realpath "${SOURCE_REPO}")")
+    DEST_REPO_NAME=$(basename "$(realpath "${DEST_REPO}")")
+
+    debug "CUSTOMIZATION_PATTERN: ${CUSTOMIZATION_PATTERN}"
+    debug "SOURCE_COMMIT_PATTERN: ${SOURCE_COMMIT_PATTERN}"
+    debug "DEST_COMMIT_PATTERN: ${DEST_COMMIT_PATTERN}"
+    debug "CUSTOMIZATIONS: $(printf "%q " "${CUSTOMIZATIONS[@]}")"
+    debug "FILEPATHS: $(printf "%q " "${FILEPATHS[@]}")"
+    debug "FILELISTS: $(printf "%q " "${FILELISTS[@]}")"
+    debug "DIRPATHS: $(printf "%q " "${DIRPATHS[@]}")"
+    debug "SOURCE_REPO: ${SOURCE_REPO}"
+    debug "SOURCE_REPO_NAME: ${SOURCE_REPO_NAME}"
+    debug "SOURCE_BRANCH: ${SOURCE_BRANCH}"
+    debug "DEST_REPO: ${DEST_REPO}"
+    debug "DEST_REPO_NAME: ${DEST_REPO_NAME}"
+    debug "DEST_BRANCH: ${DEST_BRANCH}"
+    debug "SOURCE_SPECIFIED: ${SOURCE_SPECIFIED}"
+    debug "DO_COMMIT: ${DO_COMMIT}"
+    debug "POSITIONAL_ARGS: $(printf "%q " "${POSITIONAL_ARGS[@]}")"
+    debug "SINCE: ${SINCE}"
+    debug "UNTIL: ${UNTIL}"
+    debug "COMMIT_COUNT_LIMIT: ${COMMIT_COUNT_LIMIT}"
+    debug "GIT_LOG_OPTS: $(printf "%q " "${GIT_LOG_OPTS[@]}")"
+}
+
+## helpful functions ###########################################################
+################################################################################
+
+# Determine if an argument is a filepath, repo, or customization
+function arg-type() {
+    local arg="${1}"
+    local arg_type="unknown"
+
+    if [[ "${arg}" =~ ${CUSTOMIZATION_PATTERN} ]]; then
+        arg_type="customization"
+    elif [[ -f "${arg}/.git/index" ]]; then
+        arg_type="repo"
+    elif [[ -f "${1}" ]]; then
+        arg_type="filepath"
+    elif [[ -d "${1}" ]]; then
+        arg_type="directory"
+    fi
+
+    echo "${arg_type}"
+    [[ "${arg_type}" != "unknown" ]]  # return 0 if arg_type is known, else 1
+}
+
+# Print a debug message if DEBUG=1 or write it to a log file if
+# DEBUG_LOG=<filepath> is set
+function debug() {
+    if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        prefix="\x1b[36m[${timestamp}]\x1b[0m \x1b[1;35m${FUNCNAME[1]}:${BASH_LINENO[0]}\x1b[0m --"
+        printf "%s\n" "${@}" \
+            | sed -e "s/^/${prefix} /" \
+            | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
+    fi
+}
+
+# print something to stderr in bold cyan
+function comment() {
+    printf "${C_CYAN}${S_BOLD}${@}${S_RESET}\n" >&2
+}
+
+# echo a command before running it
+function echo-run() {
+    local cmd=("${@}")
+    local exit_code
+
+    # echo the command...
+    printf "\033[32m\u25b6 %s" "${cmd[0]}"
+    # ...if there is more than one argument, print them
+    [[ ${#cmd[@]} -gt 1 ]] && printf " %q" "${cmd[@]:1}"
+    # ...reset the color and print a newline
+    printf "\033[0m\n"
+
+    # if we only have one argument and it contains a space, run it with eval
+    if [[ ${#cmd[@]} -eq 1 && "${cmd[0]}" =~ " " ]]; then
+        cmd=(eval "${cmd[0]}")
+    fi
+    # run the command, prepending each line of output with a vertical bar
+    "${cmd[@]}" 2>&1 | sed -e '$ ! s/^/\x1b[32m\xe2\x94\x82\x1b[0m / ; $ s/^/\x1b[32m\xe2\x95\xb0\x1b[0m /'
+    exit_code=${PIPESTATUS[0]}
+
+    # oh no errors
+    if [[ ${exit_code} -ne 0 ]]; then
+        echo -e "\033[31mcommand exited with status ${exit_code}\033[0m"
+    fi
+
+    # return its exit code
+    return ${exit_code}
+}
+
+function copy-assetsuite-files() {
+    local line_prefix="  "
+    local source="${1}"
+    local destination="${2}"
+    shift 2
+    local filepaths=()
+
+    # Read the args into an array
+    readarray -t filepaths < <(printf "%s\n" "${@}")
+
+    # # loop over each arg and add every line to ${files}. this allows us to call
+    # # the function with files as individual arguments or a multiline argument or
+    # # a mix of both
+    # debug "processing ${#file_args[@]} file args: $(printf "%q " "${file_args[@]}")"
+    # for file_arg in "${@}"; do
+    #     debug "processing file arg: ${file_arg}"
+    #     while read filepath; do
+    #         debug "adding file: ${filepath}"
+    #         filepaths+=("${filepath}")
+    #     done <<< "${file_arg}"
+    # done
+
+    debug "copying files from ${source} to ${destination}:"
+    debug $(printf "%q " "${filepaths[@]}")
+
+    # check whether is-java-class is installed
+    local can_detect_java=0
+    command -v is-java-class &>/dev/null && can_detect_java=1
+
+    # ensure that piping doesn't mess up our copied_files count
+    shopt -s lastpipe
+
+    local last_transfer_err=0  # was the last file transfer successful?
+    local transfer_err=""  # error message during transfer
+    local total_files=${#filepaths[@]}  # total number of files to copy'
+    local copied_files=0
+    local prev_line_len
+    local line
+    local filepath
+    for filepath in "${filepaths[@]}"; do
+        if [[ -z "${filepath}" ]]; then
+            debug "skipping empty filepath"
+            continue
+        fi
+        debug "copying file: ${filepath}"
+        local src_path="${source}/${filepath}"
+        local dst_path="${destination}/${filepath}"
+
+        # copy, delete, or skip the file
+        if [ ! -f "${src_path}" ] && [ -f "${dst_path}" ]; then
+            # if the TRI file doesn't exist, but the OPG file does, delete the OPG file
+            transfer_err=$(rm "${dst_path}" 2>&1)
+        elif [ -f "${src_path}" ]; then
+            # copy the TRI file to the OPG repository
+            # ensure the OPG directory exists
+            mkdir -p "$(dirname "${dst_path}")"
+            transfer_err=$(cp "${src_path}" "${dst_path}" 2>&1)
+        else
+            # neither file exists, so skip it
+            transfer_err="'${filepath}' doesn't exist in either repository"
+        fi
+
+        # update the copied_files count
+        let copied_files++
+
+        # handle any errors
+        if [ -n "${transfer_err}" ]; then
+            if [ "${last_transfer_err}" -eq 0 ] && [ -n "${prev_line_len}" ]; then
+                # if the last transfer was not an error, and this isn't the first
+                # transfer, then echo a newline away from the last transfer message
+                echo
+            fi
+            echo -e "${line_prefix}${C_RED}${transfer_err}${S_RESET}"
+            last_transfer_err=1
+            continue
+        else
+            last_transfer_err=0
+        fi
+
+        # update the progress bar
+        line="${line_prefix}${copied_files} / ${total_files} -- ${filepath}"
+        # erase the previous line
+        echo -n $'\r'
+        printf "%${prev_line_len}s"
+        # show the current line
+        echo -n $'\r'"${line}"
+        prev_line_len="$(echo "${line}" | wc -c)"
+
+        # check if the file was a java class, in the db directory, or an ftp script
+        if [[ ${can_detect_java} -eq 1 ]] && is-java-class "${filepath}" >/dev/null 2>&1; then
+            echo
+            echo "${line_prefix}- java class"
+        elif [[ "${filepath}" =~ ^"database/" ]]; then
+            echo
+            echo "${line_prefix}- database file"
+        elif [[ "${filepath}" =~ ^"app_config/FTP_SCRIPTS/" ]]; then
+            echo
+            echo "${line_prefix}- ftp script"
+        fi
+    done
+
+    # reset the lastpipe option
+    shopt -u lastpipe
+
+    # if the last transfer was not an error, then echo a newline away from the last transfer message
+    if [ "${last_transfer_err}" -eq 0 ] && [ -n "${prev_line_len}" ]; then
+        echo
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    setup
+    parse-args "${@}"
+
+    # Show a preview of the files to be transferred
+    if [[ ${#FILEPATHS[@]} -gt 0 && ${FILEPATHS_PREVIEW_COUNT} -ne 0 ]]; then
+        # Show the first 15 files
+        echo -e "${C_CYAN}${S_BOLD}${#FILEPATHS[@]}${S_RESET}${C_CYAN} files to be transferred:${S_RESET}"
+        for filepath in "${FILEPATHS[@]:0:15}"; do
+            echo -e " - ${filepath}"
+        done
+        # Show a count of the remaining files if there are more than ${FILEPATHS_PREVIEW_COUNT}
+        if [[ ${#FILEPATHS[@]} -gt ${FILEPATHS_PREVIEW_COUNT} ]]; then
+            local s
+            remaining=$(( ${#FILEPATHS[@]} - ${FILEPATHS_PREVIEW_COUNT} ))
+            [[ ${remaining} -eq 1 ]] && s="" || s="s"
+            echo -e " - and ${C_CYAN}${remaining} more file${s}${S_RESET}"
+        fi
+    fi
+
+    # Clean up the source/destination repos if requested
+    if [[ ${DO_CLEAN} -eq 1 ]]; then
+        # Clean the source and destination repo
+        for repo in "${SOURCE_REPO}" "${DEST_REPO}"; do
+            repo_name=$(basename "$(realpath "${repo}")")
+
+            ## First, check to see if the source repo is clean
+            echo -en "* checking for uncommitted changes in ${C_BLUE}${S_BOLD}${repo_name}${S_RESET} ... "
+            readarray -t unclean_files < <(git -C "${repo}" status --porcelain)
+            debug "found ${#unclean_files[@]} unclean files in ${repo}"
+            debug "unclean files: ${unclean_files[*]}"
+            # unclean_files=$(git -C "${repo}" status --porcelain)
+            # unclean_count=$(echo "${unclean_files}" | wc -l)
+            if [[ ${#unclean_files[@]} -eq 0 ]]; then
+                echo -e "${C_GREEN}clean${S_RESET}"
+                continue
+            else
+                echo -e "${C_RED}dirty${S_RESET}"
+            fi
+            if [[ ${#unclean_files[@]} -ne 0 ]]; then
+                ## Give the user some info before going through with the deed
+                debug "found ${#unclean_files[@]} to EVISCERATE in ${repo}"
+                echo -e "* cleaning repo ${C_BLUE}${S_BOLD}${repo_name}${S_RESET} ... "
+                local s
+                [[ ${unclean_count} -eq 1 ]] && s="" || s="s"
+                printf "This action will ${S_BOLD}ERASE FROM ALL EXISTENCE${S_RESET} ${C_CYAN}${#unclean_files[@]}${S_RESET} file${s} in ${C_BLUE}${S_BOLD}${repo_name}${S_RESET}\n"
+                printf " - %s\n" "${unclean_files[@]:0:${FILEPATHS_PREVIEW_COUNT}}"
+                if [[ ${#unclean_files[@]} -gt ${FILEPATHS_PREVIEW_COUNT} ]]; then
+                    local s
+                    remaining=$(( ${#unclean_files[@]} - ${FILEPATHS_PREVIEW_COUNT} ))
+                    [[ ${remaining} -eq 1 ]] && s="" || s="s"
+                    echo -e " - and ${C_CYAN}${remaining} more file${s}${S_RESET}"
+                fi
+                ## Get confirmation from the user
+                printf "Are you sure you want to do this? [${C_GREEN}yes${S_RESET}/${C_RED}no${S_RESET}] "
+                read -r response
+                if [[ "${response}" =~ ^([Yy][Ee][Ss]|[Yy])$ ]]; then
+                    ## DESTRUCTION ALL THE THINGS
+                    (
+                        echo-run git -C "${repo}" clean -fd \
+                        && echo-run git -C "${repo}" reset --hard HEAD
+                    )
+                    if [[ ${?} -ne 0 ]]; then
+                        echo -e "error: failed to clean repo ${C_BLUE}${S_BOLD}${repo}${S_RESET}, aborting"
+                        exit 1
+                    fi
+                else
+                    echo -e "${S_DIM}such a tease :(${S_RESET}"
+                    exit 1
+                fi
+            fi
+        done
+    fi
+
+    # If the user specified a branch for either repository, then switch to it
+    if [[ -n "${SOURCE_BRANCH}" ]]; then
+        # Check to see if the branch is already checked out
+        local current_branch=$(git -C "${SOURCE_REPO}" symbolic-ref --short -q HEAD)
+        if [[ "${current_branch}" == "${SOURCE_BRANCH}" ]]; then
+            echo -e "* already on branch ${C_YELLOW}${SOURCE_BRANCH}${S_RESET} in ${C_BLUE}${S_BOLD}${SOURCE_REPO_NAME}${S_RESET}"
+        else
+            echo -en "* switching to branch ${C_YELLOW}${SOURCE_BRANCH}${S_RESET} in ${C_BLUE}${S_BOLD}${SOURCE_REPO}${S_RESET} ... "
+            echo-run git -C "${SOURCE_REPO}" checkout "${SOURCE_BRANCH}" >/dev/null
+            if [[ ${?} -eq 0 ]]; then
+                echo -e "${C_GREEN}done${S_RESET}"
+            else
+                echo -e "error: failed to switch to branch ${C_YELLOW}${SOURCE_BRANCH}${S_RESET} in ${C_BLUE}${S_BOLD}${SOURCE_REPO}${S_RESET}, aborting"
+                exit 1
+            fi
+        fi
+    fi
+    if [[ -n "${DEST_BRANCH}" ]]; then
+        # Check to see if the branch is already checked out
+        local current_branch=$(git -C "${DEST_REPO}" symbolic-ref --short -q HEAD)
+        if [[ "${current_branch}" == "${DEST_BRANCH}" ]]; then
+            echo -e "* already on branch ${C_YELLOW}${DEST_BRANCH}${S_RESET} in ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET}"
+        else
+            echo -en "* switching to branch ${C_YELLOW}${DEST_BRANCH}${S_RESET} in ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET} ... "
+            echo-run git -C "${DEST_REPO}" checkout "${DEST_BRANCH}" >/dev/null
+            if [[ ${?} -eq 0 ]]; then
+                echo -e "${C_GREEN}done${S_RESET}"
+            else
+                echo -e "error: failed to switch to branch ${C_YELLOW}${DEST_BRANCH}${S_RESET} in ${C_BLUE}${S_BOLD}${DEST_REPO}${S_RESET}, aborting"
+                exit 1
+            fi
+        fi
+    fi
+
+    # If the user requested a pull, then do it. Do it now.
+    if [[ ${DO_PULL} -eq 1 ]]; then
+        for repo in "${SOURCE_REPO}" "${DEST_REPO}"; do
+            repo_name=$(basename "$(realpath "${repo}")")
+            echo -en "* pulling from ${C_BLUE}${S_BOLD}${repo_name}${S_RESET} ... "
+            echo-run git -C "${repo}" pull >/dev/null
+            if [[ ${?} -eq 0 ]]; then
+                echo -e "${C_GREEN}done${S_RESET}"
+            else
+                echo -e "error: failed to pull from ${C_BLUE}${S_BOLD}${repo_name}${S_RESET}, aborting"
+                exit 1
+            fi
+        done
+    fi
+
+    # Transfer everything in ${FILEPATHS}
+    if [[ ${#FILEPATHS[@]} -gt 0 ]]; then
+        echo -e "* copying ${C_CYAN}${C_BOLD}${#FILEPATHS[@]}${S_RESET} files ... "
+        copy-assetsuite-files "${SOURCE_REPO}" "${DEST_REPO}" "${FILEPATHS[@]}" \
+            | sed 's/^/  /'
+    fi
+
+    # Cherry-pick any customizations
+    if [[ ${#CUSTOMIZATIONS[@]} -gt 0 ]]; then
+        # Print all customizations to be released
+        local s
+        [[ ${#CUSTOMIZATIONS[@]} -eq 1 ]] && s="" || s="s"
+        echo -e "${C_CYAN}${C_BOLD}${#CUSTOMIZATIONS[@]}${S_RESET} customization${s} to release:"
+        printf "  - %s\n" "${CUSTOMIZATIONS[@]}"
+
+        # Release each customization individually
+        for customization in "${CUSTOMIZATIONS[@]}"; do
+            # Generate a list of all files committed under that Customization ID using ${GIT_LOG_OPTS}
+            # note if there is a `--since` filter in ${GIT_LOG_OPTS}
+            local since_filter
+            if [[ "${SINCE}" != "" ]]; then
+                since_filter=" since ${C_YELLOW}${S_BOLD}${SINCE}${S_RESET}"
+            fi
+            echo -en "* generating file list for ${C_MAGENTA}${S_BOLD}${customization}${S_RESET}${since_filter} ... "
+            local grep_msg=$(
+                echo "${SOURCE_COMMIT_PATTERN}" \
+                    | awk -v cust="${customization}" '
+                        {gsub(/{{CUST}}/, cust);
+                        print
+                    }'
+            )
+            debug "grep_msg: ${grep_msg}"
+            readarray -t files < <(
+                git -C "${SOURCE_REPO}" log \
+                    "${GIT_LOG_OPTS[@]}" \
+                    --pretty=format: \
+                    --name-only \
+                    --no-renames \
+                    --grep="${grep_msg}" \
+                        | sort -u \
+                        | grep -Ev "^${CUSTOMIZATION_PATTERN}$|^$"
+            )
+            [[ ${#files[@]} -eq 1 ]] && s="" || s="s"
+            echo -e "${C_MAGENTA}(${#files[@]} file${s})${S_RESET}"
+
+            # Skip this customization if no files were found
+            [[ ${#files[@]} -eq 0 ]] && continue
+
+            # Copy the files to the destination repo
+            echo -e "* copying ${C_MAGENTA}${#files[@]}${S_RESET} files to ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET} ... "
+            debug "copying files:"
+            debug "${files[@]}"
+            copy-assetsuite-files "${SOURCE_REPO}" "${DEST_REPO}" "${files[@]}"
+
+            # Commit the files to the destination repo if requested
+            if [[ ${DO_COMMIT} -eq 1 ]]; then
+                # Check to see if there are any changes to commit
+                local changes=$(git -C "${DEST_REPO}" status --porcelain)
+                local change_count=$(echo "${changes}" | wc -l)
+                [[ ${change_count} -eq 1 ]] && s="" || s="s"
+                if [[ -z "${changes}" ]]; then
+                    echo -e "* no changes to commit to ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET}"
+                    continue
+                fi
+                # Perform a pull before committing to ensure we're up-to-date
+                echo -en "* pulling from ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET} pre-commit ... "
+                echo-run git -C "${DEST_REPO}" pull >/dev/null
+                if [[ ${?} -eq 0 ]]; then
+                    echo -e "${C_GREEN}done${S_RESET}"
+                else
+                    echo -e "error: failed to pull from ${C_BLUE}${S_BOLD}${DEST_REPO}${S_RESET}, aborting"
+                    exit 1
+                fi
+
+                # Commit the files
+                local dest_customization="${DEST_CUSTOMIZATION:-${customization}}"
+                local commit_msg=$(
+                    echo "${DEST_COMMIT_PATTERN}" \
+                        | awk -v cust="${dest_customization}" '
+                            {
+                                gsub("{{CUST}}", cust);
+                                print $0
+                            }
+                        '
+                )
+                echo -e "* committing ${C_MAGENTA}${change_count}${S_RESET} change${s} to ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET} as ${C_MAGENTA}${S_BOLD}${dest_customization}${S_RESET}"
+                (
+                    echo-run git -C "${DEST_REPO}" add -A \
+                    && echo-run git -C "${DEST_REPO}" commit -m "${commit_msg}"
+                )
+                if [[ ${?} -ne 0 ]]; then
+                    echo -e "error: failed to commit files to ${C_BLUE}${S_BOLD}${DEST_REPO}${S_RESET}, aborting"
+                    exit 1
+                fi
+            fi
+        done
+    fi
+
+    echo "* fin"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
+exit $?  # return the exit code of the last command
+
+# Ensure that the specified repos and file are all valid
+if [ ! -d "${TRI_REPO}/.git" ]; then
+	echo "error: '${TRI_REPO}' is not a valid repo" >&2
+	usage >&2
+	exit 1
+fi
+if [ ! -d "${OPG_REPO}/.git" ]; then
+	echo "error: '${OPG_REPO}' is not a valid repo" >&2
+	usage >&2
+	exit 1
+fi
+if [ -n "${RELEASE_FILES}" ] && [ ! -f "${RELEASE_FILES}" ]; then
+	echo "error: '${RELEASE_FILES}' is not a valid file" >&2
+	usage >&2
+	exit 1
+fi
+
+# colored output
+GREEN="\033[32m"
+RED="\033[31m"
+BLUE="\033[34m"
+PURPLE="\033[35m"
+CYAN="\033[36m"
+RESET="\033[0m"
+
+# echo a command before running it
+echo-run() {
+        command="$@"
+        echo -e "${GREEN}${command}${RESET}"
+        "$@"
+        exit_code="$?"
+
+        if [ $exit_code -ne 0 ]; then
+                echo -e "${RED}command exited with status ${exit_code}${RESET}"
+        fi
+        return $exit_code
+}
+
+# Display information about how files will be copied to the OPG repository
+echo -n "Sync Strategy: "
+if [ -z "${RELEASE_FILES}" ]; then
+	echo "full sync"
+else
+	display_rows=17
+	echo "file list '${RELEASE_FILES}'"
+	cat "${RELEASE_FILES}" \
+		| sort \
+		| uniq \
+		| head -n ${display_rows} \
+		| tr -d '\r' \
+		| sed 's/.*/- &/g'
+	lines="$(cat "${RELEASE_FILES}" | sort | uniq | wc -l)"
+	if [ ${lines} -gt ${display_rows} ]; then
+		echo "- ... $((lines - display_rows)) lines omitted"
+	fi
+fi
+echo
+echo "This will reset both '$(basename "${TRI_REPO}")' and '$(basename "${OPG_REPO}")' to be in sync with origin."
+echo "Any unpushed changes will be lost!"
+read -p "Do you wish to proceed? (yes/no) " yn
+
+if ! [[ "${yn::1}" =~ [Yy] ]]; then
+	echo "such a tease :("
+	exit 1
+fi
+
+# save the current directory to return here
+cwd=$(pwd)
+
+# ensure the trinoor repository is on the release branch and in sync with origin
+echo-run cd "${TRI_REPO}"
+tri_branch=$(git symbolic-ref --short -q HEAD)
+if [ "${tri_branch}" != "release" ]; then
+	echo-run git checkout release
+else
+	echo -e "${BLUE}release branch already checked out${RESET}"
+fi
+echo-run git reset --hard HEAD \
+	&& echo-run git clean -fd \
+	&& echo-run git pull \
+	&& echo "successfully reset '${TRI_REPO}'"
+[ $? -ne 0 ] && echo "errors updating '${TRI_REPO}', exiting" && exit 1
+cd "${cwd}"
+
+# ensure the OPG repository is on the AS9-Trinoor-Dev branch and in sync with origin
+echo-run cd "${OPG_REPO}"
+opg_branch=$(git symbolic-ref --short -q HEAD)
+if [ "${opg_branch}" != "AS9-Trinoor-Dev" ]; then
+	echo-run git checkout AS9-Trinoor-Dev
+else
+	echo -e "${BLUE}AS9-Trinoor-Dev branch already checked out${RESET}"
+fi
+echo-run git reset --hard HEAD \
+	&& echo-run git clean -fd \
+	&& echo-run git pull \
+	&& echo "successfully reset '${OPG_REPO}'"
+[ $? -ne 0 ] && echo "errors updating '${OPG_REPO}', exiting" && exit 1
+
+# return to the original directory
+cd "${cwd}"
+
+directories="
+customization_metadata
+app_config
+database
+tailored
+tests
+nxa
+helix
+documents"
+
+if [ -n "${RELEASE_FILES}" ]; then
+	files=$(cat $RELEASE_FILES | sort | uniq)
+else
+	cd "${TRI_REPO}"
+	files=$(find ${directories} -type f)
+	cd "${cwd}"
+fi
+
+# determine total number of files
+total_files=$(echo "${files}" | wc -l)
+copied_files=0
+
+# ensure that piping doesn't mess up our copied_files count
+shopt -s lastpipe
+
+# Display a message about which sync strategy is being used
+if [ -n "${RELEASE_FILES}" ]; then
+	echo -e "${BLUE}Copying files in file list '${RELEASE_FILES}'${RESET}"
+else
+	echo -e "${BLUE}Copying all files in '${TRI_REPO}'${RESET}"
+fi
+
+last_transfer_err=0 # was the last file transfer successful?
+transfer_err="" # error message during transfer
+while read -r filepath; do
+	OPG_FILE="${OPG_REPO}/${filepath}"
+	TRI_FILE="${TRI_REPO}/${filepath}"
+
+	# copy, delete, or skip the file
+	if [ ! -f "${TRI_FILE}" ] && [ -f "${OPG_FILE}" ]; then
+		# if the TRI file doesn't exist, but the OPG file does, delete the OPG file
+		transfer_err=$(rm "${OPG_FILE}" 2>&1)
+	elif [ -f "${TRI_FILE}" ]; then
+		# copy the TRI file to the OPG repository
+		# ensure the OPG directory exists
+		mkdir -p "$(dirname "${OPG_FILE}")"
+		transfer_err=$(cp "${TRI_FILE}" "${OPG_FILE}" 2>&1)
+	else
+		# neither file exists, so skip it
+		transfer_err="'${filepath}' doesn't exist in either repository"
+	fi
+
+	# update the copied_files count
+	let copied_files++
+
+	# handle any errors
+	if [ -n "${transfer_err}" ]; then
+		if [ "${last_transfer_err}" -eq 0 ] && [ -n "${prev_line_len}" ]; then
+			# if the last transfer was not an error, and this isn't the first
+			# transfer, then echo a newline away from the last transfer message
+			echo
+		fi
+		echo -e "${RED}${transfer_err}${RESET}"
+		last_transfer_err=1
+		continue
+	else
+		last_transfer_err=0
+	fi
+
+	# update the progress bar
+	line="${copied_files} / ${total_files} -- ${filepath}"
+	# erase the previous line
+	echo -n $'\r'
+	printf "%${prev_line_len}s"
+	# show the current line
+	echo -n $'\r'"${line}"
+	prev_line_len="$(echo "${line}" | wc -c)"
+
+    # check if the file was a java class, in the db directory, or an ftp script
+    if is-java-class "${filepath}" >/dev/null 2>&1; then
+        echo
+        echo "- java class"
+    elif [[ "${filepath}" =~ ^"database/" ]]; then
+        echo
+        echo "- database file"
+    elif [[ "${filepath}" =~ ^"app_config/FTP_SCRIPTS/" ]]; then
+        echo
+        echo "- ftp script"
+    fi
+done <<< "${files}"
+
+shopt -u lastpipe
+
+echo
+echo "Now go commit and push!"

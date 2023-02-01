@@ -1,6 +1,6 @@
 # returns the name of the current shell
 function get-shell() {
-    basename "`ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//'`" \
+    basename "$(ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//')" \
         | tr '[:upper:]' '[:lower:]'
 }
 # cross-shell function for returning the calling function name
@@ -390,4 +390,91 @@ function is-interactive() {
 
     # STDOUT is attached to a redirection
     [[ ! -t 1 && ! -p /dev/stdout ]] && return 2
+}
+
+# @description: Loop over each argument or multiline string with a given command
+# @usage: for-each <command> [--log <filepath>] [--quiet] -- <args...>
+# @example: for-each echo -- a b c $'hello\nworld'
+# @example: for-each echo --log /tmp/log.txt -- a b c $'hello\nworld'
+# @returns: 0 if the command succeeds for all arguments
+# @returns: 1 if the command fails for any argument
+# @returns: 2 if the command fails for all arguments
+# @returns: 3 if the command is not found
+function for-each() {
+    local any_success=0
+    local any_failure=0
+    local quiet=0
+    local cmd=()
+    local args=()
+    local log_filepath=""
+
+    # parse the command and arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --log)
+                log_filepath="${2}"
+                shift 1
+                ;;
+            --quiet)
+                quiet=1
+                ;;
+            --)
+                shift
+                args=("${@}")
+                break
+                ;;
+            *)
+                cmd+=("${1}")
+                ;;
+        esac
+        shift
+    done
+
+    # check if command is found
+    if ! type "${cmd[0]}" 2>&1 1>/dev/null; then
+        echo "for-each: command not found: ${cmd[0]}" >&2
+        return 3
+    fi
+
+    # determine whether to print the arguments or read them from STDIN
+    if [[ ${#args[@]} -gt 0 ]]; then
+        print_args=("printf" "%s\n" "${args[@]}")
+    else
+        print_args=("cat" "-")
+    fi
+
+    # loop over each argument
+    local exit_code
+    local output
+    "${print_args[@]}" | while read -r arg; do
+        # run the command
+        output=$("${cmd[@]}" "${arg}" 2>&1)
+        exit_code=${?}
+
+        # log the output
+        if [ -n "${log_filepath}" ]; then
+            echo "${output}" >> "${log_filepath}"
+        fi
+
+        # print the output
+        if [ ${quiet} -eq 0 ]; then
+            echo "${output}"
+        fi
+
+        # check the exit code
+        if [ ${exit_code} -eq 0 ]; then
+            any_success=1
+        else
+            any_failure=1
+        fi
+    done
+
+    # return the appropriate exit code
+    if [ ${any_success} -eq 1 ] && [ ${any_failure} -eq 0 ]; then
+        return 0
+    elif [ ${any_success} -eq 0 ] && [ ${any_failure} -eq 1 ]; then
+        return 1
+    else
+        return 2
+    fi
 }

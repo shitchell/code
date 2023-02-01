@@ -1,78 +1,497 @@
 #!/bin/bash
-# Attribution: https://unix.stackexchange.com/a/463214/538359
 #
-# Compare two directories using rsync and print the differences
-# CAUTION: options MUST appear after the directories
-#
-# SYNTAX
-#---------
-# diff-dirs Left_Dir Right_Dir [options]
-#
-# EXAMPLE OF OUTPUT
-#------------------
-# L             file-only-in-Left-dir
-# R             file-only-in-right-dir
-# X >f.st...... file-with-dif-size-and-time
-# X .f...p..... file-with-dif-perms
-#
-# L / R mean that the file/dir appears only at the `L`eft or `R`ight dir. 
-#
-# X     means that a file appears on both sides but is not the same (in which
-#       case the next 11 characters give you more info. In most cases knowing
-#       that s,t,T and p depict differences in Size, Time and Permissions 
-#       is enough but `man rsync` has more info
-#       (look at the --itemize-changes option)
-#
-# OPTIONS
-#---------
-# All options are passed to rsync. Here are the most useful for the purpose
-# of directory comparisons:
-#
-# -c will force comparison of file contents (otherwise only
-#    time & size is compared which is much faster)
-#
-# -p/-o/-g will force comparison of permissions/owner/group
+# Use `diff` recursively to compare two directories
 
-set -e
+## usage functions #############################################################
+################################################################################
 
-LEFT_DIR="${1%/}"
-RIGHT_DIR="${2%/}"
-shift 2
-OPTIONS=("${@}")
+function help-epilogue() {
+    echo "show a recursive diff of two directories"
+}
 
-if [ -z "${LEFT_DIR}" ] || [ -z "${RIGHT_DIR}" ]; then
-    echo "usage: $(basename "${0}") dir1 dir2 [optional rsync arguments]"
-    exit 1
-fi
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "These are some custom options specific to diffr. Most other options"
+    echo "are simply passed to diff. However, due to required formatting, some"
+    echo "options are ignored. The below are the most useful unignored options,"
+    echo "but it is not an exhaustive list."
+    echo
+    echo "* indicates an option on the todo list"
+    echo
+    echo "Custom options:"
+    cat <<EOF
+    -h                             display usage
+    --help                         display this help message
+    --color WHEN                   colorize the output (WHEN is 'always', 'never',
+                                   or 'auto')
+    -O/--show-opts                 show the options that are passed to \`diff\` on
+                                   each invocation
+    --no-color                     don't colorize the output
+    *-r/--reverse                  reverse the order of the output
+    *-R/--no-reverse               don't reverse the order of the output
+    --show-timestamps              show timestamps in the output
+    --git-timestamps               if either directory is a git repo, use git to
+                                   determine the timestamps
+    *--strftime <format>           use <format> as the timestamp format
+    --exclude-empty-dirs           exclude empty dirs from the output
+EOF
+    echo
+    echo "Allowed diff options:"
+    cat <<EOF
+    -q/--brief                     report only when files differ
+    -s/--report-identical-files    report when two files are the same
+   *-c / -C NUM / --context NUM    output NUM (default 3) lines of copied context
+   *-u / -U NUM / --unified NUM    output NUM (default 3) lines of unified context
+    -t/--expand-tabs               expand tabs to spaces in output
+    -T/--initial-tab               make tabs line up by prepending a tab
+    -i/--ignore-case               ignore case differences in file contents
+    -E/--ignore-tab-expansion      ignore changes due to tab expansion
+    -Z/--ignore-trailing-space     ignore white space at line end
+    -b/--ignore-space-change       ignore changes in the amount of white space
+    -w/--ignore-all-space          ignore all white space
+    -B/--ignore-blank-lines        ignore changes whose lines are all blank
+    -I REGEXP / --ignore-matching-lines REGEXP
+                                   ignore changes whose lines all match REGEXP
+    --strip-trailing-cr            remove carriage return characters
+    -x REGEXP / --exclude REGEXP   exclude files matching REGEXP
+    -X FILE / --exclude-from FILE  exclude files matching any file pattern from
+                                   FILE
+    -f REGEXP / --filter REGEXP    filter files matching REGEXP
+   *-F FILE / --filter-from FILE   filter files matching any file pattern from
+                                   FILE
+EOF
+}
 
-echo "Location Symbols:"
-echo "  L: file only exists in '$(realpath "${LEFT_DIR}")'"
-echo "  R: file only exists in '$(realpath "${RIGHT_DIR}")'"
-echo "  X: file exists in both but is different"
-echo
-echo "Filetype Symbols:"
-echo "  f: the item is a file"
-echo "  d: the item is a directory"
-echo "  L: the item is a symlink"
-echo "  D: the item is a device"
-echo "  S: the item is a special file"
-echo
-echo "Change Symbols:"
-echo "  c: the content differs"
-echo "  s: the size differs"
-echo "  T: the modification time differs"
-echo "  p: the permissions differ"
-echo "  o: the owner differs"
-echo "  g: the group differs"
-echo "  a: the ACL information differs"
-echo "  x: the extended attributes differ"
-echo
+function help-usage() {
+    # Only show the custom options in the usage, and insert a generic
+    # [diff options] for the rest
+    echo "usage: $(basename $0) [-hcCrRt] [diff options] dir1 dir2"
+}
 
-# Files that don't exist in Right_Dir
-rsync -S -rin --ignore-existing "${@}" "${LEFT_DIR}/" "${RIGHT_DIR}/" | sed -e 's/^[^ ]* /L            /'
+function parse-args() {
+    # Default values
+    DO_COLOR="always" # auto, always, never
+    DO_REVERSE=0
+    DO_SHOW_TIMESTAMPS=0
+    DO_GIT_TIMESTAMPS=0
+    DO_SHOW_OPTS=0
+    DO_EXCLUDE_EMPTY_DIRS=0
+    DO_RECURSIVE=1
+    DO_BRIEF=0
+    STRFTIME="%Y-%m-%d %H:%M:%S"
+    FILTERS=()
+    DIFF_OPTS=()
+    LABELS=()
 
-# Files that don't exist in Left_Dir
-rsync -S -rin --ignore-existing "${@}" "${RIGHT_DIR}/" "${LEFT_DIR}/" | sed -e 's/^[^ ]* /R            /'
+    # Loop over the arguments
+    declare -ga DIRECTORIES
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+        -h)
+            help-usage
+            help-epilogue
+            exit 0
+            ;;
+        --help)
+            help-full
+            exit 0
+            ;;
+        --color)
+            DO_COLOR=${2}
+            shift 2
+            ;;
+        --no-color)
+            DO_COLOR="never"
+            shift
+            ;;
+        -r | --reverse)
+            DO_REVERSE=1
+            shift 1
+            ;;
+        -R | --no-reverse)
+            DO_REVERSE=0
+            shift 1
+            ;;
+        --show-timestamps)
+            DO_SHOW_TIMESTAMPS=1
+            shift 1
+            ;;
+        --git-timestamps)
+            DO_GIT_TIMESTAMPS=1
+            shift 1
+            ;;
+        -O | --show-opts)
+            DO_SHOW_OPTS=1
+            shift 1
+            ;;
+        --strftime)
+            STRFTIME=${2}
+            shift 2
+            ;;
+        --exclude-empty-dirs)
+            DO_EXCLUDE_EMPTY_DIRS=1
+            shift 1
+            ;;
+        # -c | -u | \
+        -t | --expand-tabs | \
+        -T | --initial-tab | \
+        -i | --ignore-case | \
+        -E | --ignore-tab-expansion | \
+        -Z | --ignore-trailing-space | \
+        -b | --ignore-space-change | \
+        -w | --ignore-all-space | \
+        -B | --ignore-blank-lines | \
+        -s | --report-identical-files)
+            # These diff options are allowed
+            DIFF_OPTS+=("${1}")
+            shift 1
+            ;;
+        -q | --brief)
+            DIFF_OPTS+=("${1}")
+            DO_BRIEF=1
+            shift 1
+            ;;
+        # -C | --context | \
+        # -U | --unified | \
+        -I | --ignore-matching-lines | \
+        --strip-trailing-cr | --color | \
+        -x | --exclude | \
+        -X | --exclude-from)
+            # These diff options are allowed, but require an argument
+            DIFF_OPTS+=("${1}" "${2}")
+            shift 2
+            ;;
+        -f | --filter)
+            # These diff options are allowed, but require an argument
+            FILTERS+=("${2}")
+            DIFF_OPTS+=("${1}" "${2}")
+            shift 2
+            ;;
+        -F | --filter-from)
+            # These diff options are allowed, but require an argument
+            if [[ -f "${2}" ]]; then
+                cat "${2}" | while read filter; do
+                    FILTERS+=("${filter}")
+                done
+            fi
+            shift 2
+            ;;
+        --label)
+            # We need to track the labels to use as the directory names
+            LABELS+=("${2}")
+            shift 2
+            ;;
+        -*)
+            echo "error: unknown option ${1}" >&2
+            help-usage >&2
+            exit 1
+            ;;
+        *)
+            # Strip trailing slash if present and convert to absolute path
+            DIRECTORIES+=("$(realpath "${1%/}")")
+            shift 1
+            ;;
+        esac
+    done
 
-# Files that exist in both dirs but have differences
-rsync -S -rin --existing "${@}" "${LEFT_DIR}/" "${RIGHT_DIR}/" | sed -e 's/^./X /'
+    echo "DIRECTORIES: $(printf "%q " "${DIRECTORIES[@]}")" >&3
+    echo "DO_COLOR: ${DO_COLOR}" >&3
+    echo "DO_REVERSE: ${DO_REVERSE}" >&3
+    echo "DO_SHOW_TIMESTAMPS: ${DO_SHOW_TIMESTAMPS}" >&3
+    echo "DO_GIT_TIMESTAMPS: ${DO_GIT_TIMESTAMPS}" >&3
+    echo "DO_SHOW_OPTS: ${DO_SHOW_OPTS}" >&3
+    echo "DO_EXCLUDE_EMPTY_DIRS: ${DO_EXCLUDE_EMPTY_DIRS}" >&3
+    echo "DO_RECURSIVE: ${DO_RECURSIVE}" >&3
+    echo "DO_BRIEF: ${DO_BRIEF}" >&3
+    echo "STRFTIME: ${STRFTIME}" >&3
+    echo "FILTERS: $(printf "%q " "${FILTERS[@]}")" >&3
+    echo "DIFF_OPTS: $(printf "%q " "${DIFF_OPTS[@]}")" >&3
+
+    # Check that we have exactly two directories
+    if [[ ${#DIRECTORIES[@]} -ne 2 ]]; then
+        echo "error: exactly two directories must be specified" >&2
+        help-usage >&2
+        exit 1
+    fi
+
+    # Check that the directories exist
+    for DIR in "${DIRECTORIES[@]}"; do
+        if [[ ! -e "${DIR}" ]]; then
+            echo "error: no such file or directory '${DIR}'" >&2
+            exit 1
+        fi
+    done
+
+    # Check that the directories are different
+    if [[ "${DIRECTORIES[0]}" == "${DIRECTORIES[1]}" ]]; then
+        echo "error: the two directories must be different" >&2
+        exit 1
+    fi
+
+    # If the "directories" are files, set the recursive flag to false
+    if [[ ! -d "${DIRECTORIES[0]}" ]] || [[ ! -d "${DIRECTORIES[1]}" ]]; then
+        DO_RECURSIVE=0
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    # Parse the arguments
+    parse-args "${@}"
+
+    # Get the realpath of the directories
+    local left_dir="${DIRECTORIES[0]}"
+    local right_dir="${DIRECTORIES[1]}"
+    local left_dir_name="${LABELS[0]:-$(basename "${left_dir}")}"
+    local right_dir_name="${LABELS[1]:-$(basename "${right_dir}")}"
+
+    # Determine if either directory is a git repository
+    local left_is_git=0
+    local right_is_git=0
+    if git -C "${left_dir}" rev-parse --is-inside-work-tree &>/dev/null; then
+        left_is_git=1
+    fi
+    if git -C "${right_dir}" rev-parse --is-inside-work-tree &>/dev/null; then
+        right_is_git=1
+    fi
+
+    echo "left_dir: ${left_dir}" >&3
+    echo "right_dir: ${right_dir}" >&3
+    echo "left_dir_name: ${left_dir_name}" >&3
+    echo "right_dir_name: ${right_dir_name}" >&3
+    echo "left_is_git: ${left_is_git}" >&3
+    echo "right_is_git: ${right_is_git}" >&3
+
+    if [[ ${DO_RECURSIVE} -eq 1 ]]; then
+        recurse_arg="-r"
+    else
+        recurse_arg=""
+    fi
+
+    diff ${recurse_arg} "${left_dir}" "${right_dir}" "${DIFF_OPTS[@]}" |
+        awk -v left_path="${left_dir}" -v right_path="${right_dir}" \
+            -v left_name="${left_dir_name}" -v right_name="${right_dir_name}" \
+            -v left_is_git="${left_is_git}" -v right_is_git="${right_is_git}" \
+            -v color="${DO_COLOR}" -v reverse="${DO_REVERSE}" \
+            -v show_timestamps="${DO_SHOW_TIMESTAMPS}" -v tfmt="${STRFTIME}" \
+            -v use_git_ts="${DO_GIT_TIMESTAMPS}" -v exclude_empty="${DO_EXCLUDE_EMPTY_DIRS}" \
+            -v do_brief="${DO_BRIEF}" -v show_opts="${DO_SHOW_OPTS}" -v diff_opts="${DIFF_OPTS[*]}" '
+            # Use stat to get the timestamp of a file
+            function stat_timestamp(file) {
+                # Get the timestamp of the file
+                cmd = "stat -c %Y \"" file "\"";
+                cmd | getline stat_ts;
+                close(cmd);
+
+                # Convert the timestamp to the desired format
+                cmd = "date -d @" stat_ts " +\"" tfmt "\"";
+                cmd | getline stat_ts;
+                close(cmd);
+
+                return stat_ts; 
+            }
+            # Print the diff information for a file
+            function print_diff_header(filepath) {
+                leftabspath = left_path "/" filepath;
+                rightabspath = right_path "/" filepath;
+                printf("%s %s%s/%s ", diff_cmd, c_red, left_name, c_reset);
+                printf("%s%s/%s ", c_green, right_name, c_reset);
+                printf("%s-- %s%s%s\n", c_white, c_bold, filepath, c_reset);
+                if (show_timestamps) {
+                    if (left_is_git) {
+                        timestamp = git_timestamp(left_path, filepath);
+                    } else {
+                        timestamp = stat_timestamp(leftabspath);
+                    }
+                    printf("%s%s/%s%s  %s(%s)%s\n", c_red, left_name, filepath, c_reset, c_cyan, timestamp, c_reset);
+                    if (right_is_git) {
+                        timestamp = git_timestamp(right_path, filepath);
+                    } else {
+                        timestamp = stat_timestamp(rightabspath);
+                    }
+                    printf("%s%s/%s%s  %s(%s)%s\n", c_green, right_name, filepath, c_reset, c_cyan, timestamp, c_reset);
+                }
+            }
+            # Use git to get the timestamp of a file
+            function git_timestamp(dir, file) {
+                # Use stat_timestamp if use_git_ts is false
+                if (use_git_ts == 0) {
+                    return stat_timestamp(dir "/" file);
+                }
+
+                # Get the timestamp of the file
+                cmd = "git -C \"" dir "\" log -1 --format=%ad --date=format-local:\"" tfmt "\" -- \"" file "\"";
+                cmd | getline git_ts;
+                close(cmd);
+
+                # If the timestamp is empty, fall back to stat_timestamp
+                if (git_ts == "") {
+                    return stat_timestamp(dir "/" file);
+                }
+
+                return git_ts;
+            }
+            BEGIN {
+                first_line = 1;
+                diff_cmd = "diff";
+                if (diff_opts != "") {
+                    diff_cmd = diff_cmd " " diff_opts;
+                }
+                # Setup colors
+                if (color == "always") {
+                    c_red = "\033[31m";
+                    c_green = "\033[32m";
+                    c_yellow = "\033[33m";
+                    c_blue = "\033[34m";
+                    c_magenta = "\033[35m";
+                    c_cyan = "\033[36m";
+                    c_white = "\033[37m";
+                    c_bold = "\033[1m";
+                    c_underline = "\033[4m";
+                    c_reset = "\033[0m";
+                }
+            }
+            {
+                # Remove any carriage returns from the current line
+                gsub("\r", "", $0);
+                # Whenever we switch from "changes" to "only in" or vice versa,
+                # if this is not brief mode, print a blank line
+                if (do_brief) {
+                    # do nothing
+                } else if ($0 ~ /^Only in/) {
+                    if (!only_in) {
+                        if (!first_line) {
+                            print "";
+                        }
+                        only_in = 1;
+                    }
+                } else if ($0 ~ /^diff/ || $0 ~ /^(Binary )?[Ff]iles.* (differ|identical)$/) {
+                    # If this is not the first line, print an empty line
+                    if (!first_line) {
+                        print "";
+                    }
+                    if (only_in) {
+                        only_in = 0;
+                    }
+                }
+
+                if (/^</) {
+                    print c_red $0 c_reset;
+                } else if (/^>/) {
+                    print c_green $0 c_reset;
+                } else if (/^Only in /) {
+                    basedir = gensub(/Only in ('"${left_dir//\//\\/}"'|'"${right_dir//\//\\/}"')\/?.*/, "\\1", "g", $0);
+                    dirname = gensub(/Only in ('"${left_dir//\//\\/}"'|'"${right_dir//\//\\/}"')\/?([^:]*):.*/, "\\2", "g", $0);
+                    basename = gensub(/Only in [^:]+: (.*)/, "\\1", "g", $0);
+                    if (basedir == left_path) {
+                        basedirname = left_name;
+                    } else if (basedir == right_path) {
+                        basedirname = right_name;
+                    }
+                    if (dirname != "") {
+                        dirname = dirname "/";
+                    }
+                    filepath = dirname basename;
+                    absfilepath = basedir "/" dirname basename;
+                    if (system("test -d \" absfilepath \"") == 0) {
+                        filepath = filepath "/";
+                    }
+                    printf("Only in %s: %s%s%s", basedirname, c_bold c_white, filepath, c_reset);
+                    if (show_timestamps) {
+                        if (basedirname == left_name) {
+                            if (left_is_git) {
+                                timestamp = git_timestamp(left_path, filepath);
+                            } else {
+                                timestamp = stat_timestamp(absfilepath);
+                            }
+                        } else if (basedirname == right_name) {
+                            if (right_is_git) {
+                                timestamp = git_timestamp(right_path, filepath);
+                            } else {
+                                timestamp = stat_timestamp(absfilepath);
+                            }
+                        }
+                        printf("  %s(%s)%s", c_cyan, timestamp, c_reset);
+                    }
+                    print "";
+                } else if (/^diff/) {
+                    filepath = gensub(/"/, "", "g", $0);
+                    filepath = gensub(/(diff.*?) '"${left_dir//\//\\/}"'\/(.*) '"${right_dir//\//\\/}"'\/?(.*)/, "\\2", "g", filepath);
+                    # This never shows up in brief mode, so we do not need to check
+                    print_diff_header(filepath);
+                } else if (/^Files .* are identical$/) {
+                    filepath = gensub(/"/, "", "g", $0);
+                    filepath = gensub(/Files '"${left_dir//\//\\/}"'\/(.*) and '"${right_dir//\//\\/}"'\/(.*) are identical/, "\\1", "g", filepath);
+                    if (do_brief) {
+                        printf("%sFile matches%s: %s%s%s", c_green, c_reset, c_bold c_white, filepath, c_reset);
+                        if (show_timestamps) {
+                            if (left_is_git) {
+                                timestamp_left = git_timestamp(left_path, filepath);
+                            } else {
+                                timestamp_left = stat_timestamp(absfilepath);
+                            }
+                            if (right_is_git) {
+                                timestamp_right = git_timestamp(right_path, filepath);
+                            } else {
+                                timestamp_right = stat_timestamp(absfilepath);
+                            }
+                            printf("  %s(%s) (%s)%s", c_cyan, timestamp_left, timestamp_right, c_reset);
+                        }
+                        print "";
+                    } else {
+                        print_diff_header(filepath);
+                        printf("%sFiles %s%s/%s%s and %s%s/%s%s are identical%s\n", c_white, c_red, left_name, filepath, c_reset, c_green, right_name, filepath, c_reset, c_reset);
+                    }
+                } else if (/^Binary files .* differ$/) {
+                    # Use the same format as lines that start with "^diff"
+                    filepath = gensub(/Binary files '"${left_dir//\//\\/}"'\/(.+) and .* differ/, "\\1", "g", $0);
+                    # This never shows up in brief mode, so we do not need to check
+                    print_diff_header(filepath);
+                    print c_white "< Binary file differs >" c_reset;
+                } else if (/^Files .* differ$/) {
+                    filepath = gensub(/Files '"${left_dir//\//\\/}"'\/(.+) and .* differ/, "\\1", "g", $0);
+                    if (do_brief) {
+                        printf("%sFile differs%s: %s%s%s", c_red, c_reset, c_bold c_white, filepath, c_reset);
+                        if (show_timestamps) {
+                            if (left_is_git) {
+                                timestamp_left = git_timestamp(left_path, filepath);
+                            } else {
+                                timestamp_left = stat_timestamp(absfilepath);
+                            }
+                            if (right_is_git) {
+                                timestamp_right = git_timestamp(right_path, filepath);
+                            } else {
+                                timestamp_right = stat_timestamp(absfilepath);
+                            }
+                            printf("  %s(%s) (%s)%s", c_cyan, timestamp_left, timestamp_right, c_reset);
+                        }
+                        print "";
+                    } else {
+                        print_diff_header(filepath);
+                        print c_white "< Binary file differs >" c_reset;
+                    }
+                } else {
+                    print $0;
+                }
+            }
+            first_line = 0;
+        '
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && (
+    if [ -n "${DEBUG}" ]; then
+        exec 3>&2
+        main "${@}"
+    else
+        main "${@}" 3>/dev/null
+    fi
+)

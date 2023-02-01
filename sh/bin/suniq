@@ -1,0 +1,39 @@
+#!/bin/bash
+#
+# Run `sort` and `uniq` on stdin or a file
+
+## usage functions #############################################################
+################################################################################
+
+# we'll just pass all options to either the `sort` or `uniq` command as
+# appropriate, but some options overlap, so for those we'll make a mapping of
+# suniq-to-sort and suniq-to-uniq options that looks like:
+# (
+#   <suniq option> <sort option>
+#   ...
+# )
+UNIQ_MAP=(
+    -c -c
+    -d -d
+
+)
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h                 display usage
+    --help             display this help message
+    -i                 modify file in place
+    -n                 sort numerically
+    -c                 count the number of unique lines
+    -d / --duplicates  print only duplicate lines, once for each sequence
+    -D                 print each duplicate line once for each time it appears
+    -i                 ignore case
+    -u                 print only unique lines
+
+EOF
+}
+
+echo WIP

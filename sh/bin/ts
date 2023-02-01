@@ -4,6 +4,10 @@
 
 include-source 'echo.sh'
 
+## backup ######################################################################
+################################################################################
+
+
 ## usage functions #############################################################
 ################################################################################
 
@@ -54,6 +58,9 @@ EOF
     -t/--type <type>         alias for --field type=<type>
     -b/--begin <begin>       alias for --field start=<begin>
     -e/--end <end>           alias for --field end=<end>
+    --all                    alias for --since "1970-01-01 00:00:00"
+    --daily                  alias for --since "yesterday 00:00"
+    --weekly                 alias for --since "7 days ago 00:00"
 
 EOF
     echo "Update options:"
@@ -151,6 +158,23 @@ function parse-args() {
                 END_TIME="${timestamp}"
                 shift 2
                 ;;
+            --all)
+                WHERE+=("start > '1970-01-01 00:00:00'")
+                WHERE_SPECIFIED=1
+                shift 1
+                ;;
+            --daily)
+                local timestamp=$(date -d "yesterday 00:00:00" +"%Y-%m-%d %H:%M:%S")
+                WHERE+=("start > '${timestamp}'")
+                WHERE_SPECIFIED=1
+                shift 1
+                ;;
+            --weekly)
+                local timestamp=$(date -d "7 days ago 00:00:00" +"%Y-%m-%d %H:%M:%S")
+                WHERE+=("start > '${timestamp}'")
+                WHERE_SPECIFIED=1
+                shift 1
+                ;;
             -[^0-9]*)
                 echo-stderr "error: unknown option ${1}"
                 echo-stderr "$(help-usage)"
@@ -178,16 +202,124 @@ function parse-args() {
                 ;;
         esac
     done
+    
+    # First things first -- make a backup of the timesheet file
+    local backup="${TIMESHEET_FILE}.bak"
+    local tsf_lines=$(cat "${TIMESHEET_FILE}" | wc -l)
+    local tsb_lines=$(cat "${backup}" | wc -l)
+    if [[ ${tsf_lines} -gt ${tsb_lines} ]]; then
+        cp "${TIMESHEET_FILE}" "${TIMESHEET_FILE}.bak"
+    elif [[ ${tsf_lines} -lt ${tsb_lines} ]]; then
+        echo "'${TIMESHEET_FILE}' seems to be missing data from its backup"
+    fi
 
     # If no subcommand was specified, use the default
     if [ -z "${SUBCOMMAND}" ]; then
         SUBCOMMAND="${SUBCOMMAND_DEFAULT}"
+        if [[
+            ${#POSITIONAL_ARGS[@]} -eq 0
+            && ${#FIELDS[@]} -eq 0
+            && ${#ROWS[@]} -eq 0
+            && ${WHERE_SPECIFIED} -eq 0
+        ]]; then
+            # Show only the current day's entries if no arguments were provided
+            WHERE+=("start >= '$(date -d 'today 00:00' +"${DATE_FORMAT}")'")
+        fi
     fi
 }
 
 
 ## helpful functions ###########################################################
 ################################################################################
+
+# Generate a timestamp from human readable text
+function timestamp() {
+    # Parse arguments
+    local text="now"
+    local format="${DATE_FORMAT:-%Y-%m-%d %H:%M:%S}"
+    local require_valid=0
+    local positional_args=()
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -f | --format)
+                format="${2}"
+                shift 2
+                ;;
+            -r | --require-valid)
+                require_valid=1
+                shift 1
+                ;;
+            *)
+                positional_args+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+    
+    # If there are any positional arguments, combine them into a single string
+    if [[ ${#positional_args[@]} -gt 0 ]]; then
+        text="${positional_args[@]}"
+    fi
+
+    # Do some basic manipulation to allow for slightly more natural input than
+    # the date command allows
+    local date_regex='^[0-9]{2,4}[-/][0-9]{2}[-/][0-9]{2,4}$'
+    local datetime_regex='^[0-9]{2,4}[-/][0-9]{2}[-/][0-9]{2,4} [0-9]{2}:[0-9]{2}$'
+    if [[ "${text}" =~ ${date_regex} ]]; then
+        # If the text is a date, assume it's the beginning of the day
+        text="${text} 00:00:00"
+    elif [[ "${text}" =~ ${datetime_regex} ]]; then
+        # If the text is a date and time, assume it's the beginning of the minute
+        text="${text}:00"
+    fi
+
+    text=$(
+        perl -pe '
+            s/midnight/00:00:00/g;
+            s/(after)?noon/12:00:00/g;
+            s/( )?\bat /\1/g;
+            s/\b(\d+)[Ss](ec(ond)?(s)?)?\b/\1 second\4/g;
+            s/\b(\d+)[Mm](in(ute)?(s)?)?\b/\1 minute\4/g;
+            s/\b(\d+)[Hh](ou)?r?(s)?\b/\1 hour\3/g;
+            s/\b(\d+)[Dd](ay)?(s)?\b/\1 day\3/g;
+            s/\b(\d+)[Ww](ee)?k?(s)?\b/\1 week\3/g;
+            s/\b(\d+)[Yy](ea)?r?(s)?\b/\1 year\3/g;
+            s/\bone\b/1/g;
+            s/\btwo\b/2/g;
+            s/\bthree\b/3/g;
+            s/\bfour\b/4/g;
+            s/\bfive\b/5/g;
+            s/\bsix\b/6/g;
+            s/\bseven\b/7/g;
+            s/\beight\b/8/g;
+            s/\bnine\b/9/g;
+            s/\bten\b/10/g;
+            s/\beleven\b/11/g;
+            s/\btwelve\b/12/g;
+        ' <<< "${text}"
+    )
+
+    if [[ "${text}" =~ ^[0-9]+$ ]]; then
+        # If the text is a number, assume it's a unix timestamp
+        text="@${text}"
+    fi
+
+    value=$(date -d "${text}" +"${format}" 2> /dev/null)
+    exit_code=${?}
+
+    if [[ ${exit_code} -ne 0 ]]; then
+        if [[ ${require_valid} -eq 1 ]]; then
+            echo-stderr "error: invalid date/time: '${text}'"
+            exit 1
+        else
+            :  # do nothing
+        fi
+    else
+        echo "${value}"
+    fi
+
+    return ${exit_code}
+}
 
 # Build a command from the variables:
 #  SUBCOMMAND, WHERE, FIELDS, TIMESHEET_FILE, and POSITIONAL_ARGS
@@ -325,6 +457,39 @@ function _ts_rm() {
         unset POSITIONAL_ARGS[0]
     fi
 }
+
+# @description Copy a previous row, by default clearing the end time and using
+#              the current time as the start time. If a query is specified, then
+#              the last row matching the query will be copied. Any fields
+#              specified (e.g. --start "5 minutes ago") will override the values
+#              from the copied row.
+# @args <row index | query>
+# @usage ts copy <row index | query>
+# @usage ts copy --row <index>
+# @example ts copy "foo == bar"
+# @example ts copy 923 --start "5 minutes ago"
+function _ts_copy() {
+    local row where
+
+    # Determine if a row index or query was specified either as a positional
+    # argument or as a flag
+    if [ -n "${POSITIONAL_ARGS[0]}" ]; then
+        if [[ "${POSITIONAL_ARGS[0]}" =~ ^-?[0-9]+$ ]]; then
+            ROWS+=("${POSITIONAL_ARGS[0]}")
+            unset POSITIONAL_ARGS[0]
+        else
+            WHERE+=("${POSITIONAL_ARGS[0]}")
+            unset POSITIONAL_ARGS[0]
+        fi
+    fi
+
+    # Don't allow both a row index and a query to be specified
+    if [ ${#ROWS[@]} -gt 0 ] && [ ${#WHERE[@]} -gt 0 ]; then
+        echo-stderr "error: cannot specify both a row index and a query"
+        return 1
+    fi
+}
+function _ts_c() { _ts_copy "${@}"; }
 
 # @description Update a row in the timesheet
 # @args <row index | query> [<field> <value>]
@@ -467,42 +632,85 @@ function _ts_help() {
         # Otherwise, use awk to print the help message for the specified
         # subcommand
         awk -v subcommand="${subcommand}" -v prog="$(basename "${0}")" '
-            # Store any lines that start with "# @"
-            /^# @/ {
-                help_name = gensub(/^# @([a-z-]+).*/, "\\1", "g", $0);
-                help_text = gensub(/^# @([a-z-]+) (.*)/, "\\2", "g", $0);
-                help[help_name] = help_text;
+            BEGIN {
+                # used to track the current help name for multi-line fields
+                cur_help_name = "";
             }
-            # If we find a function, either print the help message or clear the
-            # help message
-            /^function/ {
-                found_cmd = gensub(/^function _ts_([a-z]+).*/, "\\1", "g", $0);
-                if (found_cmd == subcommand) {
-                    # If there is no help message, then say as much
-                    if (length(help) == 0) {
-                        exit 2;
+            # Define a function that wraps text to a specified width
+            function wrap(text, width) {
+                # If the text is longer than the width, then wrap it
+                if (length(text) > width) {
+                    # Split the text into words
+                    split(text, words, " ");
+
+                    # Loop through the words and add them to the line
+                    line = "";
+                    for (i in words) {
+                        # If the line is empty, then add the word
+                        if (length(line) == 0) {
+                            line = words[i];
+                        } else if (length(line) + length(words[i]) + 1 <= width) {
+                            # If the line is not empty and the word will fit on
+                            # the line, then add the word
+                            line = line " " words[i];
+                        } else {
+                            # Otherwise, print the line and start a new line
+                            print line;
+                            line = words[i];
+                        }
                     }
-                    # If there is a description, print and delete it
-                    if (help["description"]) {
-                        print help["description"];
-                        delete help["description"];
-                    } else {
-                        delete help["description"];
-                    }
-                    # If there are args, print and delete them
-                    if (help["args"] != "") {
-                        print "usage: " prog " " subcommand " " help["args"];
-                        delete help["args"];
-                    } else {
-                        delete help["args"];
-                    }
-                    # Loop over the remaining help messages and print them
-                    for (help_name in help) {
-                        print help_name ": " help[help_name];
-                    }
-                    exit;
+
+                    # Print the last line
+                    print line;
                 } else {
-                    split("", help);
+                    # Otherwise, just print the text
+                    print text;
+                }
+            }
+            {
+                # Store any lines that start with "# @"
+                if ($0 ~ /^# @/) {
+                    help_name = gensub(/^# @([a-z-]+).*/, "\\1", "g", $0);
+                    help_text = gensub(/^# @([a-z-]+) (.*)/, "\\2", "g", $0);
+                    cur_help_name = help_name;
+                    help[help_name] = help_text;
+                } else if ($0 ~ /^function/) {
+                    # If we find a function, either print the help message or
+                    # clear the help message
+                    cur_help_name = "";
+                    found_cmd = gensub(/^function _ts_([a-z]+).*/, "\\1", "g", $0);
+                    if (found_cmd == subcommand) {
+                        # If there is no help message, then say as much
+                        if (length(help) == 0) {
+                            exit 2;
+                        }
+                        # If there is a description, print and delete it
+                        if (help["description"]) {
+                            print wrap(help["description"], 80);
+                            delete help["description"];
+                        } else {
+                            delete help["description"];
+                        }
+                        # If there are args, print and delete them
+                        if (help["args"] != "") {
+                            print "usage: " prog " " subcommand " " help["args"];
+                            delete help["args"];
+                        } else {
+                            delete help["args"];
+                        }
+                        # Loop over the remaining help messages and print them
+                        for (help_name in help) {
+                            print help_name ": " help[help_name];
+                        }
+                        exit;
+                    } else {
+                        split("", help);
+                    }
+                } else if (cur_help_name != "" && $0 ~ /^# /) {
+                    # If we are in a multi-line field, then append the line to
+                    # the current help message
+                    help_text = gensub(/^#\s+(.*)/, "\\1", "g", $0);
+                    help[cur_help_name] = help[cur_help_name] " " help_text;
                 }
             }
             END {

@@ -16,11 +16,12 @@ usage() {
 }
 
 ## Command line options
-
-while getopts "hl" arg; do
+START_COMMAND=""
+while getopts "hlc:" arg; do
 	case $arg in
 		h) usage && exit;;
 		l) tmux list-sessions && exit;;
+		c) START_COMMAND="${OPTARG}"
 	esac
 done
 

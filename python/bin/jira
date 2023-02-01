@@ -79,6 +79,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="jira pycli")
     parser.add_argument("issues", nargs="+",
                         help="issues to look up")
+    parser.add_argument("-f", "--field", action="append", default=[],
+                        help="Return only the listed fields")
     # p_continue.add_argument("-c", "--continue", dest="cont", action="store_true",
                         # help="continue displaying the time since the timestring after it passes")
     # p_continue.add_argument("-s", "--stop", action="store_true",
@@ -112,6 +114,9 @@ def main() -> None:
     # Log in
     jira: JIRA = login()
     
+    # Get all field ids/names
+    jira_fields = jira.fields()
+    
     for issue_key in args.issues:
         issue = jira.issue(issue_key)
         print(issue.key)
@@ -120,10 +125,18 @@ def main() -> None:
         fields: dict[str, object] = {}
         for field in issue.raw['fields']:
             value = getattr(issue.fields, field)
+            # print(field, ": ", value)
             if field.startswith("customfield_"):
-                field = jira.get_custom_field_name(field)
+                # get the field name
+                for jira_field in jira_fields:
+                    if jira_field["id"] == field:
+                        # print("setting", field, "to", jira_field["name"])
+                        field = jira_field["name"]
             else:
                 field = field.capitalize()
+            if args.field and field not in args.field:
+                # print("skipping", field)
+                continue
             if value:
                 value = normalize_value(value)
                 fields[field] = value
@@ -135,6 +148,8 @@ def main() -> None:
                         lines.append(" "*21 + line)
                     value = "\n".join(lines)
                 print(f"{field + ':':<20}", value)
+            # else:
+                # print("field", field, "has no values")
             
 if __name__ == "__main__":
     main()

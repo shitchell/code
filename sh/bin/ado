@@ -1,0 +1,892 @@
+#!/bin/bash
+#
+# Run pipelines and view/download logs
+
+include-source 'debug.sh'
+include-source 'echo.sh'
+include-source 'shell.sh'
+
+## usage functions #############################################################
+################################################################################
+function parse-args() {
+    # Parse the command args, subcommand, and subcommand args
+    declare -ga SUBCOMMAND
+    declare -ga SUBCOMMAND_ARGS
+
+    IS_JSON=0  # whether the response should be json formatted
+
+    # Determine the git arguments, subcommand, and subcommand arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            # Handle all options that take no arguments
+            -h | --help | --version | --html-path | --man-path | --info-path | \
+            -p | --paginate | -P | --no-pager | --no-replace-objects | --bare | \
+            --literal-pathspecs | --glob-pathspecs | --noglob-pathspecs | \
+            --icase-pathspecs | --no-optional-locks | --no-renames | --exec-path*)
+                debug "no arg: ${1}"
+                GIT_ARGS+=("${1}")
+                shift 1
+                ;;
+
+            # Handle all options that optionally take an argument
+            --git-dir* | --work-tree* | --namespace* | --super-prefix* | \
+            --config-env* | --list-cmds*)
+                debug "arg optional: ${1}"
+                # Determine if the argument contains an equals sign
+                if [[ "${1}" =~ = ]]; then
+                    # If it does, then there is no 2nd argument
+                    GIT_ARGS+=("${1}")
+                    shift 1
+                else
+                    # If it doesn't, then there is a 2nd argument to store
+                    GIT_ARGS+=("${1}" "${2}")
+                    shift 2
+                fi
+                ;;
+
+            # Handle all options that require an argument
+            -C | -c)
+                debug "arg required: ${1}"
+                GIT_ARGS+=("${1}" "${2}")
+                shift 2
+                ;;
+
+            *)
+                # This is the subcommand -- store it and the rest of the args
+                SUBCOMMAND="${1}"
+                shift 1
+                SUBCOMMAND_ARGS=("${@}")
+                debug "subcommand: ${SUBCOMMAND}"
+                debug "subcommand args (${#@}):`printf " '%s'" "${SUBCOMMAND_ARGS[@]}"`"
+                break
+                ;;
+        esac
+    done
+}
+
+## helpful functions ###########################################################
+################################################################################
+
+function json-escape() {
+    local str="${1}"
+    if [ -z "${str}" ]; then
+        str=$(cat)
+    fi
+    echo "${str}" \
+        | sed 's/"/\\"/g' \
+        | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g' \
+        | sed -e ':a' -e 'N' -e '$!ba' -e 's/\r/\\r/g' \
+        | sed -e ':a' -e 'N' -e '$!ba' -e 's/\t/\\t/g'
+}
+
+# Convert an array with values in the format `key=value` to a JSON object
+function key-value-array-to-json() {
+    local values=("${@}")
+    local json='{'
+    for value in "${values[@]}"; do
+        local key=$(echo "${value}" | cut -d '=' -f 1 | json-escape)
+        local val=$(echo "${value}" | cut -d '=' -f 2- | json-escape)
+        json="${json}\"${key}\":\"${val}\","
+    done
+    json="${json%,}}"
+    echo "${json}"
+}
+
+## subcommands #################################################################
+################################################################################
+
+# @description Get a pipeline's ID
+# @usage id <pipeline-name>
+function _subcommand_id() {
+    local pipeline_name="${1}"
+    id=$(_subcommand_list "${pipeline_name}" \
+        | grep -P "^${pipeline_name}\b" \
+        | awk '{print $2}')
+    if [ -z "${id}" ]; then
+        echo "Pipeline '${pipeline_name}' not found" >&2
+        return 1
+    fi
+    echo "${id}"
+}
+
+# @description Get information about a pipeline run
+# @usage run-info <pipeline> <run-id>
+function _subcommand_run-info() {
+    local run_id="${1}"
+
+    # Ensure a pipeline and run_id were provided
+    if [ -z "${run_id}" ]; then
+        echo "error: run_id is required" >&2
+        return 1
+    fi
+
+    # Get the pipeline id
+    pipeline_id=$(_subcommand_id "${pipeline}")
+
+    # Get the pipeline run information
+    local response=$(
+        curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/build/builds/${run_id}?api-version=5.1" \
+            --silent \
+            --user ":${AZURE_PAT}" \
+            | python -m json.tool
+    )
+
+    # Get the pipeline name
+    local pipeline_name=$(echo "${response}" | grep -oP '(?<="name": ")[^"]+' | awk NR==1)
+    # Get the run name
+    local build_number=$(echo "${response}" | grep -oP '(?<="buildNumber": ")[^"]+' | awk NR==1)
+    # Get the branch it was run on
+    local branch_name=$(echo "${response}" | grep -oP '(?<="sourceBranch": ")[^"]+')
+    # Get the requester
+    local requestee_name=$(echo "${response}" | grep -oP '(?<="displayName": ")[^"]+' | awk NR==2)
+    local requestee_email=$(echo "${response}" | grep -oP '(?<="uniqueName": ")[^"]+' | awk NR==2)
+    # Get the created date
+    local created_date=$(echo "${response}" | grep -oP '(?<="startTime": ")[^"]+')
+    # Get the completed date
+    local finished_date=$(echo "${response}" | grep -oP '(?<="finishTime": ")[^"]+')
+    # Get the duration
+    local duration=$(( $(date -d "${finished_date}" +%s) - $(date -d "${created_date}" +%s) ))
+    # Convert the duration to human readable format
+    duration=$(date -d@${duration} -u +%H:%M:%S)
+    # Get the state
+    local status=$(echo "${response}" | grep -oP '(?<="status": ")[^"]+')
+    # Get the result
+    local result=$(echo "${response}" | grep -oP '(?<="result": ")[^"]+')
+
+    # Print the pipeline details
+    echo "Pipeline:   ${pipeline_name}"
+    echo "Run:        ${build_number}"
+    echo "Branch:     ${branch_name}"
+    echo "Requestee:  ${requestee_name} <${requestee_email}>"
+    echo "Started:    $(date -d "${created_date}" '+%Y-%m-%d %H:%M:%S')"
+    echo "Finished:   $(date -d "${finished_date}" '+%Y-%m-%d %H:%M:%S')"
+    echo "Duration:   ${duration}"
+    echo "Status:     ${status}"
+    echo "Result:     ${result}"
+}
+
+# Wait for a pipeline to complete
+# @description Wait for a pipeline to complete
+# @usage wait [-t|--timeout <seconds>] <run id>
+function _subcommand_wait() {
+    # Parse the arguments
+    local timeout=0
+    local run_id
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help wait
+                exit 0
+                ;;
+            -t|--timeout)
+                shift
+                timeout=${1}
+                ;;
+            *)
+                run_id="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    # Ensure a pipeline id was specified
+    if [ -z "${run_id}" ]; then
+        echo "error: pipeline run id not specified" >&2
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # Wait for the pipeline to complete
+    local start_time=$(date +%s)
+    local elapsed_time=0
+    local response status result
+    local created_date finished_date
+    local pipeline_name run_name branch_name
+    while [ "${status}" != "completed" ]; do
+        response=$(
+            curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/pipelines/348/runs/${run_id}?api-version=6.0-preview.1" \
+                --silent \
+                --user ":${AZURE_PAT}" \
+                | python -m json.tool
+        )
+        state=$(echo "${response}" | grep -oP '(?<="state": ")[^"]+')
+
+        if [ "${state}" != "inProgress" ]; then
+            break
+        fi
+
+        if [ "${timeout}" -gt 0 ] && [ "${elapsed_time}" -gt "${timeout}" ]; then
+            echo "error: timeout waiting for pipeline to complete" >&2
+            return 1
+        fi
+        sleep 5
+        elapsed_time=$(($(date +%s) - ${start_time}))
+    done
+
+    # Print the pipeline details
+    _subcommand_run-info "${run_id}"
+}
+
+# @description List available pipelines
+# @usage list
+function _subcommand_list() {
+    # Get the pipeline information
+    local response=$(
+        curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/pipelines?api-version=6.0-preview.1" \
+            --silent \
+            --user ":${AZURE_PAT}" \
+            | python -m json.tool
+    )
+
+    # Get the pipeline names
+    local pipeline_names=($(echo "${response}" | grep -oP '(?<="name": ")[^"]+'))
+
+    # Get the pipeline ids
+    local pipeline_ids=($(echo "${response}" | grep -oP '(?<="id": )[\d]+'))
+
+    # Print the pipeline names and ids
+    (
+        echo "Name   ID"
+        echo "------ ----"
+        for i in "${!pipeline_names[@]}"; do
+            echo "${pipeline_names[$i]} ${pipeline_ids[$i]}"
+        done | sort
+    ) | column -t
+}
+
+# @description Get the id of a pipeline
+# @usage get-id <pipeline name>
+function _subcommand_get-id() {
+    # Parse the arguments
+    local pipeline_name
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help get-id
+                exit 0
+                ;;
+            *)
+                pipeline_name="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    # Ensure a pipeline name was specified
+    if [ -z "${pipeline_name}" ]; then
+        echo "error: pipeline name not specified" >&2
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # Get the lists of pipelines
+    local pipelines=$(_subcommand_list)
+
+    # Get the pipeline id
+    local pipeline_id=$(
+        echo "${pipelines}" \
+        | awk -v pipeline_name="${pipeline_name}" '$1 == pipeline_name { print $2 }'
+    )
+
+    # Ensure the pipeline id was found
+    if [ -z "${pipeline_id}" ]; then
+        echo "error: pipeline '${pipeline_name}' not found" >&2
+        return 1
+    fi
+
+    # Print the pipeline id
+    echo "${pipeline_id}"
+}
+
+# @description Cancel a pipeline run
+# @usage cancel <run id> [-h|--help]
+function _subcommand_cancel() {
+    # Parse the arguments
+    local run_id
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help cancel
+                exit 0
+                ;;
+            *)
+                run_id="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    # Ensure a pipeline id was specified
+    if [ -z "${run_id}" ]; then
+        echo "error: pipeline run id not specified" >&2
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # Cancel the pipeline run
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/build/builds/${run_id}?api-version=5.1" \
+        --silent \
+        --user ":${AZURE_PAT}" \
+        --request PATCH \
+        -H "Content-Type: application/json" \
+        --data '{"status": "cancelling"}' \
+        | python -m json.tool
+}
+
+# @description List the N most recent runs of a pipeline
+# @usage list-runs [-h|--help] [-n|--number <number>] <pipeline id|name>
+function _subcommand_list-runs() {
+    # Parse the arguments
+    local number=10
+    local pipeline
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help list-runs
+                exit 0
+                ;;
+            -n|--number)
+                shift
+                number=${1}
+                ;;
+            *)
+                pipeline="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    # Ensure a pipeline was specified
+    if [ -z "${pipeline}" ]; then
+        echo "error: pipeline id not specified" >&2
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # If the pipeline specified is a name, get the id
+    if [[ "${pipeline}" =~ ^[0-9]+$ ]]; then
+        pipeline_id="${pipeline}"
+    else
+        pipeline_id=$(_subcommand_get-id "${pipeline}")
+    fi
+
+    # Get the pipeline runs
+    local response=$(
+        curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/pipelines/${pipeline_id}/runs?api-version=6.0-preview.1" \
+            --silent \
+            --user ":${AZURE_PAT}" \
+            | python -m json.tool
+    )
+
+    # Get the pipeline run ids
+    local run_ids=($(echo "${response}" | grep -oP '(?<="id": )[\d]+' | awk 'NR % 2 == 0'))
+
+    # Get the pipeline run names
+    local run_names=($(echo "${response}" | grep -oP '(?<="name": ")[^"]+' | awk 'NR % 2 == 0'))
+
+    # Get the pipeline run created dates
+    local run_created_dates=($(echo "${response}" | grep -oP '(?<="createdDate": ")[^"]+'))
+
+    # Get the pipeline run finished dates
+    local run_finished_dates=($(echo "${response}" | grep -oP '(?<="finishedDate": ")[^"]+'))
+
+    # Get the pipeline run states
+    local run_states=($(echo "${response}" | grep -oP '(?<="state": ")[^"]+'))
+
+    # Get the pipeline run results
+    local run_results=($(echo "${response}" | grep -oP '(?<="result": ")[^"]+'))
+
+    # Get the template parameters
+    IFS=$'\n' read -r -d '' -a parameters < <(
+        echo "${response}" \
+            | tr -d '\n' \
+            | tr '}' '\n' \
+            | grep -o "templateParameters.*" \
+            | sed -E 's/.* \{//;s/^\s+//;s/",\s+"/", "/g'
+    )
+
+    # Print the pipeline runs
+    local TAB=$'\t'
+    (
+        echo "id${TAB}name${TAB}created${TAB}finished${TAB}duration${TAB}state${TAB}result${TAB}parameters"
+        for i in "${!run_ids[@]}"; do
+            # Calculate the duration
+            local duration_seconds=$(($(date -d "${run_finished_dates[$i]}" +%s) - $(date -d "${run_created_dates[$i]}" +%s)))
+            local duration=$(date -u -d @${duration_seconds} +"%H:%M:%S")
+            echo "${run_ids[$i]}${TAB}${run_names[$i]}${TAB}${run_created_dates[$i]}${TAB}${run_finished_dates[$i]}${TAB}${duration}${TAB}${run_states[$i]}${TAB}${run_results[$i]}${TAB}${parameters[$i]}"
+        done
+    ) | head -n "$((number + 1))" | column -t -s $'\t'
+}
+
+# @description Run a pipeline with the specified name or id
+# @usage run [-h|--help] [-v variable=value] [-p parameter=value] [-b branch] [-w|--wait] <pipeline id|name>
+function _subcommand_run() {
+    # Parse the arguments
+    local branch=${AZURE_BRANCH:-master}
+    local variables=()
+    local parameters=()
+    local pipeline_name
+    local wait=0
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help run
+                exit 0
+                ;;
+            -v|--variable)
+                variables+=("${2}")
+                shift 2
+                ;;
+            -p|--parameter)
+                parameters+=("${2}")
+                shift 2
+                ;;
+            -b|--branch)
+                branch="${2}"
+                shift 2
+                ;;
+            -w|--wait)
+                wait=1
+                ;;
+            *)
+                pipeline_name="${1}"
+                shift 1
+                ;;
+        esac
+    done
+
+    # Ensure a pipeline name was specified
+    if [ -z "${pipeline_name}" ]; then
+        echo "error: pipeline name not specified" >&2
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # Get the pipeline id
+    local pipeline_id=$(_subcommand_get-id "${pipeline_name}")
+
+    # Ensure the pipeline id was found
+    if [ -z "${pipeline_id}" ]; then
+        echo "error: pipeline '${pipeline_name}' not found" >&2
+        return 1
+    fi
+
+    # Run the pipeline
+    # echo curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/pipelines/${pipeline_id}/runs?api-version=6.0-preview.1" \
+    #         --header "Content-Type: application/json" \
+    #         --user ":${AZURE_PAT}" \
+    #         --data '{   
+    #             "stagesToSkip":[],
+    #             "resources":
+    #             {
+    #                 "repositories":
+    #                 {
+    #                     "self":{"refName":"refs/heads/'"${branch}"'"}
+    #                 }
+
+    #             },
+    #             "templateParameters": '"$(key-value-array-to-json "${parameters[@]}")"',
+    #             "variables": '"$(key-value-array-to-json "${variables[@]}")"'
+    #         }'
+    response=$(
+        curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/pipelines/${pipeline_id}/runs?api-version=6.0-preview.1" \
+            --header "Content-Type: application/json" \
+            --user ":${AZURE_PAT}" \
+            --data '{   
+                "stagesToSkip":[],
+                "resources":
+                {
+                    "repositories":
+                    {
+                        "self":{"refName":"refs/heads/'"${branch}"'"}
+                    }
+
+                },
+                "templateParameters": '"$(key-value-array-to-json "${parameters[@]}")"',
+                "variables": '"$(key-value-array-to-json "${variables[@]}")"'
+            }' \
+            | python -m json.tool
+    )
+
+    echo "${response}"
+
+    # Get the pipeline run id
+    local run_id=$(echo "${response}" | grep -oP '(?<="id": )[\d]+' | tail -1)
+
+    # Wait for the pipeline to finish
+    if [ "${wait}" -eq 1 ]; then
+        echo "Waiting for pipeline to finish ... "
+        _subcommand_wait "${run_id}"
+    fi
+}
+
+# @description Cancel a pipeline run
+# @usage cancel <run id>
+function _subcommand_cancel() {
+    local run_id="${1}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/build/builds/${run_id}?api-version=6.0" \
+        --silent \
+        --request PATCH \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}" \
+        --data '{ "status": "cancelling" }'
+}
+
+# @description Get the build log for a pipeline run
+# @usage run-log <run id> <log id>
+function _subcommand_log() {
+    local run_id="${1}"
+    local log_id="${2}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/build/builds/${run_id}/logs/${log_id}?api-version=6.0" \
+        --silent \
+        --header "Content-Type: text/plain" \
+        --user ":${AZURE_PAT}"
+}
+
+# @description List the available logs for a pipeline run
+# @usage logs <run id>
+function _subcommand_logs() {
+    local run_id="${1}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/build/builds/${run_id}/logs?api-version=6.0" \
+        --silent \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}" \
+        | python -m json.tool
+}
+
+# @description Send a GET request to the specified URL and return the response
+# @usage get <url>
+function _subcommand_get() {
+    local url="${1}"
+
+    # Send the request
+    data=$(curl "${url}" \
+        --silent \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}")
+    
+    # Try to parse the response as JSON
+    echo "${data}" | python -m json.tool 2>/dev/null || echo "${data}"
+}
+
+# @description Send a POST request to the specified URL and return the response
+# @usage post <url> [curl options]
+function _subcommand_post() {
+    local url="${1}"
+    shift
+
+    # Send the request
+    data=$(curl \
+        --silent \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}" \
+        "$@" \
+        "${url}")
+    
+    # Try to parse the response as JSON
+    echo "${data}" | python -m json.tool 2>/dev/null || echo "${data}"
+}
+
+# @description Download the logs as a zip file for the specified pipeline run
+# @usage download-logs [-o|--output <path>] <run id>
+function _subcommand_download-logs() {
+    local run_id
+
+    # Parse the arguments
+    local output
+
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help download-logs
+                exit 0
+                ;;
+            -o|--output)
+                shift
+                output="${1}"
+                ;;
+            *)
+                if [ -z "${run_id}" ]; then
+                    run_id="${1}"
+                else
+                    echo "error: unexpected argument '${1}'" >&2
+                    echo "${usage}" >&2
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Ensure a run id was specified
+    if [ -z "${run_id}" ]; then
+        echo "error: run id not specified" >&2
+        echo "${usage}" >&2
+        return 1
+    fi
+
+    # Get the run info
+    local run_info=$(_subcommand_run-info "${run_id}")
+    local pipeline_name=$(echo "${run_info}" | grep -oP '^Pipeline: +\K.*')
+    local run_name=$(echo "${run_info}" | grep -oP '^Run: +\K.*')
+    local created_date=$(echo "${run_info}" | grep -oP '^Finished: +\K.*')
+    echo "${run_info}"
+
+    # If no output file specified, use the run info
+    if [ -z "${output}" ]; then
+        # Make sure we have the required info
+        if [ -z "${pipeline_name}" ] || [ -z "${run_name}" ] || [ -z "${created_date}" ]; then
+            echo "error: unable to determine output file name" >&2
+            return 1
+        fi
+        output="${pipeline_name}-${run_name}-${run_id}-$(date -d "${created_date}" "+%Y%m%d_%H%M%S").zip"
+    fi
+    echo
+    echo "Downloading logs to ${output} ..."
+
+    # Download the logs
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/build/builds/${run_id}/logs?\$format=zip" \
+        --user ":${AZURE_PAT}" \
+        --output "${output}"
+}
+
+# @description Create a pull request from / to the specified branches
+# @usage pr <source branch> <target branch> [title] [description]
+function _subcommand_pr-create() {
+    local source_branch="${1}"
+    local target_branch="${2}"
+    local title="${3:-"Merge ${source_branch} into ${target_branch}"}"
+    local description="${4}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/git/repositories/AssetSuite/pullrequests?api-version=6.0" \
+        --silent \
+        --request POST \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}" \
+        --data '{
+            "sourceRefName": "refs/heads/'"${source_branch}"'",
+            "targetRefName": "refs/heads/'"${target_branch}"'",
+            "title": "'"${title}"'",
+            "description": "'"${description}"'"
+        }' \
+            | python -m json.tool
+}
+
+# @description Approve a pull request
+# @usage pr-approve <pr id>
+function _subcommand_pr-approve() {
+    local pr_id="${1}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/git/repositories/AssetSuite/pullrequests/${pr_id}/reviewers?api-version=6.0" \
+        --silent \
+        --request POST \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}" \
+        --data "{ \"vote\": 10, \"id\": \"${AZURE_USER_ID}\" }" \
+            | python -m json.tool
+}
+
+# @description Complete a pull request
+# @usage pr-complete <pr id>
+function _subcommand_pr-complete() {
+    local pr_id="${1}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/git/repositories/AssetSuite/pullrequests/${pr_id}?api-version=6.0" \
+        --silent \
+        --request PATCH \
+        --header "Content-Type: application/json" \
+        --user ":${AZURE_PAT}" \
+        --data "{ \"status\": 3 }" \
+            | python -m json.tool
+}
+
+# @description List all pull requests
+# @usage pr-list
+function _subcommand_pr-list() {
+    # Parse the arguments
+    curl "https://dev.azure.com/ontariopowergeneration/AssetSuite/_apis/git/repositories/AssetSuite/pullrequests?api-version=6.0" \
+        --silent \
+        --user ":${AZURE_PAT}" \
+            | python -m json.tool
+}
+
+# @description Print the usage message or the help message for a subcommand
+# @args [<subcommand>]
+function _subcommand_help() {
+    local subcommand="${1:-${POSITIONAL_ARGS[0]}}"
+
+    # If no subcommand was specified, then print the help message
+    if [ -z ${subcommand} ]; then
+        # Parse for all the subcommands
+        local subcommands=()
+        while read -r line; do
+            if [[ "${line}" =~ ^_subcommand_[A-za-z0-9_-]+" (" ]]; then
+                subcommands+=($(echo "${line}" | grep -oP "_subcommand_\K[a-z_-]+"))
+            fi
+        done < <(declare -f)
+        echo "usage: $(basename "${0}") <subcommand> [options]"
+        echo
+        echo "Available subcommands:"
+        printf " - %s\n" "${subcommands[@]}"
+        echo
+        echo "For help with a specific subcommand, run:"
+        echo "    $(basename "${0}") help <subcommand>"
+    else
+        # Determine if the subcommand is an alias for another subcommand
+        local code=$(type "_subcommand_${subcommand}" 2>/dev/null)
+        if grep -qE "^    _subcommand_" <<< "${code}"; then
+            subcommand=$(echo "${code}" | grep -oP "^    _subcommand_\K[a-z_-]+")
+        fi
+
+        debug "subcommand: ${subcommand}"
+
+        # Otherwise, use awk to print the help message for the specified
+        # subcommand
+        awk -v subcommand="${subcommand}" -v prog="$(basename "${0}")" '
+            BEGIN {
+                # used to track the current help name for multi-line fields
+                cur_help_name = "";
+            }
+            # Define a function that wraps text to a specified width
+            function wrap(text, width) {
+                # If the text is longer than the width, then wrap it
+                if (length(text) > width) {
+                    # Split the text into words
+                    split(text, words, " ");
+
+                    # Loop through the words and add them to the line
+                    line = "";
+                    for (i in words) {
+                        # If the line is empty, then add the word
+                        if (length(line) == 0) {
+                            line = words[i];
+                        } else if (length(line) + length(words[i]) + 1 <= width) {
+                            # If the line is not empty and the word will fit on
+                            # the line, then add the word
+                            line = line " " words[i];
+                        } else {
+                            # Otherwise, print the line and start a new line
+                            print line;
+                            line = words[i];
+                        }
+                    }
+
+                    # Print the last line
+                    print line;
+                } else {
+                    # Otherwise, just print the text
+                    print text;
+                }
+            }
+            {
+                # Store any lines that start with "# @"
+                if ($0 ~ /^# @/) {
+                    help_name = gensub(/^# @([a-z-]+).*/, "\\1", "g", $0);
+                    help_text = gensub(/^# @([a-z-]+) (.*)/, "\\2", "g", $0);
+                    cur_help_name = help_name;
+                    help[help_name] = help_text;
+                } else if ($0 ~ /^function/) {
+                    # If we find a function, either print the help message or
+                    # clear the help message
+                    cur_help_name = "";
+                    found_cmd = gensub(/^function _subcommand_([a-z_-]+).*/, "\\1", "g", $0);
+                    if (found_cmd == subcommand) {
+                        # If there is no help message, then say as much
+                        if (length(help) == 0) {
+                            exit 2;
+                        }
+                        # If there is a description, print and delete it
+                        if (help["description"]) {
+                            print wrap(help["description"], 80);
+                            delete help["description"];
+                        } else {
+                            delete help["description"];
+                        }
+                        # If there are args, print and delete them
+                        if (help["args"] != "") {
+                            print "usage: " prog " " subcommand " " help["args"];
+                            delete help["args"];
+                        } else {
+                            delete help["args"];
+                        }
+                        # Loop over the remaining help messages and print them
+                        for (help_name in help) {
+                            print help_name ": " help[help_name];
+                        }
+                        exit;
+                    } else {
+                        split("", help);
+                    }
+                } else if (cur_help_name != "" && $0 ~ /^# /) {
+                    # If we are in a multi-line field, then append the line to
+                    # the current help message
+                    help_text = gensub(/^#\s+(.*)/, "\\1", "g", $0);
+                    help[cur_help_name] = help[cur_help_name] " " help_text;
+                }
+            }
+            END {
+                if (found_cmd != subcommand) {
+                    exit 1;
+                }
+            }
+        ' "${BASH_SOURCE[0]}"
+        local exit_code=${?}
+        case ${exit_code} in
+            0)
+                # Do nothing
+                ;;
+            1)
+                echo-stderr "error: no such subcommand '${subcommand}'"
+                ;;
+            2)
+                echo-stderr "error: no help message found for subcommand '${subcommand}'"
+                ;;
+            *)
+                echo-stderr "error: awk exited with code ${exit_code}"
+                ;;
+        esac
+    fi
+    exit ${exit_code}
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    # Ensure AZURE_PAT is set
+    AZURE_PAT="${AZURE_PAT:-$(pass show azure/pat/roman_opg_assetsuite_4_pushing)}"
+    if [ -z "${AZURE_PAT}" ]; then
+        echo "error: AZURE_PAT environment variable not set" >&2
+        return 1
+    fi
+
+    # Parse the arguments
+    local subcommand="${1}"
+    shift
+
+    local subcommand_func="_subcommand_${subcommand}"
+    # Determine if the subcommand function exists
+    if ! declare -f "${subcommand_func}" > /dev/null; then
+        echo "error: unknown subcommand '${subcommand}'" >&2
+        echo "usage: $(functionname) <subcommand> [<args>]" >&2
+        return 1
+    fi
+
+    # Run the subcommand
+    "${subcommand_func}" "${@}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"

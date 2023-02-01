@@ -4,6 +4,6 @@
 # TODO: filter by categories
 
 WMIC.exe process get Description \
-            | sort \
-            | uniq \
-            | sed -e 's/\s*$//'
+    | sort \
+    | uniq \
+    | sed -e 's/\s*$//;/^\s*$/d'

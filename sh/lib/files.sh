@@ -1,6 +1,6 @@
 # Accepts a filename and, if <filename> already exists, returns a unique
 # filename in the format <filename>.<n>
-function mkuniq-filename() {
+function mkuniq() {
     local filename="${1}"
     if [ -f "${filename}" ]; then
         local n=1

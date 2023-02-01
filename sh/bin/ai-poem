@@ -26,7 +26,7 @@ function urlencode() {
     echo "${data##/?}"
 }
 
-curl -s 'https://www.poemofquotes.com/tools/poetry-generator/ai-poem-generator?step3=yes&gosubmit=1&step0=ok&step1=ok&step2='"$(urlencode "${query}")" \
+curl -s 'https://www.poemofquotes.com/tools/poetry-generator/ai-poem-generator?step2=yes&gosubmit=1&step0=ok&step1='"$(urlencode "${query}")" \
     | grep -zoP '(?s)<div class="poem">.*?</div>' \
     | perl -pe 's/<.*?>/\n/g' \
     | sed '1,3d' \

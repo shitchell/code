@@ -1,0 +1,105 @@
+#!/bin/bash
+#
+# Find a random file or files in directories
+
+## imports #####################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-num <int>] [<\`find\` options>] <dir> [<dir> ...]"
+}
+
+function help-epilogue() {
+    echo "find a random file or files in directories"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "A wrapper around the \`find\` command that returns random files or"
+    echo "directories. Any options specified other than the options listed"
+    echo "below are passed to \`find\`."
+    echo
+    cat << EOF
+    -h               display usage
+    --help           display this help message
+    -num <int>       the number of files to find, defaults to 1
+EOF
+    echo
+    echo "\`find\` options:"
+    echo
+    find --help | head -2
+}
+
+function parse-args() {
+    # Default values
+    NUM=1
+    MAXDEPTH=""
+    MINDEPTH=""
+    FIND_ARGS=()
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -num)
+                NUM="${2}"
+                shift 2
+                ;;
+            -maxdepth)
+                MAXDEPTH="${2}"
+                shift 2
+                ;;
+            -mindepth)
+                MINDEPTH="${2}"
+                shift 2
+                ;;
+            *)
+                FIND_ARGS+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    debug "NUM: ${NUM}"
+    debug "MAXDEPTH: ${MAXDEPTH}"
+    debug "MINDEPTH: ${MINDEPTH}"
+    debug "FIND_ARGS: $(printf "'%s' " "${FIND_ARGS[@]}")"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # Find the files
+    local -a FILES
+    FILES=($(find "${@}" "${FIND_ARGS[@]}" | shuf | head -n "${NUM}"))
+
+    # Print the files
+    for FILE in "${FILES[@]}"; do
+        echo "${FILE}"
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

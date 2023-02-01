@@ -306,6 +306,8 @@ function is-ref-or-file() {
     local ref_type=$(get-ref-type "${object}")
     # if it's unknown, check to see if it's a currently untracked remote branch
     if [ "${ref_type}" == "unknown" ]; then
+        # remove a remote prefix if it exists
+        object="${object#$(git remote)/}"
         if git show-ref -q --verify "refs/remotes/$(git remote)/${object}" 2>/dev/null; then
             ref_type="branch"
         fi

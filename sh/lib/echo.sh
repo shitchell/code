@@ -1,6 +1,40 @@
 include-source 'shell.sh'
 include-source 'text.sh'
 
+# Colors!
+C_BLACK="\e[30m"
+C_RED="\e[31m"
+C_GREEN="\e[32m"
+C_YELLOW="\e[33m"
+C_BLUE="\e[34m"
+C_MAGENTA="\e[35m"
+C_CYAN="\e[36m"
+C_WHITE="\e[37m"
+C_RGB="\e[38;2;%d;%d;%dm"
+C_DEFAULT_FG="\e[39m"
+C_BLACK_BG="\e[40m"
+C_RED_BG="\e[41m"
+C_GREEN_BG="\e[42m"
+C_YELLOW_BG="\e[43m"
+C_BLUE_BG="\e[44m"
+C_MAGENTA_BG="\e[45m"
+C_CYAN_BG="\e[46m"
+C_WHITE_BG="\e[47m"
+C_RGB_BG="\e[48;2;%d;%d;%dm"
+C_DEFAULT_BG="\e[49m"
+S_RESET="\e[0m"
+S_BOLD="\e[1m"
+S_DIM="\e[2m"
+S_ITALIC="\e[3m"  # not widely supported, sometimes treated as inverse
+S_UNDERLINE="\e[4m"
+S_BLINK="\e[5m"  # slow blink
+S_BLINK_FAST="\e[6m"  # fast blink
+S_REVERSE="\e[7m"
+S_HIDDEN="\e[8m"  # not widely supported
+S_STRIKETHROUGH="\e[9m"  # not widely supported
+S_DEFAULT="\e[10m"
+
+
 # echos each argument based on the preceding argument:
 #   -g: green
 #   -r: red
@@ -16,11 +50,13 @@ include-source 'text.sh'
 #   -n: do not echo a newline
 #   -V <level>: only echo if the global VERBOSITY is >= <level>
 function echo-formatted() {
-    local code_g="\033[32m"
     local code_r="\033[31m"
+    local code_g="\033[32m"
+    local code_y="\033[33m"
     local code_b="\033[34m"
     local code_p="\033[35m"
     local code_c="\033[36m"
+    local code_w="\033[37m"
     local code_B="\033[1m"
     local code_R="\033[7m"
     local code_U="\033[4m"
@@ -32,9 +68,10 @@ function echo-formatted() {
 
     # check ECHO_FORMATTED to determine if we should colorize output in a tty
     # TODO: make this configurable via command line arguments
-    format_when="${ECHO_FORMATTED:-auto}"
+    local format_when="${ECHO_FORMATTED:-auto}"
 
     # if ECHO_FORMATTED is set to "auto", then colorize if we are in a tty
+    local do_format
     if [ "${format_when}" = "auto" ]; then
         if [ -t 1 ]; then
             do_format=1
@@ -125,15 +162,15 @@ function echo-formatted() {
         fi
     done
 
-    # if piped data is available, echo it
-    if read -t 0; then
-        if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
-        || ! is-int ${VERBOSITY}; then
-            local piped_data=$(cat -)
-            printf "%s" "${piped_data}"
-            has_printed_anything=1
-        fi
-    fi
+    # # if piped data is available, echo it
+    # if test -t 0; then
+        # if (is-int ${VERBOSITY} && [ ${verbosity_level} -le ${VERBOSITY} ]) \
+        # || ! is-int ${VERBOSITY}; then
+            # local piped_data=$(cat -)
+            # printf "%s" "${piped_data}"
+            # has_printed_anything=1
+        # fi
+    # fi
 
     # echo the reset code
     if [ ${do_format} -eq 1 ]; then

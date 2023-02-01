@@ -349,11 +349,13 @@ function main() {
             fi
 
             # Get the file contents at that ref
-            local contents=$(git show "${ref}:${relpath}" 2>/dev/null)
+            local contents
+            contents=$(git show "${ref}:${relpath}" 2>/dev/null)
+            local file_exists=${?}
 
             # Use a silly "00000000000000000000000000000000" hash if the file is empty
             local md5
-            if [ -z "${contents}" ]; then
+            if [ ${file_exists} -ne 0 ]; then
                 md5="00000000000000000000000000000000"
             else
                 md5=$(echo "${contents}" | md5sum - | cut -d' ' -f1)
