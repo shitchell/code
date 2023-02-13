@@ -81,6 +81,14 @@ EOF
     -d / --dest <path>    path to the destination repo
     -B / --dest-branch <branch>
                           branch to use in the destination repo
+    --validate            check whether the latest changes have been promoted.
+                          assumes 'development', 'test', and 'release' branches
+                          exist
+    --vdev <branch>       use <branch> as the dev branch for `--validate`
+    --vtest <branch>      use <branch> as the test branch for `--validate`
+    --vrelease <branch>   use <branch> as the release branch for `--validate`
+    --no-validate         do not check whether the latest changes have been
+                          promoted
     --clean               remove uncommitted and untracked changes from the
                           source and destination repos before copying
     --no-clean            do not remove uncommitted and untracked changes from
@@ -89,9 +97,11 @@ EOF
                           copying
     --no-pull             do not pull the latest changes from the source repo
     --since <date>        only copy files committed after <date>
+    --no-since            do not use --since/--after
     --until <date>        only copy files committed before <date>
-    --before <date>       only copy files committed before <date>
+    --no-until            do not use --until/--before
     --after <date>        only copy files committed after <date>
+    --before <date>       only copy files committed before <date>
     -n / --num <num>      only copy the first <num> release commits
     -l / --logopt <arg>   pass <arg> to the git log command used to search the
                           source repo for customizations
@@ -129,6 +139,10 @@ function parse-args() {
     DO_COMMIT=0
     DO_CLEAN=1
     DO_PULL=1
+    DO_VALIDATE=1
+    VALIDATE_DEV="development"
+    VALIDATE_TEST="test"
+    VALIDATE_RELEASE="release"
     SINCE=""
     UNTIL=""
     GIT_LOG_OPTS=()
@@ -179,6 +193,26 @@ function parse-args() {
                 DEST_BRANCH=${2}
                 shift 2
                 ;;
+            --validate)
+                DO_VALIDATE=1
+                shift 1
+                ;;
+            --vdev)
+                VALIDATE_DEV=${2}
+                shift 2
+                ;;
+            --vtest)
+                VALIDATE_TEST=${2}
+                shift 2
+                ;;
+            --vrelease)
+                VALIDATE_RELEASE=${2}
+                shift 2
+                ;;
+            --no-validate)
+                DO_VALIDATE=0
+                shift 1
+                ;;
             --clean)
                 DO_CLEAN=1
                 shift 1
@@ -196,29 +230,52 @@ function parse-args() {
                 shift 1
                 ;;
             --since | --until)
-                local timestring
-                if [[ "${2}" =~ ^[0-9]+$ ]]; then
-                    # if the argument is a number, assume it's a unix timestamp
-                    timestring="@${2}"
+                if [[ -z "${2}" ]]; then
+                    SINCE=""
                 else
-                    timestring="${2}"
-                fi
-                SINCE=$(date -d "${timestring}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
-                if [ $? -ne 0 ]; then
-                    echo "error: invalid date '${2}'" >&2
-                    help-usage >&2
-                    exit 1
+                    local timestring
+                    if [[ "${2}" =~ ^[0-9]+$ ]]; then
+                        # if the argument is a number, assume it's a unix timestamp
+                        timestring="@${2}"
+                    else
+                        timestring="${2}"
+                    fi
+                    SINCE=$(date -d "${timestring}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+                    if [ $? -ne 0 ]; then
+                        echo "error: invalid date '${2}'" >&2
+                        help-usage >&2
+                        exit 1
+                    fi
                 fi
                 shift 2
                 ;;
+            --no-since | --no-until)
+                SINCE=""
+                shift 1
+                ;;
             --before | --after)
-                UNTIL=$(date -d "${2}" "+%Y-%m-%d %H:%M:%S")
-                if [ $? -ne 0 ]; then
-                    echo "error: invalid date '${2}'" >&2
-                    help-usage >&2
-                    exit 1
+                if [[ -z "${2}" ]]; then
+                    UNTIL=""
+                else
+                    local timestring
+                    if [[ "${2}" =~ ^[0-9]+$ ]]; then
+                        # if the argument is a number, assume it's a unix timestamp
+                        timestring="@${2}"
+                    else
+                        timestring="${2}"
+                    fi
+                    UNTIL=$(date -d "${timestring}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+                    if [ $? -ne 0 ]; then
+                        echo "error: invalid date '${2}'" >&2
+                        help-usage >&2
+                        exit 1
+                    fi
                 fi
                 shift 2
+                ;;
+            --no-before | --no-after)
+                UNTIL=""
+                shift 1
                 ;;
             -n | --num)
                 COMMIT_COUNT_LIMIT=${2}
@@ -379,7 +436,12 @@ function parse-args() {
     debug "DEST_REPO_NAME: ${DEST_REPO_NAME}"
     debug "DEST_BRANCH: ${DEST_BRANCH}"
     debug "SOURCE_SPECIFIED: ${SOURCE_SPECIFIED}"
+    debug "DEST_SPECIFIED: ${DEST_SPECIFIED}"
     debug "DO_COMMIT: ${DO_COMMIT}"
+    debug "DO_VALIDATE: ${DO_VALIDATE}"
+    debug "VALIDATE_DEV: ${VALIDATE_DEV}"
+    debug "VALIDATE_TEST: ${VALIDATE_TEST}"
+    debug "VALIDATE_RELEASE: ${VALIDATE_RELEASE}"
     debug "POSITIONAL_ARGS: $(printf "%q " "${POSITIONAL_ARGS[@]}")"
     debug "SINCE: ${SINCE}"
     debug "UNTIL: ${UNTIL}"
@@ -709,6 +771,35 @@ function main() {
 
         # Release each customization individually
         for customization in "${CUSTOMIZATIONS[@]}"; do
+            if [[ ${DO_VALIDATE} -eq 1 ]]; then
+                # Validate that the latest changes have been cherry-picked to test
+                echo -en "* validating ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} is up-to-date in ${C_YELLOW}test${S_RESET} ... "
+                # Get the latest commit in the development branch
+                local dev_ts=$(git -C "${SOURCE_REPO}" log -1 --format=%at origin/"${VALIDATE_DEV}" --first-parent -m --grep="${customization}")
+                # Get the latest commit in the test branch
+                local tst_ts=$(git -C "${SOURCE_REPO}" log -1 --format=%at origin/"${VALIDATE_TEST}" --grep="Cherry-picking for ${customization}")
+                # Check if the test branch is ahead of the development branch
+                if [[ ${tst_ts} -lt ${dev_ts} ]]; then
+                    echo -e "${C_RED}error${S_RESET}"
+                    echo -e "  ${C_RED}error${S_RESET}: ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} is not up-to-date in ${C_YELLOW}test${S_RESET}"
+                    echo -e "  ${C_RED}error${S_RESET}: ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} must be cherry-picked to ${C_YELLOW}test${S_RESET} before it can be released"
+                    continue
+                fi
+                echo -e "${C_GREEN}done${S_RESET}"
+
+                # Validate that the latest changes have been cherry-picked to release
+                echo -en "* validating ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} is up-to-date in ${C_YELLOW}release${S_RESET} ... "
+                # Get the latest commit in the release branch
+                local rel_ts=$(git -C "${SOURCE_REPO}" log -1 --format=%at origin/"${VALIDATE_RELEASE}" --grep="Cherry-picking for ${customization}")
+                # Check if the release branch is ahead of the test branch
+                if [[ ${rel_ts} -lt ${tst_ts} ]]; then
+                    echo -e "${C_RED}error${S_RESET}"
+                    echo -e "  ${C_RED}error${S_RESET}: ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} is not up-to-date in ${C_YELLOW}release${S_RESET}"
+                    echo -e "  ${C_RED}error${S_RESET}: ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} must be cherry-picked to ${C_YELLOW}release${S_RESET} before it can be released"
+                    continue
+                fi
+                echo -e "${C_GREEN}done${S_RESET}"
+            fi
             # Generate a list of all files committed under that Customization ID using ${GIT_LOG_OPTS}
             # note if there is a `--since` filter in ${GIT_LOG_OPTS}
             local since_filter
@@ -798,201 +889,3 @@ function main() {
 ################################################################################
 
 [ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
-exit $?  # return the exit code of the last command
-
-# Ensure that the specified repos and file are all valid
-if [ ! -d "${TRI_REPO}/.git" ]; then
-	echo "error: '${TRI_REPO}' is not a valid repo" >&2
-	usage >&2
-	exit 1
-fi
-if [ ! -d "${OPG_REPO}/.git" ]; then
-	echo "error: '${OPG_REPO}' is not a valid repo" >&2
-	usage >&2
-	exit 1
-fi
-if [ -n "${RELEASE_FILES}" ] && [ ! -f "${RELEASE_FILES}" ]; then
-	echo "error: '${RELEASE_FILES}' is not a valid file" >&2
-	usage >&2
-	exit 1
-fi
-
-# colored output
-GREEN="\033[32m"
-RED="\033[31m"
-BLUE="\033[34m"
-PURPLE="\033[35m"
-CYAN="\033[36m"
-RESET="\033[0m"
-
-# echo a command before running it
-echo-run() {
-        command="$@"
-        echo -e "${GREEN}${command}${RESET}"
-        "$@"
-        exit_code="$?"
-
-        if [ $exit_code -ne 0 ]; then
-                echo -e "${RED}command exited with status ${exit_code}${RESET}"
-        fi
-        return $exit_code
-}
-
-# Display information about how files will be copied to the OPG repository
-echo -n "Sync Strategy: "
-if [ -z "${RELEASE_FILES}" ]; then
-	echo "full sync"
-else
-	display_rows=17
-	echo "file list '${RELEASE_FILES}'"
-	cat "${RELEASE_FILES}" \
-		| sort \
-		| uniq \
-		| head -n ${display_rows} \
-		| tr -d '\r' \
-		| sed 's/.*/- &/g'
-	lines="$(cat "${RELEASE_FILES}" | sort | uniq | wc -l)"
-	if [ ${lines} -gt ${display_rows} ]; then
-		echo "- ... $((lines - display_rows)) lines omitted"
-	fi
-fi
-echo
-echo "This will reset both '$(basename "${TRI_REPO}")' and '$(basename "${OPG_REPO}")' to be in sync with origin."
-echo "Any unpushed changes will be lost!"
-read -p "Do you wish to proceed? (yes/no) " yn
-
-if ! [[ "${yn::1}" =~ [Yy] ]]; then
-	echo "such a tease :("
-	exit 1
-fi
-
-# save the current directory to return here
-cwd=$(pwd)
-
-# ensure the trinoor repository is on the release branch and in sync with origin
-echo-run cd "${TRI_REPO}"
-tri_branch=$(git symbolic-ref --short -q HEAD)
-if [ "${tri_branch}" != "release" ]; then
-	echo-run git checkout release
-else
-	echo -e "${BLUE}release branch already checked out${RESET}"
-fi
-echo-run git reset --hard HEAD \
-	&& echo-run git clean -fd \
-	&& echo-run git pull \
-	&& echo "successfully reset '${TRI_REPO}'"
-[ $? -ne 0 ] && echo "errors updating '${TRI_REPO}', exiting" && exit 1
-cd "${cwd}"
-
-# ensure the OPG repository is on the AS9-Trinoor-Dev branch and in sync with origin
-echo-run cd "${OPG_REPO}"
-opg_branch=$(git symbolic-ref --short -q HEAD)
-if [ "${opg_branch}" != "AS9-Trinoor-Dev" ]; then
-	echo-run git checkout AS9-Trinoor-Dev
-else
-	echo -e "${BLUE}AS9-Trinoor-Dev branch already checked out${RESET}"
-fi
-echo-run git reset --hard HEAD \
-	&& echo-run git clean -fd \
-	&& echo-run git pull \
-	&& echo "successfully reset '${OPG_REPO}'"
-[ $? -ne 0 ] && echo "errors updating '${OPG_REPO}', exiting" && exit 1
-
-# return to the original directory
-cd "${cwd}"
-
-directories="
-customization_metadata
-app_config
-database
-tailored
-tests
-nxa
-helix
-documents"
-
-if [ -n "${RELEASE_FILES}" ]; then
-	files=$(cat $RELEASE_FILES | sort | uniq)
-else
-	cd "${TRI_REPO}"
-	files=$(find ${directories} -type f)
-	cd "${cwd}"
-fi
-
-# determine total number of files
-total_files=$(echo "${files}" | wc -l)
-copied_files=0
-
-# ensure that piping doesn't mess up our copied_files count
-shopt -s lastpipe
-
-# Display a message about which sync strategy is being used
-if [ -n "${RELEASE_FILES}" ]; then
-	echo -e "${BLUE}Copying files in file list '${RELEASE_FILES}'${RESET}"
-else
-	echo -e "${BLUE}Copying all files in '${TRI_REPO}'${RESET}"
-fi
-
-last_transfer_err=0 # was the last file transfer successful?
-transfer_err="" # error message during transfer
-while read -r filepath; do
-	OPG_FILE="${OPG_REPO}/${filepath}"
-	TRI_FILE="${TRI_REPO}/${filepath}"
-
-	# copy, delete, or skip the file
-	if [ ! -f "${TRI_FILE}" ] && [ -f "${OPG_FILE}" ]; then
-		# if the TRI file doesn't exist, but the OPG file does, delete the OPG file
-		transfer_err=$(rm "${OPG_FILE}" 2>&1)
-	elif [ -f "${TRI_FILE}" ]; then
-		# copy the TRI file to the OPG repository
-		# ensure the OPG directory exists
-		mkdir -p "$(dirname "${OPG_FILE}")"
-		transfer_err=$(cp "${TRI_FILE}" "${OPG_FILE}" 2>&1)
-	else
-		# neither file exists, so skip it
-		transfer_err="'${filepath}' doesn't exist in either repository"
-	fi
-
-	# update the copied_files count
-	let copied_files++
-
-	# handle any errors
-	if [ -n "${transfer_err}" ]; then
-		if [ "${last_transfer_err}" -eq 0 ] && [ -n "${prev_line_len}" ]; then
-			# if the last transfer was not an error, and this isn't the first
-			# transfer, then echo a newline away from the last transfer message
-			echo
-		fi
-		echo -e "${RED}${transfer_err}${RESET}"
-		last_transfer_err=1
-		continue
-	else
-		last_transfer_err=0
-	fi
-
-	# update the progress bar
-	line="${copied_files} / ${total_files} -- ${filepath}"
-	# erase the previous line
-	echo -n $'\r'
-	printf "%${prev_line_len}s"
-	# show the current line
-	echo -n $'\r'"${line}"
-	prev_line_len="$(echo "${line}" | wc -c)"
-
-    # check if the file was a java class, in the db directory, or an ftp script
-    if is-java-class "${filepath}" >/dev/null 2>&1; then
-        echo
-        echo "- java class"
-    elif [[ "${filepath}" =~ ^"database/" ]]; then
-        echo
-        echo "- database file"
-    elif [[ "${filepath}" =~ ^"app_config/FTP_SCRIPTS/" ]]; then
-        echo
-        echo "- ftp script"
-    fi
-done <<< "${files}"
-
-shopt -u lastpipe
-
-echo
-echo "Now go commit and push!"
