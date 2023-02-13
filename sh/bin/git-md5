@@ -361,8 +361,9 @@ function main() {
                 md5=$(echo "${contents}" | md5sum - | cut -d' ' -f1)
             fi
 
-            # If this is a new md5, add it to the list
-            if ! in-array "${md5}" "${md5s[@]}"; then
+            # If this is a new md5, add it to the list,
+            # unless it is "000..."; for that we will always make it dim
+            if [[ "${md5}" != "00000000000000000000000000000000" ]] && ! in-array "${md5}" "${md5s[@]}"; then
                 # Add the md5 hash to the array
                 md5s+=("${md5}")
             else
@@ -380,14 +381,23 @@ function main() {
             if [[ "${COLOR}" == "always" || ( "${COLOR}" == "auto" && __IS_PIPED -eq 0 ) ]]; then
 	            if [ ${USE_ECHO_FORMATTED} -eq 1 ]; then
 	                if [ ${DO_ALTERNATE} -eq 1 ]; then
-	                    color_format="${echo_colors[${md5_index}]}"
+                        # for "000..." we will always make it dim
+                        if [[ "${md5}" == "00000000000000000000000000000000" ]]; then
+                            color_format="\033[2m"
+                        else
+                            color_format="${echo_colors[${md5_index}]}"
+                        fi
 	                else
 	                    color_format="${echo_colors[0]}"
 	                fi
 	                color_reset="\033[0m"
 	            else
 	                if [ ${DO_ALTERNATE} -eq 1 ]; then
-	                    color_format="%C(${git_colors[${md5_index}]})"
+                        if [[ "${md5}" == "00000000000000000000000000000000" ]]; then
+                            color_format="%C(dim)"
+                        else
+                            color_format="%C(${git_colors[${md5_index}]})"
+                        fi
 	                else
 	                    color_format="%C(${git_colors[0]})"
 	                fi
