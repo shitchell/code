@@ -1,24 +1,147 @@
 # This module contains function for debugging bash scripts.
 
 # Prints debug information if:
-#   - DEBUG is set to "true" or "1"
-#   - OR DEBUG_LEVEL is set and <= the first argument
-#   - OR DEBUG_LOG is set (prints to the file specified by DEBUG_LOG)
-# If `debug` is called without a debug level as the first argument, 1 is assumed.
+#   - DEBUG is set to "true", "all", or "*"
+#   - OR DEBUG is set to an integer and <= the first argument
 #
-# e.g.
-#   DEBUG=1 debug "foo bar" // will print
-#   DEBUG=1 debug 2 "foo bar" // will not print
-#   DEBUG=2 debug 1 "foo bar" // will print
-#   DEBUG=true    debug "foo bar" // will print
-#   DEBUG=true    debug 2 "foo bar" // will print
+# If `debug` is called without a debug level as the first argument, 1 is assumed
+# DEBUG_LOG can be used to print debug messages to a file instead of stderr
+# A debug message can be labeled by passing one of the following as the first
+# argument:
+#   - "error" (prints in red)
+#   - "success" (prints in green)
+#   - "warn" (prints in yellow)
+#   - "info" (prints in cyan)
+#
+# Examples:
+#   DEBUG=1   debug "foo bar" // will print
+#   DEBUG=1   debug 2 "foo bar" // will not print
+#   DEBUG=2   debug 1 "foo bar" // will print
+#   DEBUG=all debug "foo bar" // will print
+#   DEBUG=all debug 2 "foo bar" // will print
+#   DEBUG=1   debug error "foo bar" // will print in red
+#   DEBUG=1   debug 2 error "foo bar" // will not print
+#   DEBUG=2   debug 2 error "foo bar" // will print in red
 function debug() {
-    local debug_file  # the file descriptor to write messages to
+    local debug_file  # the file to write messages to
     local debug_level  # the debug level of this message
     local timestamp  # the timestamp of this message
     local function_name  # the name of the calling function
     local script_name  # the name of the calling script
     local line_number  # the line number of the debug call in the calling script
+    local line_loc  # the script, function, and line number of the debug call
+    local text_color  # the color to use for the debug message
+
+    # if DEBUG and DEBUG_LOG are not set, return
+    if [[ -z "${DEBUG}" && -z "${DEBUG_LOG}" ]]; then
+        return
+    fi
+
+    # if DEBUG_LOG is set, then use that as the log file, else use /dev/stderr
+    if [[ -n "${DEBUG_LOG}" ]]; then
+        if [[ -z "${DEBUG}" ]]; then
+            # if DEBUG is not set, default to 1
+            DEBUG=1
+        fi
+        debug_file="${DEBUG_LOG}"
+    else
+        # by default, print to /dev/stderr
+        debug_file="/dev/stderr"
+    fi
+
+    # determine if the first arg is an integer
+    if [[ "${1}" =~ ^[0-9]+$ ]]; then
+        # if it is, then use it as this debug message's debug level
+        debug_level=${1}
+        shift
+    else
+        debug_level=1
+    fi
+
+    # print the debug message if:
+    #   - DEBUG is set to "true", "all", or "*", or
+    #   - DEBUG is set to an integer and >= the debug level, or
+    #   - DEBUG_LOG is set (if DEBUG is not set, default to 1)
+    if [[
+        "${DEBUG}" =~ ^"true"|"all"|"*"$ \
+        || ("${DEBUG}" =~ ^[0-9]+$ && "${DEBUG}" -ge ${debug_level})
+    ]]; then
+        # create a timestamp
+        timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+        # get the calling function name
+        function_name=${FUNCNAME[1]}
+
+        # get the calling script name
+        script_name=$(basename ${BASH_SOURCE[-1]})
+
+        # get the calling line number
+        line_number=${BASH_LINENO[0]}
+
+        # handle color and some formatting
+        if [[ "${DEBUG_COLOR}" =~ ^"false"|"0"$ ]]; then
+            # timestamp
+            timestamp="[${timestamp}]"
+
+            # line description
+            [[ -n "${script_name}" ]] && line_loc+="${script_name}"
+            [[ -n "${function_name}" ]] && line_loc+=":${function_name}()"
+            [[ -n "${line_number}" ]] && line_loc+=":${line_number}"
+
+            # handle specific categories of debug messages
+            if [[ "${1}" =~ ^(error|warn|info|success)$ ]]; then
+                text_color=""
+                shift
+            fi
+            text_color_end=""
+        else
+            # timestamp
+            timestamp=$'\033[36m['"${timestamp}"$']\033[0m'
+
+            # line description
+            [[ -n "${script_name}" ]] && line_loc+=$'\033[35m'"${script_name}"$'\033[0m'
+            [[ -n "${function_name}" ]] && line_loc+=$'\033[35;1m:'"${function_name}"$'()\033[0m'
+            [[ -n "${line_number}" ]] && line_loc+=$'\033[32m:'"${line_number}"$'\033[0m'
+
+            # handle specific categories of debug messages
+            if [[ "${1}" == "error" ]]; then
+                text_color=$'\033[31;1m'
+                # text_color=$'\033[41;30m'
+                shift
+            elif [[ "${1}" == "warn" ]]; then
+                text_color=$'\033[33;1m'
+                shift
+            elif [[ "${1}" == "info" ]]; then
+                text_color=$'\033[36;1m'
+                shift
+            elif [[ "${1}" == "success" ]]; then
+                text_color=$'\033[32;1m'
+                shift
+            fi
+            text_color_end=$'\033[0m'
+        fi
+
+        # print all the things
+        printf "%s\n" "${@}" \
+            | awk \
+                -v timestamp="${timestamp}" \
+                -v line_loc="${line_loc}" \
+                -v text_color="${text_color}" \
+                -v text_color_end="${text_color_end}" \
+                '{
+                    printf "%s %s -- %s%s%s\n", timestamp, line_loc, text_color, $0, text_color_end;
+                }' \
+            | dd of="${debug_file}" conv=notrunc oflag=append status=none
+            # ^^^ this is a hack to avoid redirect errors where `debug` consumes
+            # and obliterates the output of the command it is called from
+    fi
+}
+
+# print debug information
+function _debug() {
+    local debug_file
+    local debug_level
+    local timestamp
 
     # if DEBUG and DEBUG_LOG are not set, return
     if [[ -z "${DEBUG}" && -z "${DEBUG_LOG}" ]]; then
@@ -54,44 +177,29 @@ function debug() {
         "${DEBUG}" =~ ^"true"|"all"|"*"$ \
         || ("${DEBUG}" =~ ^[0-9]+$ && "${DEBUG}" -ge ${debug_level})
     ]]; then
-        # create a timestamp
-        timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-
-        # get the calling function name
-        function_name=${FUNCNAME[1]}
-        if [[ -n "${function_name}" ]]; then
-            if ! [[ "${DEBUG_COLOR}" =~ ^"false"|"0"$ ]]; then
-                function_name=$'\033[38;1m:\033[32;1m'"${function_name}"'()'
-            else
-                function_name=":${function_name}()"
-            fi
-        fi
-
-        # get the calling script name
-        script_name=$(basename ${BASH_SOURCE[-1]})
-
-        # get the calling line number
-        # line_number=$(caller 0 | awk '{print $1}')
-        line_number=${BASH_LINENO[0]}
-
-        # loop over each argument
-        for arg in "${@}"; do
-            # loop over each line in the argument
-            while IFS= read -r line; do
-                # print the debug message
-                if ! [[ "${DEBUG_COLOR}" =~ ^"false"|"0"$ ]]; then
-                    printf "\033[36m[%s]\033[0m \033[35;1m%s\033[38;1m:\033[35m%s%s\033[0m -- %s\033[0m\n" \
-                        "${timestamp}" "${script_name}" "${line_number}" "${function_name}" "${line}" \
-                        | dd of="${debug_file}" conv=notrunc oflag=append status=none # this is a hack to avoid redirect errors where `debug` consumes and obliterates the output of the command it is called from
-                        #>> "${debug_file}" #|
-                else
-                    printf "[%s] %s:%s%s -- %s\n" \
-                        "${timestamp}" "${script_name}" "${line_number}" "${function_name}" "${line}" \
-                        | dd of="${debug_file}" conv=notrunc oflag=append status=none # this is a hack to avoid redirect errors where `debug` consumes and obliterates the output of the command it is called from
-                        # >> "${debug_file}"
-                fi
-            done <<< "${arg}"
-        done
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        printf "%s\n" "${@}" \
+            | awk \
+                -v timestamp="${timestamp}" \
+                -v funcname="${FUNCNAME[1]}" \
+                -v lineno="${BASH_LINENO[0]}" \
+                'BEGIN {
+                    if (funcname) {
+                        funcname = funcname "()";
+                    }
+                }
+                {
+                    print "\033[36m" "[" timestamp "]" "\033[0m " \
+                        "\033[35;1m" funcname "\033[0m" \
+                        "\033[32m:" lineno "\033[0m" \
+                        " -- " $0;
+                }' \
+            | dd of="${debug_file}" conv=notrunc oflag=append status=none
+        # for arg in "${@}"; do
+        #     printf "\e[36m[%s]\e[0m \e[1;35m%s:%s\e[0m -- %s\n" \
+        #         "${timestamp}" "${FUNCNAME[1]}" "${BASH_LINENO[0]}" "${arg}" \
+        #         | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
+        # done
     fi
 }
 
