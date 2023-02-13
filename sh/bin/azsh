@@ -1141,6 +1141,23 @@ function _subcommand_pr-complete() {
             | python -m json.tool
 }
 
+# @description Cancel a pull request
+# @usage pr-cancel <pr id>
+function _subcommand_pr-cancel() {
+    local pr_id="${1}"
+
+    [[ -z "${pr_id}" ]] && { echo "error: Missing pull request id" >&2; return 1; }
+
+    # Cancel the pull request
+    curl "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests/${pr_id}?api-version=5.0" \
+        --silent \
+        --request PATCH \
+        --header "Content-Type: application/json" \
+        --user ":${TOKEN}" \
+        --data '{ "status": "abandoned" }' \
+            | python -m json.tool
+}
+
 # @description List all pull requests
 # @usage pr-list
 function _subcommand_pr-list() {
@@ -1288,6 +1305,78 @@ function _subcommand_help() {
         esac
     fi
     exit ${exit_code}
+}
+
+# @description List all projects in the configured organization
+# @usage list-projects
+function _subcommand_list-projects() {
+    # Output will be in the format:
+    #  <organization>/<project> <url>
+    #  <organization>/<project> <url>
+    #  ...
+
+    # Get the list of projects
+    # GET https://dev.azure.com/{organization}/_apis/projects?api-version=7.0
+    local projects_json=$(
+        curl "https://dev.azure.com/${ORGANIZATION_ENC}/_apis/projects?api-version=7.0" \
+            --silent \
+            --user ":${TOKEN}"
+    )
+    readarray -t projects_names < <(
+        echo "${projects_json}" \
+            | python -m json.tool \
+            | grep -Po '"name": "\K[^"]+'
+    )
+
+    # Print the list of projects
+    for project in "${projects_names[@]}"; do
+        echo "${ORGANIZATION}/${project} https://dev.azure.com/${ORGANIZATION}/$(urlencode "${project}")"
+    done
+}
+
+# @description List all repos in the configured organization
+# @usage list-repo
+function _subcommand_list-repos() {
+    # Output will be in the format:
+    #  <organization>/<project>/<repo> <url>
+    #  <organization>/<project>/<repo> <url>
+    #  ...
+
+    # Get the list of projects
+    # GET https://dev.azure.com/{organization}/_apis/projects?api-version=7.0
+    local projects_json=$(
+        curl "https://dev.azure.com/${ORGANIZATION_ENC}/_apis/projects?api-version=7.0" \
+            --silent \
+            --user ":${TOKEN}"
+    )
+    readarray -t projects_names < <(
+        echo "${projects_json}" \
+            | python -m json.tool \
+            | grep -Po '"name": "\K[^"]+'
+    )
+
+    # For each project, get the list of repos
+    # GET https://dev.azure.com/{organization}/{project}/_apis/git/repositories?includeLinks={includeLinks}&includeAllUrls={includeAllUrls}&includeHidden={includeHidden}&api-version=7.0
+    for project in "${projects_names[@]}"; do
+        local repos_json=$(
+            curl "https://dev.azure.com/${ORGANIZATION_ENC}/$(urlencode "${project}")/_apis/git/repositories?api-version=7.0" \
+                --silent \
+                --user ":${TOKEN}"
+        )
+        readarray -t repos_names < <(
+            echo "${repos_json}" \
+                | python -m json.tool \
+                | grep -Po '"name": "\K[^"]+' \
+                | awk 'NR%2==1' # Only get every other line (the repo names)
+        )
+        for repo in "${repos_names[@]}"; do
+            printf "%s/%s/%s %s\n" \
+                "${ORGANIZATION}" \
+                "${project}" \
+                "${repo}" \
+                "https://dev.azure.com/${ORGANIZATION_ENC}/$(urlencode "${project}")/_git/repositories/$(urlencode "${repo}")"
+        done
+    done
 }
 
 ## main ########################################################################
