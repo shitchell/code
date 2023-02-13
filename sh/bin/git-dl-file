@@ -1,0 +1,227 @@
+#!/bin/bash
+#
+# Fetch a file as it exists in a specific ref of a git repository
+
+## imports #####################################################################
+################################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+include-source 'git.sh'
+
+debug "pwd: $(pwd)"
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-C <repo>] [-r <ref>] [-d <output dir>] [--] <filepath> [<filepath> ...]"
+}
+
+function help-epilogue() {
+    echo "fetch a file as it exists in a specific ref of a git repository"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "If multiple filepaths are specified, the output directory or tar file"
+    echo "must be specified. If a tar file is specified, the default behavior"
+    echo "is to append the file to the tar file. For a tar file, the path is"
+    echo "always preserved."
+    echo
+    cat << EOF
+    -h                               display usage
+    --help                           display this help message
+    -C <repo>                        the repository to fetch the file(s) from
+    -r / --ref <ref>                 the ref to fetch the file(s) from
+    -d / --output-dir <output dir>   the directory to write the file(s) to
+    -p / --preserve-path             preserve the path of the file(s) in the
+                                     output directory
+    -t / --tar <file>                tar the file(s) into a single file
+    --                               separate options from arguments
+EOF
+}
+
+function parse-args() {
+    # Default values
+    REPO_DIR="."
+    REF="HEAD"
+    OUTPUT_DIR=""
+    PRESERVE_PATH=0
+    TAR_FILE=""
+
+    # Loop over the arguments
+    declare -ga FILEPATHS
+    # TODO: store positional args in a global array and process them as refs
+    # TODO: or files after the options are processed, this way we can support
+    # TODO: using the `-C <repo>` option after the positional args. as it
+    # TODO: currently stands, the `-C <repo>` option must be specified before
+    #declare -a POSITIONAL_ARGS
+    while [[ ${#} -gt 0 ]]; do
+        debug "processing arg: ${1}"
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -C)
+                debug "setting REPO_DIR to ${2}"
+                REPO_DIR="${2}"
+                shift 1
+                ;;
+            -r | --ref)
+                REF="${2}"
+                shift 1
+                ;;
+            -d | --output-dir)
+                OUTPUT_DIR="${2}"
+                shift 1
+                ;;
+            -p | --preserve-path)
+                PRESERVE_PATH=1
+                ;;
+            -t | --tar)
+                TAR_FILE="${2}"
+                shift 1
+                ;;
+            --)
+                shift 1
+                while [[ ${#} -gt 0 ]]; do
+                    FILEPATHS+=("${1}")
+                    shift 1
+                done
+                ;;
+            *)
+                local ref_or_file=$(cd "${REPO_DIR}" && is-ref-or-file "${1}")
+                debug "processing positional arg: ${1} as ${ref_or_file}"
+                case "${ref_or_file}" in
+                    ref)
+                        REF="${1}"
+                        ;;
+                    file)
+                        FILEPATHS+=("${1}")
+                        ;;
+                    ambiguous)
+                        echo-stderr "error: ambiguous argument ${1}, please use -r or --"
+                        echo-stderr "$(help-usage)"
+                        exit 1
+                        ;;
+                    *)
+                        echo-error "Invalid argument: ${1}"
+                        exit 1
+                        ;;
+                esac
+        esac
+        shift 1
+    done
+
+    # Validate the arguments
+    if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
+        echo-error "error: at least one filepath must be specified"
+        exit 1
+    fi
+    if [[ ${#FILEPATHS[@]} -gt 1 ]] && [[ -z "${OUTPUT_DIR}${TAR_FILE}" ]]; then
+        echo-error "error: an output directory or tar file must be specified if multiple filepaths are specified"
+        exit 1
+    fi
+
+    # Get the absolute path of the output directory
+    if [[ -n "${OUTPUT_DIR}" ]]; then
+        OUTPUT_DIR="$(realpath "${OUTPUT_DIR}")"
+    fi
+
+    debug "REF: ${REF}"
+    debug "OUTPUT_DIR: ${OUTPUT_DIR}"
+    debug "PRESERVE_PATH: ${PRESERVE_PATH}"
+    debug "TAR_FILE: ${TAR_FILE}"
+    debug "FILEPATHS: `printf "'%s' " "${FILEPATHS[@]}"`"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    for FILEPATH in "${FILEPATHS[@]}"; do
+        if [[ -z "${OUTPUT_DIR}${TAR_FILE}" ]]; then
+            # If neither an output directory nor a tar file is specified, just
+            # print the file contents to stdout
+            git -C "${REPO_DIR}" show "${REF}:${FILEPATH}" | cat
+        else
+            ! [[ -d "${OUTPUT_DIR}" ]] && mkdir -p "${OUTPUT_DIR}"
+            local save_path
+            if [[ ${PRESERVE_PATH} -eq 1 ]]; then
+                save_path="${FILEPATH}"
+            else
+                save_path="$(basename "${FILEPATH}")"
+            fi
+
+            # Fetch the file contents
+            printf "Fetching \033[1m${FILEPATH}\033[0m from \033[33m${REF}\033[0m ... "
+            local file_contents="$(git -C "${REPO_DIR}" show "${REF}:${FILEPATH}")"
+            debug "file_contents: $(printf "${file_contents}" | wc -c) bytes"
+            if [[ ${?} -eq 0 ]]; then
+                printf "\033[32mdone\033[0m\n"
+            else
+                printf "\033[31mfailed, skipping\033[0m\n"
+                continue
+            fi
+
+            # Write the file contents to the output directory if requested
+            if [[ -n "${OUTPUT_DIR}" ]]; then
+                printf "  - writing to \033[35m${OUTPUT_DIR}/${save_path}\033[0m ... "
+                local write_err
+                write_err=$(printf "${file_contents}" 2>&1 1>"${OUTPUT_DIR}/${save_path}")
+                if [[ ${?} -ne 0 || -n "${write_err}" ]]; then
+                    printf "\033[31mfailed, skipping\033[0m\n"
+                    echo "${write_err}"
+                    continue
+                else
+                    printf "\033[32mdone\033[0m\n"
+                fi
+                debug "write_err: '${write_err}'"
+            fi
+
+            # Add the file contents to ${TAR_FILE} if requested
+            if [[ -n "${TAR_FILE}" ]]; then
+                printf "  - adding to \033[35m${TAR_FILE}\033[0m ... "
+
+                # Save the file contents to a temporary directory
+                local tmp_dir="$(mktemp -d)"
+                mkdir -p "${tmp_dir}/$(dirname "${FILEPATH}")"
+                echo "${file_contents}" > "${tmp_dir}/${FILEPATH}"
+                if [[ ${?} -ne 0 ]]; then
+                    printf "\033[31mfailed\033[0m\n"
+                    rm -rf "${tmp_dir}" >/dev/null 2>&1
+                    continue
+                fi
+
+                # Add the file to the tar file
+                tar -C "${tmp_dir}" -f "${TAR_FILE}" --append "${FILEPATH}"
+                if [[ ${?} -eq 0 ]]; then
+                    printf "\033[32mdone\033[0m\n"
+                else
+                    printf "\033[31mfailed\033[0m\n"
+                fi
+
+                # Remove the temporary directory
+                rm -rf "${tmp_dir}"
+            fi
+        fi
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
