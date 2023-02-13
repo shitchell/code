@@ -1,0 +1,305 @@
+#!/bin/bash
+#
+# Download a youtube video transcript
+# curl -s 'https://www.youtube.com/youtubei/v1/get_transcript?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8' \
+# the key seems unnecessary?
+# curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
+#    -H 'Content-Type: application/json' \
+#    --data-raw '{
+#     "context": {
+#         "client": {
+#             "clientName": "WEB",
+#             "clientVersion": "2.2021111",
+#         }
+#     },
+#     "params": "'"$(printf '\n\x0bcC1LFC0KFSw' | base64)"'"
+# }'
+
+## imports #####################################################################
+################################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-cv] [-f <format>] [-o <output file>] <video id | url>"
+}
+
+function help-epilogue() {
+    echo "download a youtube video transcript"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Uses youtubei to download a video transcript. The transcript is"
+    echo "formatted as a list of lines, each line containing the time and text."
+    echo "The format of each line can be specified using the --format option:"
+    echo "    {timeStart}     the time the line starts in HH:MM:SS format"
+    echo "    {timeEnd}       the time the line ends in HH:MM:SS format"
+    echo "    {timeDuration}  the duration of the line in HH:MM:SS format"
+    echo "    {text}          the text of the line"
+    echo "    {n}             a newline character"
+    echo "    {t}             a tab character"
+    echo "    {{}             a literal { character"
+    echo "    {}}             a literal } character"
+    echo
+    cat << EOF
+    -h                        display usage
+    --help                    display this help message
+    -f / --format <format>    display each line of the transcript in the
+                              specified format
+                              (default: '{timeStart} {text}')
+    -c / --color              colorize the output
+    --no-color                do not colorize the output
+    --color-time <ansi code>  colorize the time using the specified ansi code.
+                              if specified, implies --color (default: 1)
+    --color-text <ansi code>  colorize the text using the specified ansi code
+                              if specified, implies --color (default: 0)
+    -v                        verbose output
+    -o <output file>          write the transcript to the specified file
+EOF
+}
+
+function parse-args() {
+    # Default values
+    VERBOSE=0
+    DO_COLOR=0
+    COLOR_TIME=1
+    COLOR_TEXT=0
+    FORMAT="{timeStart}  {text}"
+    OUTPUT_FILE=""
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -c | --color)
+                DO_COLOR=1
+                shift 1
+                ;;
+            --no-color)
+                DO_COLOR=0
+                shift 1
+                ;;
+            --color-time)
+                COLOR_TIME="${2}"
+                DO_COLOR=1
+                shift 2
+                ;;
+            --color-text)
+                COLOR_TEXT="${2}"
+                DO_COLOR=1
+                shift 2
+                ;;
+            -f | --format)
+                FORMAT="${2}"
+                shift 2
+                ;;
+            -v)
+                VERBOSE=1
+                shift 1
+                ;;
+            -o)
+                OUTPUT_FILE="${2}"
+                shift 2
+                ;;
+            *)
+                if [[ -z "${VIDEO_ID}" ]]; then
+                    VIDEO_ID="$(parse-video-id "${1}")"
+                    if [[ ${?} -eq 1 ]]; then
+                        echo-error "invalid video id: ${1}"
+                        help-usage
+                        exit 1
+                    fi
+                    shift 1
+                else
+                    echo-error "too many arguments"
+                    help-usage
+                    exit 1
+                fi
+                ;;
+        esac
+    done
+
+    # Check for required arguments
+    if [[ -z "${VIDEO_ID}" ]]; then
+        echo-error "missing required argument: video id"
+        help-usage
+        exit 1
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function parse-video-id() {
+    local string="${1}"
+    local video_id
+
+    debug "parsing video id from string: ${string}"
+
+    # If the video id is a url, extract the video id
+    if [[ "${string}" =~ youtube.com ]]; then
+        video_id="$(echo "${string}" | sed -E 's/.*[?&]v=([^&]+).*/\1/')"
+        debug "parsed from youtube.com: ${video_id}"
+    elif [[ "${string}" =~ youtu.be ]]; then
+        video_id="$(echo "${string}" | sed -E 's/.*youtu.be\/([^&]+).*/\1/')"
+        debug "parsed from youtu.be: ${video_id}"
+    elif [[ "${string}" =~ ^[a-zA-Z0-9_-]{11}$ ]]; then
+        video_id="${string}"
+        debug "parsed from video id: ${video_id}"
+    else
+        debug "failed to parse video id"
+        return 1
+    fi
+
+    echo "${video_id}"
+}
+
+# @description Download a youtube video transcript
+# @usage get-transcript <video id> [<output file>]
+# @arg $1 {string} video id
+# @arg $2 {string} output file
+# @return {string} transcript
+function get-transcript() {
+    local video_id="${1}"
+    local output_file="${2}"
+    local transcript
+
+    transcript=$(
+        curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
+        -H 'Content-Type: application/json' \
+        --data-raw '{
+            "context": {
+                "client": {
+                    "clientName": "WEB",
+                    "clientVersion": "2.2021111",
+                }
+            },
+            "params": "'"$(printf '\n\x0b%s' "${video_id}" | base64)"'"
+        }' \
+            | awk -v color="${DO_COLOR}" -v format="${FORMAT}" \
+            -v color_time="${COLOR_TIME}" -v color_text="${COLOR_TEXT}" '
+                # Define a function to convert milliseconds to HH:MM:SS
+                function ms_to_hms(ms) {
+                    local seconds
+                    local minutes
+                    local hours
+
+                    seconds = int(ms / 1000);
+                    minutes = int(seconds / 60);
+                    hours = int(minutes / 60);
+                    seconds = seconds % 60;
+                    minutes = minutes % 60;
+                    return sprintf("%02d:%02d:%02d", hours, minutes, seconds);
+                }
+                BEGIN {
+                    ms_start = 0;
+                    ms_end = 0;
+                    ms_duration = 0;
+                    text = "";
+                    if (color) {
+                        ms_color_start = "\033[" color_time "m";
+                        ms_color_end = "\033[0m";
+                        text_color_start = "\033[" color_text "m";
+                        text_color_end = "\033[0m";
+                    }
+                }
+                {
+                    if ($0 ~ /"cues":/) {
+                        # Start of a new cue, reset everything
+                        ms_offset = 0;
+                        text = "";
+                    } else if ($0 ~ /^                      ]/) {
+                        # End of a cue, print the text
+                        ms_end = ms_start + ms_duration;
+                        ms_start = ms_to_hms(ms_start);
+                        ms_end = ms_to_hms(ms_end);
+                        ms_duration = ms_to_hms(ms_duration);
+                        line = gensub(/{timeStart}/, ms_color_start ms_start ms_color_end, "g", format);
+                        line = gensub(/{timeEnd}/, ms_color_start ms_end ms_color_end, "g", line);
+                        line = gensub(/{timeDuration}/, ms_color_start ms_duration ms_color_end, "g", line);
+                        line = gensub(/{text}/, text_color_start text text_color_end, "g", line);
+                        line = gensub(/{n}/, "\n", "g", line);
+                        line = gensub(/{t}/, "\t", "g", line);
+                        print line;
+                        # gsub("{timeStart}", ms_color_start ms_start ms_color_end, format);
+                        # gsub("{timeEnd}", ms_color_start ms_end ms_color_end, format);
+                        # gsub("{timeDuration}", ms_color_start ms_duration ms_color_end, format);
+                        # gsub("{text}", text, format);
+                        # gsub("{n}", "\n", format);
+                        # print format;
+                        # print ms_color_start ms_to_hms(ms_start) ms_color_end "  " text_color_start text text_color_end;
+                    } else if ($0 ~ /"startOffsetMs":/) {
+                        # Start offset of the cue
+                        ms_start = gensub(/"startOffsetMs": "(.*)",/, "\\1", 1);
+                    } else if ($0 ~ /"durationMs":/) {
+                        #                             "durationMs": "3360"
+                        # End offset of the cue
+                        ms_duration = gensub(/.*"durationMs": "(.*)".*/, "\\1", 1);
+                    } else if ($0 ~ /"simpleText":/) {
+                        # Text of the cue
+                        text = gensub(/.*"simpleText" ?: ?/, "", "g", $0);
+                        text = gensub(/^"(.*)"$/, "\\1", "g", text);
+                    }
+                }'
+    )
+    if [[ -z "${output_file}" ]]; then
+        debug "printing transcript to stdout"
+        printf "%s\n" "${transcript}"
+    else
+        debug "writing transcript to '${output_file}'"
+        printf "%s\n" "${transcript}" > "${output_file}"
+    fi
+}
+
+# @description Convert milliseconds to HH:MM:SS
+# @usage ms-to-hms <milliseconds>
+# @arg $1 {number} milliseconds
+# @return {string} HH:MM:SS
+function ms-to-hms() {
+    local ms="${1}"
+    local seconds
+    local minutes
+    local hours
+
+    seconds=$((ms / 1000))
+    minutes=$((seconds / 60))
+    hours=$((minutes / 60))
+
+    seconds=$((seconds % 60))
+    minutes=$((minutes % 60))
+
+    printf "%02d:%02d:%02d" "${hours}" "${minutes}" "${seconds}"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    get-transcript "${VIDEO_ID}" "${OUTPUT_FILE}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
