@@ -157,18 +157,28 @@ function main() {
             # print the file contents to stdout
             git -C "${REPO_DIR}" show "${REF}:${FILEPATH}" | cat
         else
-            ! [[ -d "${OUTPUT_DIR}" ]] && mkdir -p "${OUTPUT_DIR}"
             local save_path
             if [[ ${PRESERVE_PATH} -eq 1 ]]; then
                 save_path="${FILEPATH}"
             else
                 save_path="$(basename "${FILEPATH}")"
             fi
+            local save_dir="$(dirname "${save_path}")"
+            ! [[ -d "${OUTPUT_DIR}/${save_dir}" ]] && mkdir -p "${OUTPUT_DIR}/${save_dir}"
 
             # Fetch the file contents
-            printf "Fetching \033[1m${FILEPATH}\033[0m from \033[33m${REF}\033[0m ... "
-            local file_contents="$(git -C "${REPO_DIR}" show "${REF}:${FILEPATH}")"
-            debug "file_contents: $(printf "${file_contents}" | wc -c) bytes"
+            printf "\033[1m%s\033[0m\n" "${FILEPATH}"
+            printf "  - fetching from \033[33m%s\033[0m ... " "${REF}"
+            # we will add a newline to the end of the file contents as a hack
+            # to get around bash not preserving trailing newlines out of
+            # subshells, and then immediately remove it
+            # TODO: use `git ls-tree "${REF}" "${FILEPATH}" | awk '{print $2 " " $3}'}`
+            # TODO: here to determine the object type and, if it is a directory,
+            # TODO: use `git ls-tree "${REF}" "${FILEPATH}"` to list the contents
+            # TODO: and then fetch each file individually using `git cat-file blob <hash>`
+            local file_contents="$(git -C "${REPO_DIR}" show "${REF}:${FILEPATH}" && echo n)"
+            file_contents="${file_contents:0:-1}"
+            debug "file_contents: $(printf "%s" "${file_contents}" | wc -c) bytes"
             if [[ ${?} -eq 0 ]]; then
                 printf "\033[32mdone\033[0m\n"
             else
@@ -180,7 +190,7 @@ function main() {
             if [[ -n "${OUTPUT_DIR}" ]]; then
                 printf "  - writing to \033[35m${OUTPUT_DIR}/${save_path}\033[0m ... "
                 local write_err
-                write_err=$(printf "${file_contents}" 2>&1 1>"${OUTPUT_DIR}/${save_path}")
+                write_err=$(printf "%s" "${file_contents}" 2>&1 1>"${OUTPUT_DIR}/${save_path}")
                 if [[ ${?} -ne 0 || -n "${write_err}" ]]; then
                     printf "\033[31mfailed, skipping\033[0m\n"
                     echo "${write_err}"
@@ -188,7 +198,7 @@ function main() {
                 else
                     printf "\033[32mdone\033[0m\n"
                 fi
-                debug "write_err: '${write_err}'"
+                debug "write_err: '${write_err:-<no errors>}'"
             fi
 
             # Add the file contents to ${TAR_FILE} if requested
