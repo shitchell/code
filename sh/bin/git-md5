@@ -57,6 +57,7 @@ function parse-args() {
     # Default values
     DO_ALTERNATE=1
     DO_UNIQUE=0
+    DO_REMOTE=0
     COLOR=$(git config --get color.ui || echo auto)
     NUM_COMMITS=1
     GIT_LOG_OPTS=()
@@ -449,7 +450,7 @@ function main() {
                 # for the purpose of getting an accurate date, find the last
                 # commit that modified the file at or before the given ref
                 local last_commit
-                last_commit=$(git log -1 --format="%H" "${ref}" -- "${relpath}" 2>/dev/null)
+                last_commit=$(git log -1 --format="%H" "${ref}" --first-parent -m -- "${relpath}" 2>/dev/null)
                 debug "git -c color.ui='${COLOR}' log -1 '${last_commit}' --first-parent -m --format='${format}'"
                 git -c color.ui="${COLOR}" log -1 "${last_commit}" --first-parent -m --format="${format}"
             fi
