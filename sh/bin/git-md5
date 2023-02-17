@@ -125,6 +125,10 @@ function parse-args() {
                 COLOR="${2}"
                 shift 2
                 ;;
+            --color=*)
+                COLOR="${1:8}"
+                shift 1
+                ;;
             --)
                 positional_filepaths=1
                 shift 1
