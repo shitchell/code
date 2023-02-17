@@ -450,8 +450,8 @@ function main() {
                 # commit that modified the file at or before the given ref
                 local last_commit
                 last_commit=$(git log -1 --format="%H" "${ref}" -- "${relpath}" 2>/dev/null)
-                debug "git -c color.ui='${COLOR}' log -1 '${last_commit}' --format='${format}'"
-                git -c color.ui="${COLOR}" log -1 "${last_commit}" --format="${format}"
+                debug "git -c color.ui='${COLOR}' log -1 '${last_commit}' --first-parent -m --format='${format}'"
+                git -c color.ui="${COLOR}" log -1 "${last_commit}" --first-parent -m --format="${format}"
             fi
         done
     done
