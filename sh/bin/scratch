@@ -1,0 +1,174 @@
+#!/bin/bash
+#
+# Open a temporary file in the default editor
+
+## imports #####################################################################
+################################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-e <editor>] [-d <dir>] [--clear|--rmdir|--list|<filename>]"
+}
+
+function help-epilogue() {
+    echo "open a temporary scratch file in the default editor"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "If a filename is not specified, a timestamp is used as the filename"
+    echo "precise to the day (YYYYMMDD), i.e. consecutive uses of scratch"
+    echo "within the same day will use the same file."
+    echo
+    cat << EOF
+    -h                display usage
+    --help            display this help message
+    -e / --editor     the editor to use, defaults to the value of the EDITOR
+                      environment variable
+    -d / --dir <dir>  the directory to use for the scratch directory, defaults
+                      to the directory used by \`mktemp\`. if no argument is
+                      given, prints the scratch directory and exits
+    --clear           clear the scratch directory
+    --rmdir           remove the user's scratch directory
+    --list            list the files in the scratch directory
+EOF
+}
+
+function parse-args() {
+    # Default values
+    EDITOR="${EDITOR:-vi}"
+    TMP_DIR=$(dirname "$(mktemp -u)")
+    SCRATCH_DIR="${TMP_DIR}/scratch-$(id -u)"
+    FILENAME=$(date +%Y%m%d)
+    
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -e | --editor)
+                EDITOR="${2}"
+                shift
+                ;;
+            -d | --dir)
+                if [[ -z "${2}" ]]; then
+                    echo "${SCRATCH_DIR}"
+                    exit 0
+                fi
+                SCRATCH_DIR="${2}"
+                shift
+                ;;
+            --list)
+                debug "listing files in scratch directory"
+                list-files "${SCRATCH_DIR}"
+                exit 0
+                ;;
+            --clear)
+                echo -n "clearing scratch directory ... "
+                local num_files
+                num_files=$(
+                    rm -rfv "${SCRATCH_DIR}/"* 2>/dev/null | wc -l
+                )
+                local exit_code=${?}
+                s=$([ "${num_files}" -ne 1 ] && echo s)
+                local message
+                if [[ "${num_files}" -eq 0 ]]; then
+                    message='already empty'
+                else
+                    message="${num_files} file${s} removed"
+                fi
+                echo-formatted -g "${message}"
+                exit ${exit_code}
+                ;;
+            --rmdir)
+                rm -rf "${SCRATCH_DIR}"
+                exit ${?}
+                ;;
+            *)
+                FILENAME="${1}"
+                shift
+                ;;
+        esac
+        shift
+    done
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function list-files() {
+    local directory="${1:-${SCRATCH_DIR}}"
+    debug "listing files in directory: ${directory}"
+
+    # Ensure the directory exists
+    if ! [[ -d "${directory}" ]]; then
+        echo-formatted -r "no scratch directory"
+        return 1
+    fi
+
+    # List the files in the directory
+    shopt -s nullglob
+    local filepaths=( "${directory}"/* )
+    debug "filepaths: ${filepaths[*]}"
+    if [[ ${#filepaths[@]} -eq 0 ]]; then
+        echo-formatted -y "no scratch files found for $(whoami)"
+        return 1
+    fi
+    (
+        for filepath in "${filepaths[@]}"; do
+            debug "filepath: ${filepath}"
+            local filetype="$(file -b "${filepath}")"
+            debug "filetype: ${filetype}"
+            if [[ "${filetype}" =~ 'ASCII text' ]]; then
+                local filename="$(basename "${filepath}")"
+                printf '%s\t%s\n' "${filename}" "$(date -r "${filepath}")"
+            fi
+        done
+    ) | column -t -s $'\t'
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # Create the scratch directory if it doesn't exist
+    if [ ! -d "${SCRATCH_DIR}" ]; then
+        mkdir -p "${SCRATCH_DIR}"
+    fi
+
+    # Create the scratch directory if it doesn't exist
+    if [ ! -d "${SCRATCH_DIR}" ]; then
+        mkdir -p "${SCRATCH_DIR}"
+    fi
+
+    # Ensure the scratch directory is readable and writable only by the current user
+    chmod -R 700 "${SCRATCH_DIR}" 2>/dev/null
+
+    # Open that file in the default editor
+    "${EDITOR}" "${SCRATCH_DIR}/${FILENAME}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
