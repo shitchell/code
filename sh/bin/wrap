@@ -1,0 +1,7 @@
+#!/bin/bash
+#
+# Basically just an alias for `fold` that defaults to `fold -s -w 80`
+
+WRAP_CHARS="${1:-80}"
+
+fold -s -w "${WRAP_CHARS}" | sed 's/[[:space:]]*$//'

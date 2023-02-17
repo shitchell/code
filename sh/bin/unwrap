@@ -1,0 +1,18 @@
+#!/usr/bin/env -S awk -f
+#
+# Replace individual newlines with a space and consecutive newlines with a
+# single one
+
+/^$/ && first_newline == "true" {
+    print;
+    first_newline = "false";
+}
+
+/./ {
+    printf("%s ", $0);
+    first_newline = "true";
+}
+
+END {
+    print "";
+}
