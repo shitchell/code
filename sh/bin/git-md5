@@ -3,12 +3,11 @@
 # Get the md5 hash for file(s) across commits, tags, or branches. If no
 # filepaths are provided and the ref is a commit, the files modified in that
 # commit will be used.
-#
-# TODO: use `git cat-file` to get the exact file contents sans any extra newline
 
 include-source 'echo.sh'
 include-source 'git.sh'
 include-source 'shell.sh'
+include-source 'debug.sh'
 
 ## usage functions #############################################################
 ################################################################################
@@ -50,7 +49,7 @@ function help-usage() {
 ([[ ! -t 1 && ! -p /dev/stdout ]] || [[ -p /dev/stdout ]]) && __IS_PIPED=1 || __IS_PIPED=0
 
 function parse-args() {
-    echo "parse-args($(printf "'%s' " "${@}" | sed 's/.$//'))" >&3
+    debug "parse-args($(printf "'%s' " "${@}" | sed 's/.$//'))"
 
     # Track whether positional arguments should be treated as files or not
     local positional_filepaths=0
@@ -70,7 +69,7 @@ function parse-args() {
     declare -ga REFS
     declare -ga FILEPATHS
     while [[ ${#} -gt 0 ]]; do
-        echo "parse-args: ${1}" >&3
+        debug "parsing arg: ${1}"
         case ${1} in
             # -h)
             #     help-usage
@@ -141,10 +140,13 @@ function parse-args() {
                 # an error.
                 # If the '--' argument has been seen, treat all remaining
                 # positional arguments as filepaths.``
+                debug "parsing positional arg: ${1}"
                 if [ "${positional_filepaths}" -eq 1 ]; then
                     FILEPATHS+=("${1}")
                 else
-                    case "$(is-ref-or-file "${1}")" in
+                    local arg_type="$(is-ref-or-file "${1}")"
+                    debug "arg_type: ${arg_type}"
+                    case "${arg_type}" in
                         ref)
                             REFS+=("${1}")
                             target_branches_src="custom"
@@ -198,7 +200,7 @@ function parse-args() {
 
     # If no files are provided, then check if the ref is a commit. If it is, use
     # the files modified in that commit.
-    echo "checking for files..." >&3
+    debug "checking for files..."
     if [ ${#FILEPATHS[@]} -eq 0 ]; then
         if [ ${#REFS[@]} -eq 1 ]; then
             local ref="${REFS[0]}"
@@ -210,7 +212,7 @@ function parse-args() {
     fi
 
     # Determine whether to use echo-formatted or git log to print the output
-    echo "determining format handler..." >&3
+    debug "determining format handler..."
     if [ "${FORMAT}" == "${DEFAULT_FORMAT}" ]; then
         USE_ECHO_FORMATTED=1
     else
@@ -230,18 +232,18 @@ function parse-args() {
 
     ECHO_FORMATTED_WHEN=$(git config --get color.ui || echo auto)
 
-    echo "REFS: $(printf "'%s' " "${REFS[@]}")" >&3
-    echo "FILEPATHS: $(printf "'%s' " "${FILEPATHS[@]}")" >&3
-    echo "NUM_COMMITS: ${NUM_COMMITS}" >&3
-    echo "DO_ALTERNATE: ${DO_ALTERNATE}" >&3
-    echo "DO_UNIQUE: ${DO_UNIQUE}" >&3
-    echo "COLOR: ${COLOR}" >&3
-    echo "__IS_PIPED: ${__IS_PIPED}" >&3
-    echo "USE_REL_PATH: ${USE_REL_PATH}" >&3
-    echo "USE_ECHO_FORMATTED: ${USE_ECHO_FORMATTED}" >&3
-    echo "ECHO_FORMATTED_WHEN: ${ECHO_FORMATTED_WHEN}" >&3
-    echo "GIT_LOG_OPTS: $(printf "'%s' " "${GIT_LOG_OPTS[@]}")" >&3
-    echo "FORMAT: ${FORMAT}" >&3
+    debug "REFS: $(printf "'%s' " "${REFS[@]}")"
+    debug "FILEPATHS: $(printf "'%s' " "${FILEPATHS[@]}")"
+    debug "NUM_COMMITS: ${NUM_COMMITS}"
+    debug "DO_ALTERNATE: ${DO_ALTERNATE}"
+    debug "DO_UNIQUE: ${DO_UNIQUE}"
+    debug "COLOR: ${COLOR}"
+    debug "__IS_PIPED: ${__IS_PIPED}"
+    debug "USE_REL_PATH: ${USE_REL_PATH}"
+    debug "USE_ECHO_FORMATTED: ${USE_ECHO_FORMATTED}"
+    debug "ECHO_FORMATTED_WHEN: ${ECHO_FORMATTED_WHEN}"
+    debug "GIT_LOG_OPTS: $(printf "'%s' " "${GIT_LOG_OPTS[@]}")"
+    debug "FORMAT: ${FORMAT}"
 }
 
 
@@ -269,8 +271,9 @@ function get-equals-or-space-arg() {
 ################################################################################
 
 function main() {
-    echo "main($(printf "'%s' " "${@}" | sed 's/.$//'))" >&3
+    debug "main($(printf "'%s' " "${@}" | sed 's/.$//'))"
     parse-args "${@}"
+    set -o pipefail  # for use with the `git cat-file` command below
 
     # If no files were specified, show the help
     if [ ${#FILEPATHS[@]} -eq 0 ] 2>/dev/null; then
@@ -350,7 +353,8 @@ function main() {
 
             # Get the file contents at that ref
             local contents
-            contents=$(git show "${ref}:${relpath}" 2>/dev/null)
+            local blob
+            blob=$(git rev-parse "${ref}:${relpath}" 2>/dev/null)
             local file_exists=${?}
 
             # Use a silly "00000000000000000000000000000000" hash if the file is empty
@@ -358,7 +362,8 @@ function main() {
             if [ ${file_exists} -ne 0 ]; then
                 md5="00000000000000000000000000000000"
             else
-                md5=$(echo "${contents}" | md5sum - | cut -d' ' -f1)
+                md5=$(git cat-file blob "${blob}" 2>/dev/null | md5sum - | cut -d' ' -f1)
+                [[ ${?} -ne 0 ]] && md5="00000000000000000000000000000000"
             fi
 
             # If this is a new md5, add it to the list,
@@ -426,23 +431,27 @@ function main() {
                         '
             )
 
-            echo "md5: ${md5}" >&3
-            echo "filepath: ${filepath}" >&3
-            echo "relpath: ${relpath}" >&3
-            echo "color_format: ${color_format}" >&3
-            echo "color_reset: ${color_reset}" >&3
-            echo "format: ${format}" >&3
+            debug "md5: ${md5}"
+            debug "filepath: ${filepath}"
+            debug "relpath: ${relpath}"
+            debug "color_format: ${color_format}"
+            debug "color_reset: ${color_reset}"
+            debug "format: ${format}"
 
             # Then print the formatted line
             if [ "${USE_ECHO_FORMATTED}" -eq 1 ]; then
-                # echo "<echoing data='${format}'>" >&3
+                # debug "<echoing data='${format}'>"
                 # export FMT_TEST="${format}"
                 # ECHO_FORMATTED=${ECHO_FORMATTED_WHEN} echo-formatted $(echo ${format} | xargs)
-                # echo "</echoing>" >&3
+                # debug "</echoing>"
                 printf "%s\n" "${format}"
             else
-                echo "git -c color.ui='${COLOR}' log -1 '${ref}' --format='${format}'" >&3
-                git -c color.ui="${COLOR}" log -1 "${ref}" --format="${format}"
+                # for the purpose of getting an accurate date, find the last
+                # commit that modified the file at or before the given ref
+                local last_commit
+                last_commit=$(git log -1 --format="%H" "${ref}" -- "${relpath}" 2>/dev/null)
+                debug "git -c color.ui='${COLOR}' log -1 '${last_commit}' --format='${format}'"
+                git -c color.ui="${COLOR}" log -1 "${last_commit}" --format="${format}"
             fi
         done
     done
@@ -451,11 +460,12 @@ function main() {
 ## run #########################################################################
 ################################################################################
 
-[ "${BASH_SOURCE[0]}" == "${0}" ] && (
-    if [ -n "${DEBUG}" ]; then
-        exec 3>&2
-        main "${@}"
-    else
-        main "${@}" 3>/dev/null
-    fi
-)
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
+# [ "${BASH_SOURCE[0]}" == "${0}" ] && (
+#     if [ -n "${DEBUG}" ]; then
+#         exec 3>&2
+#         main "${@}"
+#     else
+#         main "${@}" 3>/dev/null
+#     fi
+# )
