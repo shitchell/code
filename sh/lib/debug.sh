@@ -73,7 +73,7 @@ function debug() {
         function_name=${FUNCNAME[1]}
 
         # get the calling script name
-        script_name=$(basename ${BASH_SOURCE[-1]})
+        script_name=$(basename "${BASH_SOURCE[-1]}")
 
         # get the calling line number
         line_number=${BASH_LINENO[0]}
