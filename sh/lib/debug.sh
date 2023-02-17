@@ -137,7 +137,7 @@ function debug() {
     fi
 }
 
-# print debug information
+# print debug information, test version
 function _debug() {
     local debug_file
     local debug_level
@@ -200,6 +200,18 @@ function _debug() {
         #         "${timestamp}" "${FUNCNAME[1]}" "${BASH_LINENO[0]}" "${arg}" \
         #         | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
         # done
+    fi
+}
+
+# print debug information
+# mini copy/pastable version w/o script name and debug levels
+function _mini_debug() {
+    if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+        local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        printf "%s\n" "${@}" \
+            | awk -v prefix="\033[36m[${timestamp}]\033[0m \033[1;35m${FUNCNAME[1]}:${BASH_LINENO[0]}\033[0m -- " \
+                '{print prefix $0}' \
+            | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
     fi
 }
 
