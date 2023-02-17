@@ -201,18 +201,19 @@ function get-ref-type() {
     [ -z "${ref}" ] && return 1
 
     # remove a remote prefix if it exists
-    ref="${ref#$(git remote)/}"
+    local remote=$(git remote)
+    local normalized_ref="${ref#${remote}/}"
 
     # determine if the ref is a range
-    if [[ "${ref}" =~ ^[a-z0-9~^]+".."[a-z0-9~^]+$ ]]; then
+    if [[ "${normalized_ref}" =~ ^[a-z0-9~^]+".."[a-z0-9~^]+$ ]]; then
         ref_type="range"
-    elif git show-ref -q --verify "refs/heads/${ref}" 2>/dev/null; then
+    elif git show-ref -q --verify "refs/heads/${normalized_ref}" 2>/dev/null; then
         ref_type="branch"
-    elif git show-ref -q --verify "refs/tags/${ref}" 2>/dev/null; then
+    elif git show-ref -q --verify "refs/tags/${normalized_ref}" 2>/dev/null; then
         ref_type="tag"
-    elif git show-ref -q --verify "refs/remote/${ref}" 2>/dev/null; then
+    elif git show-ref -q --verify "refs/remotes/${remote}/${normalized_ref}" 2>/dev/null; then
         ref_type="remote"
-    elif git rev-parse --verify "${ref}^{commit}" >/dev/null 2>&1; then
+    elif git rev-parse --verify "${normalized_ref}^{commit}" >/dev/null 2>&1; then
         ref_type="commit"
     else
         ref_type="unknown"
@@ -304,8 +305,9 @@ function is-ref-or-file() {
 
     # determine if this is a ref
     local ref_type=$(get-ref-type "${object}")
+
     # if it's unknown, check to see if it's a currently untracked remote branch
-    if [ "${ref_type}" == "unknown" ]; then
+    if [[ "${ref_type}" == "unknown" ]]; then
         # remove a remote prefix if it exists
         object="${object#$(git remote)/}"
         if git show-ref -q --verify "refs/remotes/$(git remote)/${object}" 2>/dev/null; then
@@ -320,7 +322,7 @@ function is-ref-or-file() {
     )
 
     local output exit_code
-    if [ "${ref_type}" = "unknown" ]; then
+    if [[ "${ref_type}" == "unknown" ]]; then
         if [ "${has_been_tracked}" -eq 0 ]; then
             # if it's not a ref, but it's been tracked, it's a file
             output="file"
