@@ -19,6 +19,8 @@ VERSION=$(
             | tr '[:upper:]' '[:lower:]'
 )
 
+echo "Installing python dependencies for ${DISTRIB_NAME} ${VERSION}"
+
 cmd=()
 packages=()
 case "${DISTRIB_NAME}" in
@@ -78,4 +80,5 @@ case "${DISTRIB_NAME}" in
         ;;
 esac
 
+printf ">" ; printf " %s" "${@}"
 sudo "${cmd[@]}" "${packages[@]}"
