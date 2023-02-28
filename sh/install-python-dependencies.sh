@@ -19,7 +19,7 @@ VERSION=$(
             | tr '[:upper:]' '[:lower:]'
 )
 
-echo "Installing python dependencies for ${DISTRIB_NAME} ${VERSION}"
+echo "Installing python dependencies for ${DISTRIB_NAME^} ${VERSION}"
 
 cmd=()
 packages=()
