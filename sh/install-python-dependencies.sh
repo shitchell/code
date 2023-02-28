@@ -80,6 +80,6 @@ case "${DISTRIB_NAME}" in
         ;;
 esac
 
-printf ">" ; printf " %s" "${@}"
+printf ">" ; printf " %s" "${packages[@]}"
 echo
 sudo "${cmd[@]}" "${packages[@]}"
