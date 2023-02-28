@@ -81,4 +81,5 @@ case "${DISTRIB_NAME}" in
 esac
 
 printf ">" ; printf " %s" "${@}"
+echo
 sudo "${cmd[@]}" "${packages[@]}"
