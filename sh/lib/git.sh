@@ -292,6 +292,54 @@ function git-status-name() {
     echo "${object_mode}"
 }
 
+# @description Determine if an object is a blob, tree, or commit
+# @usage is-blob-tree-or-commit <object>
+# @example is-blob-tree-or-commit HEAD
+# @example is-blob-tree-or-commit ./path/to/file
+# @example is-blob-tree-or-commit ./path/to/dir/
+function is-blob-tree-or-commit() {
+    local object="${1}"
+    local object_type
+    local is_ref=false
+    local is_file=false
+    local is_dir=false
+
+    if [ -z "${object}" ]; then
+        return 1
+    fi
+
+    # determine if this is a ref
+    local ref_type=$(get-ref-type "${object}")
+    [[ "${ref_type}" != "unknown" ]] && is_ref=true
+
+    # determine if this is a blob or tree
+    ## get the object hash
+    local relpath=$(git-relpath "${object}")
+    local object_hash=$(git ls-tree HEAD "${relpath}" | awk '{print $3}')
+    if git cat-file -t "${object_hash}" 2>/dev/null | grep -q "^blob$"; then
+        is_file=true
+    elif git cat-file -t "${object_hash}" 2>/dev/null | grep -q "^tree$"; then
+        is_dir=true
+    elif git cat-file -t "${object_hash}" 2>/dev/null | grep -q "^commit$"; then
+        is_ref=true
+    fi
+
+    # determine the output
+    if (${is_ref} && ${is_file}) \
+    || (${is_ref} && ${is_dir}) \
+    || (${is_file} && ${is_dir}); then
+        echo "ambiguous"
+    elif ${is_ref}; then
+        echo "commit"
+    elif ${is_file}; then
+        echo "blob"
+    elif ${is_dir}; then
+        echo "tree"
+    else
+        return 1
+    fi
+}
+
 # determine if an object is a ref or a file (or ambiguous). outputs:
 #   stdout      exit code
 #   ----------  ----------
@@ -316,8 +364,14 @@ function is-ref-or-file() {
     fi
 
     local has_been_tracked=$(
-        git log -1 --all -- "${object}" \
-            | grep -q '.'
+        git log -1 \
+            --all \
+            --pretty=format: \
+            --name-only \
+            --diff-filter=A \
+            --no-renames \
+            -- "${object}" \
+                | grep -q '.'
         echo  $?
     )
 

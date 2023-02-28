@@ -1,6 +1,10 @@
 #!/bin/bash
 #
 # Use `diff` recursively to compare two directories
+#
+# TODO: if one of the arguments given does not exist, fail gracefully and with a
+# TODO: nice error message describing the situation and still running any
+# TODO: requested checks on the existing directory (e.g. timestamps)
 
 ## usage functions #############################################################
 ################################################################################

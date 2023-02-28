@@ -84,9 +84,9 @@ EOF
     --validate            check whether the latest changes have been promoted.
                           assumes 'development', 'test', and 'release' branches
                           exist
-    --vdev <branch>       use <branch> as the dev branch for `--validate`
-    --vtest <branch>      use <branch> as the test branch for `--validate`
-    --vrelease <branch>   use <branch> as the release branch for `--validate`
+    --vdev <branch>       use <branch> as the dev branch for \`--validate'
+    --vtest <branch>      use <branch> as the test branch for \`--validate'
+    --vrelease <branch>   use <branch> as the release branch for \`--validate'
     --no-validate         do not check whether the latest changes have been
                           promoted
     --clean               remove uncommitted and untracked changes from the
@@ -96,6 +96,9 @@ EOF
     --pull                pull the latest changes from the source repo before
                           copying
     --no-pull             do not pull the latest changes from the source repo
+    --push                push the latest changes to the destination repo after
+                          copying
+    --no-push             do not push the latest changes to the destination repo
     --since <date>        only copy files committed after <date>
     --no-since            do not use --since/--after
     --until <date>        only copy files committed before <date>
@@ -139,6 +142,7 @@ function parse-args() {
     DO_COMMIT=0
     DO_CLEAN=1
     DO_PULL=1
+    DO_PUSH=0
     DO_VALIDATE=1
     VALIDATE_DEV="development"
     VALIDATE_TEST="test"
@@ -227,6 +231,14 @@ function parse-args() {
                 ;;
             --no-pull)
                 DO_PULL=0
+                shift 1
+                ;;
+            --push)
+                DO_PUSH=1
+                shift 1
+                ;;
+            --no-push)
+                DO_PUSH=0
                 shift 1
                 ;;
             --since | --until)
@@ -879,6 +891,18 @@ function main() {
                 fi
             fi
         done
+    fi
+
+    # Push the changes to the destination repo if requested
+    if [[ ${DO_PUSH} -eq 1 ]]; then
+        echo -en "* pushing to ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET} ... "
+        echo-run git -C "${DEST_REPO}" push >/dev/null
+        if [[ ${?} -eq 0 ]]; then
+            echo -e "${C_GREEN}done${S_RESET}"
+        else
+            echo -e "error: failed to push to ${C_BLUE}${S_BOLD}${DEST_REPO}${S_RESET}, aborting"
+            exit 1
+        fi
     fi
 
     echo "* fin"

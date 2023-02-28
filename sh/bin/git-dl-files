@@ -1,0 +1,609 @@
+#!/bin/bash
+#
+# Fetch a file as it exists in a specific ref of a git repository. Output based
+# off `git checkout`
+
+## imports #####################################################################
+################################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+include-source 'git.sh'
+
+
+## color #######################################################################
+################################################################################
+
+# Determine if we should colorize the output
+__GIT_COLOR=$(git config --get color.ui)
+[[ "${__GIT_COLOR}" == "always" || ("${__GIT_COLOR}" =~ ^("auto")?$ && -t 1) ]] \
+    && USE_COLOR=true || USE_COLOR=false
+debug "GIT_COLOR=${__GIT_COLOR}"
+debug "USE_COLOR=${USE_COLOR}"
+
+function setup-colors() {
+    if ${USE_COLOR}; then
+        # Colorize the output
+        # C_FILEPATH=$'\e[1;36m'
+        C_FILEMODE=$''
+        # C_DATE=$'\e[34m'
+        # C_DIRECTORY=$'\e[1;34m'
+        # C_TARFILE=$'\e[1;32m'
+        # C_REF=$'\e[1;33m'
+        # C_COUNT=$'\e[1;33m'
+        # C_ARCHIVE=$'\e[1;34m'
+        C_SUCCESS=$'\e[32m'
+        C_ERROR=$'\e[31m'
+        C_WARNING=$'\e[33m'
+        # C_MD5=$'\e[32m'
+        C_COMMAND=$'\e[32m'
+        C_RESET=$'\e[0m'
+    else
+        unset C_FILEPATH C_FILEMODE C_DATE C_DIRECTORY C_TARFILE C_REF \
+              C_COUNT C_ARCHIVE C_SUCCESS C_ERROR C_MD5 C_COMMAND C_RESET
+    fi
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-C <repo>] [-r <ref>] [-d <output dir>] [[--] <path>...]"
+}
+
+function help-epilogue() {
+    echo "fetch a file as it exists in a specific ref of a git repository"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "If multiple filepaths are specified, the output directory or tar file"
+    echo "must be specified. If a tar file is specified, the default behavior"
+    echo "is to append the file to the tar file. For a tar file, the path is"
+    echo "always preserved."
+    echo
+    echo "If a  '-' is specified as the filepath, the list of files is read"
+    echo "from stdin."
+    echo
+    cat << EOF
+    -h                               display usage
+    --help                           display this help message
+    -C <repo>                        the repository to fetch the file(s) from
+    -r / --ref <ref>                 the ref to fetch the file(s) from
+    -m / --show-md5                  show the md5 hash of the file(s)
+    -d / --output-dir <output dir>   the directory to write the file(s) to
+    -p / --preserve-path             preserve the path of the file(s) in the
+                                     output directory
+    -P / --no-preserve-path          do not preserve the path of the file(s) in
+                                     the output directory
+    -f / --follow-symlinks           for symlinks, copy the file the symlink
+                                     points to
+    -F / --no-follow-symlinks        for symlinks, copy the symlink itself
+    -s / --suffix <suffix>           append <suffix> to each output file
+    -R / --rename <pattern>          rename the output file(s) using sed -E <pattern>
+                                     if a suffix is specified, it is appended
+                                     after the replacement
+    -o / --overwrite                 for downloaded files, overwrite the file
+                                     if it already exists. for tar files, remove
+                                     the tar file if it already exists.
+    -O / --no-overwrite              for downloaded files, do not overwrite the
+                                     file if it already exists. for tar files,
+                                     append to the tar file if it already exists.
+    -t / --tar <file>                tar the file(s) into a single file
+    --gz                             gzip the tar file
+    --no-gz                          do not gzip the tar file
+    --                               end of options, all remaining arguments
+                                     are treated as filepaths
+EOF
+}
+
+function parse-args() {
+    # Default values
+    REPO_DIR="."
+    REF="HEAD"
+    OUTPUT_DIR=""
+    SUFFIX=""
+    SED_PATTERN=""
+    TAR_FILE=""
+    DO_PRESERVE_PATH=false
+    DO_COMPRESS=false
+    DO_MD5=false
+    DO_OVERWRITE=false
+    DO_PRESERVE_SYMLINKS=true
+
+    # Loop over the arguments
+    declare -ga FILEPATHS
+    local collected_paths=()
+    # TODO: store positional args in a global array and process them as refs
+    # TODO: or files after the options are processed, this way we can support
+    # TODO: using the `-C <repo>` option after the positional args. as it
+    # TODO: currently stands, the `-C <repo>` option must be specified before
+    #declare -a POSITIONAL_ARGS
+    while [[ ${#} -gt 0 ]]; do
+        debug "processing arg: ${1}"
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -C)
+                debug "setting REPO_DIR to ${2}"
+                REPO_DIR="${2}"
+                shift 1
+                ;;
+            -r | --ref)
+                REF="${2}"
+                shift 1
+                ;;
+            -m | --show-md5)
+                DO_MD5=true
+                ;;
+            -d | --output-dir)
+                OUTPUT_DIR="${2}"
+                shift 1
+                ;;
+            -p | --preserve-path)
+                DO_PRESERVE_PATH=true
+                ;;
+            -P | --no-preserve-path)
+                DO_PRESERVE_PATH=false
+                ;;
+            -f | --follow-symlinks)
+                DO_PRESERVE_SYMLINKS=false
+                ;;
+            -F | --no-follow-symlinks)
+                DO_PRESERVE_SYMLINKS=true
+                ;;
+            -s | --suffix)
+                SUFFIX="${2}"
+                shift 1
+                ;;
+            -R | --rename)
+                SED_PATTERN="${2}"
+                shift 1
+                ;;
+            -o | --overwrite)
+                DO_OVERWRITE=true
+                ;;
+            -O | --no-overwrite)
+                DO_OVERWRITE=false
+                ;;
+            -t | --tar)
+                TAR_FILE="${2}"
+                shift 1
+                ;;
+            --gz)
+                DO_COMPRESS=true
+                ;;
+            --no-gz)
+                DO_COMPRESS=false
+                ;;
+            --)
+                shift 1
+                collected_paths+=("${@}")
+                ;;
+            *)
+                local ref_or_file=$(cd "${REPO_DIR}" && is-ref-or-file "${1}")
+                debug "processing positional arg: ${1} as ${ref_or_file}"
+                case "${ref_or_file}" in
+                    ref)
+                        REF="${1}"
+                        ;;
+                    file)
+                        collected_paths+=("${files[@]}")
+                        ;;
+                    ambiguous)
+                        echo-stderr "error: ambiguous argument ${1}, please use -r or --"
+                        echo-stderr "$(help-usage)"
+                        exit 1
+                        ;;
+                    *)
+                        echo-error "Invalid argument: ${1}"
+                        exit 1
+                        ;;
+                esac
+        esac
+        shift 1
+    done
+
+    # Loop over all collected paths and use `git ls-tree` to recursively add all
+    # files in the directory to the list of files to fetch.
+    readarray -t FILEPATHS < <(
+        for path in "${collected_paths[@]}"; do
+            debug "processing collected path: ${path}"
+            if [[ "${path}" == "-" ]]; then
+                cat
+            else
+                git -C "${REPO_DIR}" ls-tree -r "${REF}" "${path}" --name-only
+            fi
+        done | sort | uniq
+    )
+
+    # If a commit was specified but not any files, fetch all files in the
+    # commit. We use `--first-parent -m` to ensure that a merge commit is
+    # treated as a single commit and that the files in the merge commit are
+    # included.
+    if [[ -n "${REF}" ]] && [[ ${#FILEPATHS[@]} -eq 0 ]]; then
+        readarray -t files < <(
+            git -C "${REPO_DIR}" log -1 "${REF}" \
+            --pretty=format: \
+            --name-only \
+            --no-renames \
+            --first-parent -m \
+            --diff-filter=ACMRTUXB
+        )
+        FILEPATHS+=("${files[@]}")
+    fi
+
+    # Validate the arguments
+    if [[ ${#FILEPATHS[@]} -gt 1 ]] && [[ -z "${OUTPUT_DIR}${TAR_FILE}" ]]; then
+        echo-error "error: an output directory or tar file must be specified if multiple filepaths are specified"
+        exit 1
+    fi
+
+    # Get the absolute path of the output directory
+    if [[ -n "${OUTPUT_DIR}" ]]; then
+        OUTPUT_DIR="$(realpath "${OUTPUT_DIR}")"
+    fi
+
+    # Ensure at least one of either the output directory or tar file is specified
+    if [[ -z "${OUTPUT_DIR}${TAR_FILE}" ]]; then
+        echo-error "error: an output directory or tar file must be specified"
+        exit 1
+    fi
+
+    debug "REF: ${REF}"
+    debug "OUTPUT_DIR: ${OUTPUT_DIR}"
+    debug "DO_PRESERVE_PATH: ${DO_PRESERVE_PATH}"
+    debug "DO_PRESERVE_SYMLINKS: ${DO_PRESERVE_SYMLINKS}"
+    debug "DO_COMPRESS: ${DO_COMPRESS}"
+    debug "DO_MD5: ${DO_MD5}"
+    debug "DO_OVERWRITE: ${DO_OVERWRITE}"
+    debug "TAR_FILE: ${TAR_FILE}"
+    debug "FILEPATHS: `printf "'%s' " "${FILEPATHS[@]}"`"
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Given a filepath, append a suffix to the filename before the extension
+# @usage append-suffix <filepath> <suffix>
+function append-suffix() {
+    local filepath="${1}"
+    local suffix="${2}"
+    [[ -z "${filepath}" || -z "${suffix}" ]] && return 1
+
+    local filename="$(basename "${filepath}")"
+    local directory=$(dirname "${filepath}")
+    [[ "${directory}" == "." && ! "${filepath:0:1}" == "." ]] && directory=""
+    local extension="${filename##*.}"
+    local basename="${filename%.*}"
+    local dir_separator=$([[ -n "${directory}" && "${directory}" != "/" ]] && echo "/")
+    echo "${directory}${dir_separator}${basename}${suffix}.${extension}"
+}
+
+# @description Given a ref and potential symlink, recursively resolve the target mode and filepath
+# @usage resolve-symlink <ref> <filepath>
+function resolve-symlink() {
+    local filepath="${1}"
+    local ref="${2:-HEAD}"
+
+    debug "resolving symlink: ${ref}:${filepath}"
+
+    local tree_info
+    local target_path
+    local mode
+
+    mode=$(
+        git ls-tree "${ref}" "${filepath}" \
+            | awk '{print $1}'\
+    )
+    debug "mode: ${mode}"
+    if [[ "${mode}" == "120000" ]]; then
+        target_path=$(git show "${ref}:${filepath}")
+        # If the link is not in the git root, determine the target path relative
+        # to the git root
+        if [[ "${filepath}" =~ "/" ]]; then
+            local git_root=$(git rev-parse --show-toplevel)
+            target_path=$(
+                cd "$(dirname "${filepath}")" \
+                    && realpath -m "${target_path}" --relative-to="${git_root}" \
+                    || echo "${target_path}"
+            )
+        fi
+        debug "target_path: ${target_path}"
+        resolve-symlink "${target_path}" "${ref}"
+    else
+        debug "resolved symlink:  ${ref}:${filepath} -> ${mode}"
+        echo "${mode}" "${filepath}"
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+    setup-colors
+
+    printf "Retrieving %s%s%s file(s) from %s%s%s\n" \
+        "${C_COUNT}" "${#FILEPATHS[@]}" "${C_RESET}" \
+        "${C_REF}" "$(git rev-parse --short "${REF}")" "${C_RESET}"
+
+    # Create a temporary directory to store the files
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    if [[ ${?} -ne 0 || -z "${tmp_dir}" ]]; then
+        echo-stderr "error: failed to create temporary directory, exiting"
+        exit 1
+    fi
+    debug "tmp_dir: ${tmp_dir}"
+
+    # Create a dictionary for tracking number of files fetched/skipped
+    local file_counts=([fetched]=0 [skipped]=0 [failed]=0)
+    for FILEPATH in "${FILEPATHS[@]}"; do
+        printf "* %s%s%s\n" "${C_FILEPATH}" "${FILEPATH}" "${C_RESET}"
+        local FILEDIR="$(dirname "${FILEPATH}")"
+
+        # Tracks whether the file was copied to the output directory or tar file
+        local file_copied=false
+
+        # Determine the save path minus the output directory, i.e.
+        # - the preserved git filepath or just the filename
+        # - suffixes
+        # - sed maniulations of filename
+        local save_path
+        if ${DO_PRESERVE_PATH}; then
+            save_path="${FILEPATH}"
+        else
+            save_path="$(basename "${FILEPATH}")"
+        fi
+        local save_path_dir="$(dirname "${save_path}")"
+        
+        # If a sed pattern is specified, use it to rename the file
+        if [[ -n "${SED_PATTERN}" ]]; then
+            save_path="$(sed -E "${SED_PATTERN}" <<< "${save_path}")"
+        fi
+
+        # If a suffix is specified, append it to the filename
+        if [[ -n "${SUFFIX}" ]]; then
+            save_path="$(append-suffix "${save_path}" "${SUFFIX}")"
+        fi
+
+        # Track the filepath's location in the temporary directory
+        local tmp_filepath="${tmp_dir}/${FILEPATH}"
+        local tmp_filedir="$(dirname "${tmp_filepath}")"
+
+        # Determine the file mode and potential target filepath. In order to
+        # deal with symbolic links, we will track both the requested_path (the
+        # path the user specified) and the target_path (the path the symlink
+        # points to). For non-symlinks, these will be the same.
+        local target_info target_path is_symlink
+        target_info="$(resolve-symlink "${FILEPATH}" "${REF}")"
+        target_path="${target_info#* }"
+        target_mode="${target_info%% *}"
+        if [[ "${target_path}" == "${FILEPATH}" ]]; then
+            # The file is not a symlink
+            is_symlink=false
+            requested_mode="${target_mode}"
+        else
+            # The file is a symlink
+            is_symlink=true
+            requested_mode="120000"
+        fi
+
+        # Fetch and create the file in the temporary directory
+        # - we will add a newline to the end of the file contents as a hack
+        #   to get around bash not preserving trailing newlines out of
+        #   subshells, and then immediately remove it
+        # - we will determine whether to use the file contents or the target
+        #   filepath depending on settings and whether the file is a symlink
+        mkdir -p "${tmp_filedir}"
+        if ${is_symlink} && ${DO_PRESERVE_SYMLINKS}; then
+            # The file is a symlink and we are preserving symlinks
+            debug "file is a symlink and we are preserving symlinks"
+            ln -s "${target_path}" "${tmp_filepath}"
+        else
+            # If the file is not a symlink or if we are not preserving symlinks,
+            # then we will fetch the contents of target_path and save them to
+            # tmp_filepath
+            local file_contents
+            file_contents=$(
+                git -C "${REPO_DIR}" show \
+                    "${REF}:${target_path}" \
+                    2>/dev/null \
+                        && echo n
+            )
+            if [[ ${?} -eq 0 ]]; then
+                # The file exists, remove the newline we added
+                file_contents="${file_contents:0:-1}"
+            else
+                # The file does not exist
+                printf "  %s%s%s\n" \
+                    "${C_ERROR}" \
+                    "error: file does not exist at ${REF}, skipping" \
+                    "${C_RESET}"
+                let file_counts[failed]++
+                continue
+            fi
+
+            # Save the file contents to the temporary directory
+            printf "%s" "${file_contents}" > "${tmp_filepath}"
+        fi
+
+        # Get the last modified date
+        local last_modified=$(
+            git -C "${REPO_DIR}" log "${REF}" -1 \
+                --format="%ad" \
+                -- "${FILEPATH}" \
+                    | awk '{print $1 "T" $2 "Z"}'
+        )
+
+        # Update the temporary file's last modified date and mode. The mode from
+        # git is a 6 digit number, e.g. 100644, where we only care about the
+        # last 3 digits. We will also ignore the mode for symlinks if we are
+        # preserving them.
+        touch -d "${last_modified}" "${tmp_filepath}"
+        if ! (${is_symlink} && ${DO_PRESERVE_SYMLINKS}); then
+            chmod "${target_mode:3}" "${tmp_filepath}"
+        fi
+
+        # Calculate the md5 hash of the file contents
+        local file_md5=$(md5sum "${tmp_filepath}" 2>/dev/null | awk '{print $1}')
+
+        # Print the file information
+        printf "  %s%s%s %s%s%s %s%s%s\n" \
+            "${C_FILEMODE}" "${requested_mode}" "${C_RESET}" \
+            "${C_DATE}" "${last_modified}" "${C_RESET}" \
+            "${C_MD5}" "${file_md5}" "${C_RESET}"
+
+        # Write the file contents to the output directory if requested
+        if [[ -n "${OUTPUT_DIR}" ]]; then
+            local save_path_full="${OUTPUT_DIR}/${save_path}"
+            local save_path_full_dir="$(dirname "${save_path_full}")"
+
+            # Create the save directory if it doesn't exist
+            if ! [[ -d "${save_path_full_dir}" ]]; then
+                mkdir -p "${save_path_full_dir}" 2>/dev/null
+                if [[ ${?} -ne 0 ]]; then
+                    printf "  %s%s%s\n" \
+                        "${C_ERROR}" \
+                        "error: failed to create directory, skipping" \
+                        "${C_RESET}"
+                    let file_counts[skipped]++
+                    continue
+                fi
+            fi
+
+            # Write the file contents to the output directory
+            printf "  copying to %s%s%s ... " \
+                "${C_DIRECTORY}" "${save_path_full}" "${C_RESET}"
+            
+            # Check if a file already exists at the save path
+            if [[ -f "${save_path_full}" ]]; then
+                # Check if the md5 hashes match
+                local existing_md5=$(
+                    md5sum "${save_path_full}" | awk '{print $1}'
+                )
+                if [[ "${existing_md5}" == "${file_md5}" ]]; then
+                    printf "%s%s%s\n" \
+                        "${C_SUCCESS}" \
+                        "identical file exists, skipping" \
+                        "${C_RESET}"
+                    let file_counts[skipped]++
+                    continue
+                elif ${DO_OVERWRITE}; then
+                    printf "%s%s%s ... " \
+                        "${C_WARNING}" "overwriting existing file" "${C_RESET}"
+                else
+                    printf "%s%s%s\n" \
+                        "${C_WARNING}" \
+                        "file exists and content differs, skipping" \
+                        "${C_RESET}"
+                    let file_counts[skipped]++
+                    continue
+                fi
+            fi
+            local write_err
+            debug "copying '${tmp_filepath}' to '${save_path_full}'"
+            write_err=$(cp -a "${tmp_filepath}" "${save_path_full}" 2>&1)
+            if [[ ${?} -ne 0 || -n "${write_err}" ]]; then
+                printf "%s%s%s\n" \
+                    "${C_ERROR}" \
+                    "error: failed to write file, skipping" \
+                    "${C_RESET}"
+                echo "${write_err}" | sed -E 's/^/  /' >&2
+                let file_counts[failed]++
+                continue
+            else
+                printf "%s%s%s\n" \
+                    "${C_SUCCESS}" "done" "${C_RESET}"
+            fi
+
+            # Set the file modification time to the commit time
+            debug "setting '${save_path_full}' modification time to '${last_modified}'"
+            touch -hc -d "${last_modified}" "${save_path_full}"
+
+            file_copied=true
+        fi
+
+        # Add the file contents to ${TAR_FILE} if requested
+        if [[ -n "${TAR_FILE}" ]]; then
+            printf "  adding to %s%s%s ... " \
+                "${C_TARFILE}" "${TAR_FILE}" "${C_RESET}"
+
+            # Add the file to the tar file
+            tar -C "${tmp_dir}" \
+                -f "${TAR_FILE}" \
+                --append \
+                "${FILEPATH}" \
+                >/dev/null
+
+            if [[ ${?} -eq 0 ]]; then
+                printf "%s%s%s\n" \
+                    "${C_SUCCESS}" "done" "${C_RESET}"
+                file_copied=true
+            else
+                printf "%s%s%s\n" \
+                    "${C_ERROR}" "failed" "${C_RESET}"
+                let file_counts[failed]++
+            fi
+        fi
+
+        # If the file was copied, increment the file count
+        if ${file_copied}; then
+            let file_counts[copied]++
+        fi
+    done
+
+    # Delete the temporary directory
+    # rm -rf "${tmp_dir}"
+
+    # If a tar file was specified to be compressed, do that now
+    if [[ -n "${TAR_FILE}" ]] && ${DO_COMPRESS}; then
+        printf "*  compressing %s%s%s ... " \
+            "${C_TARFILE}" "${TAR_FILE}" "${C_RESET}"
+        gzip -9 < "${TAR_FILE}" > "${TAR_FILE}.gz" && rm "${TAR_FILE}"
+        TAR_FILE="${TAR_FILE}.gz"
+        if [[ ${?} -eq 0 ]]; then
+            printf "%s%s%s\n" \
+                "${C_SUCCESS}" "done" "${C_RESET}"
+        else
+            printf "%s%s%s\n" \
+                "${C_ERROR}" "failed" "${C_RESET}"
+        fi
+    fi
+
+    # If a tar file was specified, print a helpful message about unpacking it in
+    # a target directory
+    if [[ -n "${TAR_FILE}" ]]; then
+        # Determine whether to add the gzip extension and decompression option
+        local tar_decompress=""
+        if ${DO_COMPRESS}; then
+            tar_decompress="z"
+        fi
+        printf "* tar file created %s%s%s\n" \
+            "${C_TARFILE}" "${TAR_FILE}" "${C_RESET}"
+        printf "  unpack with \`%star -x%sf %q -C <target-dir>%s\`\n" \
+            "${C_COMMAND}" \
+            "${tar_decompress}" \
+            "${TAR_FILE}" \
+            "${C_RESET}"
+    fi
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

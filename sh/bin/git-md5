@@ -61,7 +61,7 @@ function parse-args() {
     COLOR=$(git config --get color.ui || echo auto)
     NUM_COMMITS=1
     GIT_LOG_OPTS=()
-    USE_REL_PATH=1
+    USE_REL_PATH=0
     DEFAULT_FORMAT="%MD5 %ref %fp"
     FORMAT="${DEFAULT_FORMAT}"
     USE_ECHO_FORMATTED=1
@@ -210,8 +210,11 @@ function parse-args() {
         if [ ${#REFS[@]} -eq 1 ]; then
             local ref="${REFS[0]}"
             if [ $(get-ref-type "${ref}") == "commit" ]; then
-                IFS=$'\n' FILEPATHS+=($(git log -1 --pretty=format: --name-only "${ref}"))
+                readarray -t FILEPATHS < <(
+                    git log -1 --pretty=format: --name-only "${ref}"
+                )
                 USE_REL_PATH=0
+                cd "$(git rev-parse --show-toplevel)"
             fi
         fi
     fi
@@ -359,12 +362,18 @@ function main() {
             # Get the file contents at that ref
             local contents
             local blob
-            blob=$(git rev-parse "${ref}:${relpath}" 2>/dev/null)
-            local file_exists=${?}
+            local file_exists
+            blob=$(git ls-tree "${ref}" "${relpath}" 2>/dev/null)
+            if [[ -n "${blob}" ]]; then
+                blob=$(echo "${blob}" | awk '{print $3}')
+                file_exists=true
+            else
+                file_exists=false
+            fi
 
             # Use a silly "00000000000000000000000000000000" hash if the file is empty
             local md5
-            if [ ${file_exists} -ne 0 ]; then
+            if ! ${file_exists}; then
                 md5="00000000000000000000000000000000"
             else
                 md5=$(git cat-file blob "${blob}" 2>/dev/null | md5sum - | cut -d' ' -f1)
@@ -454,7 +463,11 @@ function main() {
                 # for the purpose of getting an accurate date, find the last
                 # commit that modified the file at or before the given ref
                 local last_commit
-                last_commit=$(git log -1 --format="%H" "${ref}" --first-parent -m -- "${relpath}" 2>/dev/null)
+                if ${file_exists}; then
+                    last_commit=$(git log -1 --format="%H" "${ref}" --first-parent -m -- "${relpath}" 2>/dev/null)
+                else
+                    last_commit="${ref}"
+                fi
                 debug "git -c color.ui='${COLOR}' log -1 '${last_commit}' --first-parent -m --format='${format}'"
                 git -c color.ui="${COLOR}" log -1 "${last_commit}" --first-parent -m --format="${format}"
             fi

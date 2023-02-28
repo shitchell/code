@@ -2,37 +2,37 @@ include-source 'shell.sh'
 include-source 'text.sh'
 
 # Colors!
-C_BLACK="\e[30m"
-C_RED="\e[31m"
-C_GREEN="\e[32m"
-C_YELLOW="\e[33m"
-C_BLUE="\e[34m"
-C_MAGENTA="\e[35m"
-C_CYAN="\e[36m"
-C_WHITE="\e[37m"
-C_RGB="\e[38;2;%d;%d;%dm"
-C_DEFAULT_FG="\e[39m"
-C_BLACK_BG="\e[40m"
-C_RED_BG="\e[41m"
-C_GREEN_BG="\e[42m"
-C_YELLOW_BG="\e[43m"
-C_BLUE_BG="\e[44m"
-C_MAGENTA_BG="\e[45m"
-C_CYAN_BG="\e[46m"
-C_WHITE_BG="\e[47m"
-C_RGB_BG="\e[48;2;%d;%d;%dm"
-C_DEFAULT_BG="\e[49m"
-S_RESET="\e[0m"
-S_BOLD="\e[1m"
-S_DIM="\e[2m"
-S_ITALIC="\e[3m"  # not widely supported, sometimes treated as inverse
-S_UNDERLINE="\e[4m"
-S_BLINK="\e[5m"  # slow blink
-S_BLINK_FAST="\e[6m"  # fast blink
-S_REVERSE="\e[7m"
-S_HIDDEN="\e[8m"  # not widely supported
-S_STRIKETHROUGH="\e[9m"  # not widely supported
-S_DEFAULT="\e[10m"
+C_BLACK="\033[30m"
+C_RED="\033[31m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_BLUE="\033[34m"
+C_MAGENTA="\033[35m"
+C_CYAN="\033[36m"
+C_WHITE="\033[37m"
+C_RGB="\033[38;2;%d;%d;%dm"
+C_DEFAULT_FG="\033[39m"
+C_BLACK_BG="\033[40m"
+C_RED_BG="\033[41m"
+C_GREEN_BG="\033[42m"
+C_YELLOW_BG="\033[43m"
+C_BLUE_BG="\033[44m"
+C_MAGENTA_BG="\033[45m"
+C_CYAN_BG="\033[46m"
+C_WHITE_BG="\033[47m"
+C_RGB_BG="\033[48;2;%d;%d;%dm"
+C_DEFAULT_BG="\033[49m"
+S_RESET="\033[0m"
+S_BOLD="\033[1m"
+S_DIM="\033[2m"
+S_ITALIC="\033[3m"  # not widely supported, sometimes treated as inverse
+S_UNDERLINE="\033[4m"
+S_BLINK="\033[5m"  # slow blink
+S_BLINK_FAST="\033[6m"  # fast blink
+S_REVERSE="\033[7m"
+S_HIDDEN="\033[8m"  # not widely supported
+S_STRIKETHROUGH="\033[9m"  # not widely supported
+S_DEFAULT="\033[10m"
 
 
 # echos each argument based on the preceding argument:
@@ -50,18 +50,19 @@ S_DEFAULT="\e[10m"
 #   -n: do not echo a newline
 #   -V <level>: only echo if the global VERBOSITY is >= <level>
 function echo-formatted() {
-    local code_r="\033[31m"
-    local code_g="\033[32m"
-    local code_y="\033[33m"
-    local code_b="\033[34m"
-    local code_p="\033[35m"
-    local code_c="\033[36m"
-    local code_w="\033[37m"
-    local code_B="\033[1m"
-    local code_R="\033[7m"
-    local code_U="\033[4m"
-    local code_K="\033[5m"
-    local code_reset="\033[0m"
+    local code_r="${C_RED}"
+    local code_g="${C_GREEN}"
+    local code_y="${C_YELLOW}"
+    local code_b="${C_BLUE}"
+    local code_p="${C_MAGENTA}"
+    local code_m="${C_MAGENTA}"
+    local code_c="${C_CYAN}"
+    local code_w="${C_WHITE}"
+    local code_B="${S_BOLD}"
+    local code_R="${S_REVERSE}"
+    local code_U="${S_UNDERLINE}"
+    local code_K="${S_BLINK}"
+    local code_reset="${S_RESET}"
 
     # determine if we should print a newline at the end
     local print_newline=1
@@ -116,8 +117,10 @@ function echo-formatted() {
                     continue
                 else
                     # otherwise, loop over each character in the argument
-                    local arg_chars="${arg:1}"
-                    grep -o . <<< "${arg_chars}" | while read -r char; do
+                    local arg_chars
+                    [[ "${arg}" =~ ${arg//?/(.)} ]]
+                    arg_chars=("${BASH_REMATCH[@]:2}")
+                    for char in "${arg_chars[@]}"; do
                         # set the color code based on the character
                         local color_code="code_${char}"
                         # echo the color code
@@ -189,23 +192,34 @@ function echo-formatted() {
 
 # echo a command before running it, printing an error message if it exited with
 # a non-zero status
+# echo a command before running it
 function echo-run() {
+    local cmd=("${@}")
     local exit_code
-    echo-command "${@}"
 
-    # determine if the command is a string or an array
-    if [ "${#}" -eq 1 ]; then
-        eval " ${1}"
-        exit_code="${?}"
-    else
-        "${@}"
-        exit_code="${?}"
+    # echo the command...
+    printf "\033[32m\u25b6 \033[1m%s\033[0m" "${cmd[0]}"
+    # ...if there is more than one argument, print them
+    if [[ ${#cmd[@]} -gt 1 ]]; then
+        printf "\033[32m%s\033[0m" "$(printf " %q" "${cmd[@]:1}")"
+    fi
+    echo
+
+    # if we only have one argument and it contains a space, run it with eval
+    if [[ ${#cmd[@]} -eq 1 && "${cmd[0]}" =~ " " ]]; then
+        cmd=(eval "${cmd[0]}")
+    fi
+    # run the command, prepending each line of output with a vertical bar
+    "${cmd[@]}" 2>&1 | sed -e '$ ! s/^/\x1b[32m\xe2\x94\x82\x1b[0m / ; $ s/^/\x1b[32m\xe2\x95\xb0\x1b[0m /'
+    exit_code=${PIPESTATUS[0]}
+
+    # oh no errors
+    if [[ ${exit_code} -ne 0 ]]; then
+        echo -e "\033[31mcommand exited with status ${exit_code}\033[0m"
     fi
 
-    if [ $exit_code -ne 0 ]; then
-        echo-error "command exited with status ${exit_code}"
-    fi
-    return $exit_code
+    # return its exit code
+    return ${exit_code}
 }
 
 # echo something to stdout in cyan
