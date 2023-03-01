@@ -1,15 +1,46 @@
 #!/bin/bash
 
-ifconfig -a \
-    | grep -B1 inet \
-    | sed -E '
-        s/.*inet6? //;
-        s/>.*//;
-        s/: .*</\t/;
-        s/ .*//' \
-    | tr '\n' ' ' \
-    | sed -e '
-        s/ -- /\n/g;
-        s/\t/ /g' \
-    | grep 'UP' \
-    | awk '{print $1 "\t" $3 "\t" $4}'
+if command -v ip >/dev/null 2>&1; then
+    ip addr \
+        | awk '
+        function handle_iface() {
+            if (iface && ip && ip6) {
+                print iface "\t" ip "\t" ip6;
+            }
+            iface = "";
+            ip = "";
+            ip6 = "";
+        }
+        {
+            if ($0 ~ /^[^ ].*<[^>]+UP/) {
+                handle_iface();
+                iface = gensub(/[0-9]+: ([^:]+):.*/, "\\1", "g");
+                new_iface = 1;
+            } else if ($0 ~ /^ .*inet /) {
+                ip = gensub(/.*inet ([^ ]+)\/.*/, "\\1", "g");
+            } else if ($0 ~ /^ .*inet6 /) {
+                ip6 = gensub(/.*inet6 ([^ ]+)\/.*/, "\\1", "g");
+            }
+            if ($0 ~ /^[^ ]/ && !new_iface) {
+                handle_iface();
+            }
+            new_iface = 0;
+        }'
+elif command -v ifconfig >/dev/null 2>&1; then
+    ifconfig -a \
+        | grep -B1 inet \
+        | sed -E '
+            s/.*inet6? //;
+            s/>.*//;
+            s/: .*</\t/;
+            s/ .*//' \
+        | tr '\n' ' ' \
+        | sed -e '
+            s/ -- /\n/g;
+            s/\t/ /g' \
+        | grep 'UP' \
+        | awk '{print $1 "\t" $3 "\t" $4}'
+else
+    echo "error: no known network management utility found" >&2
+    exit 1
+fi
