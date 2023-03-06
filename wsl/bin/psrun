@@ -1,0 +1,7 @@
+#!/bin/bash
+#
+# Convert a WSL path to a Windows path and run it via powershell
+
+PATH=$(wslpath -w "$1")
+shift
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -File "$PATH" "$@"
