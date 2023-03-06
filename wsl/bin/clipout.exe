@@ -4,4 +4,4 @@
 
 (
     powershell.exe -command 'Get-Clipboard -Raw' | cat
-) 2>/dev/null | tr -d '\r' | tr -d '\0'
+) 2>/dev/null | tr -d '\r\0'
