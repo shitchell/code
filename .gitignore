@@ -5,6 +5,9 @@
 # opg stuff
 *opg-as*
 
+# log files
+*.log
+
 # go source and compiled binaries
 /go/pkg/mod/
 /go/pkg/sumdb/
