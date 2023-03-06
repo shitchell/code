@@ -612,10 +612,10 @@ function main() {
 
     # Determine all Asset Suite Issues that have been updated since '2022-10-04 09:30:00'
     local asset_suite_bugs_updated_query="
-        SELECT bugs.bug_id, bugs.delta_ts as last_modified, bugs.bug_status, bugs.short_desc as summary FROM bugs
+        SELECT bugs.bug_id, bugs.delta_ts as last_modified, products.name as product, components.name as component, bugs.bug_status, bugs.short_desc as summary FROM bugs
         LEFT JOIN components ON components.id = bugs.component_id
         LEFT JOIN products ON products.id = bugs.product_id
-        WHERE products.name = 'Asset Suite' AND components.name = 'Issue' AND bugs.delta_ts > '2022-10-05 09:00:00'
+        WHERE bugs.delta_ts > '2022-10-05 09:00:00'
         ORDER BY bugs.bug_id ASC;
     "
 
