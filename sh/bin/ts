@@ -232,6 +232,14 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
+# Exit if the timesheet file doesn't exist
+function require-timesheet-file() {
+    if [ ! -f "${TIMESHEET_FILE}" ]; then
+        echo-stderr "error: timesheet file '${TIMESHEET_FILE}' does not exist"
+        exit 1
+    fi
+}
+
 # Generate a timestamp from human readable text
 function timestamp() {
     # Parse arguments
@@ -564,8 +572,7 @@ function _ts_done() {
 
 # @description Start an interactive session with the timesheet
 function _ts_interact() {
-    # Do nothing
-    :
+    require-timesheet-file
 }
 function _ts_i() { _ts_interact "${@}"; }
 
@@ -606,6 +613,8 @@ function _ts_backup() {
 # @description Show the timesheet
 # @args [<query>]
 function _ts_show() {
+    require-timesheet-file
+
     if [ ${#POSITIONAL_ARGS[@]} -eq 1 ]; then
         WHERE+=("${POSITIONAL_ARGS[0]}")
         unset POSITIONAL_ARGS[0]
