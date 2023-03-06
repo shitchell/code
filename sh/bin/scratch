@@ -34,6 +34,30 @@ function help-full() {
     echo "precise to the day (YYYYMMDD), i.e. consecutive uses of scratch"
     echo "within the same day will use the same file."
     echo
+    echo "Actions:"
+    cat << EOF
+    -o / --open         open the scratch file in the default editor
+    -v / --view <file>  view the specified scratch file
+    -p / --page <file>  view the scratch file in the default pager
+    --rm <file>         remove the specified file from the scratch directory
+    --rmdir             remove the scratch directory
+    --clear             clear the scratch directory
+    --list              list the files in the scratch directory
+    *--list-fmt <fmt>    list the files in the scratch directory with the
+                        specified format, where <fmt> is a string with the
+                        following placeholders:
+                          %f:    the filename
+                          %F:    the full path to the file
+                          %s:    the size of the file in human readable format
+                          %b:    the size of the file in bytes
+                          %m:    the last modified time of the file
+                          %a:    the last accessed time of the file
+                          %P:    a preview of the file
+                          %P(n): a preview of the file with a maximum length of
+                                 n characters
+EOF
+    echo
+    echo "Options:"
     cat << EOF
     -h                  display usage
     --help              display this help message
@@ -43,35 +67,25 @@ function help-full() {
                         to the directory used by \`mktemp\`. if no argument is
                         given, prints the scratch directory and exits
     -u / --unique       guarantees a unique, unused scratch file
-    -l / --last         open the last modified scratch file
-    -v / --view <file>  view the specified scratch file
+    -l / --last         use the last modified scratch file
     -e / --exec <cmd>   execute the specified command on the scratch file
-    --no-exec           do not execute the specified command on the scratch file
     -I <string>         replace \`<string>\` with the scratch file in the
                         command, e.g.: \`scratch -I {} --exec "cp {} ~/"\`
-    --clear             clear the scratch directory
-    --rm <file>         remove the specified file from the scratch directory
-    --rmdir             remove the scratch directory
-    --list              list the files in the scratch directory
-    --list-summary      list the files in the scratch directory with a summary
-                        of each file
-    --no-list-summary   do not list the files in the scratch directory with a
-                        summary of each file
-    --list-summary-length <n>
-                        the maximum length of the summary for each file,
-                        defaults to 50
+    --no-exec           do not execute the specified command on the scratch file
 EOF
+    echo "* to be implemented"
 }
 
 function parse-args() {
     # Default values
     EDITOR="${EDITOR:-vi}"
+    PAGER="${PAGER:-less}"
     TMP_DIR=$(dirname "$(mktemp -u)")
     SCRATCH_DIR="${TMP_DIR}/scratch-$(id -u)"
     FILENAME=$(date +%Y%m%d)
     DO_SUMMARY=1
     DEFAULT_ACTION="scratch"
-    ACTION="${DEFAULT_ACTION}" # scratch, view, exec, clear, rmdir, list, rm
+    ACTION="${DEFAULT_ACTION}" # scratch, view, exec, clear, rmdir, list, rm, page
     EXEC_CMD=""
     EXEC_PLACEHOLDER=""
     SUMMARY_LENGTH=50
@@ -109,6 +123,15 @@ function parse-args() {
                 ACTION="view"
                 shift
                 ;;
+            -p | --page)
+                if [[ -z "${2}" ]]; then
+                    echo-stderr "no file specified"
+                    exit 1
+                fi
+                FILENAME="${2}"
+                ACTION="page"
+                shift
+                ;;
             -e | --exec)
                 if [[ -z "${2}" ]]; then
                     echo-stderr "no command specified"
@@ -129,7 +152,7 @@ function parse-args() {
                 EXEC_PLACEHOLDER="${2}"
                 shift
                 ;;
-            --list)
+            --list | --ls)
                 debug "listing files in scratch directory"
                 ACTION="list"
                 list-files "${SCRATCH_DIR}"
@@ -382,7 +405,10 @@ function main() {
 
     # Do the thing
     if [[ "${ACTION}" == "view" ]]; then
-        less "$(get-scratch-filepath "${FILENAME}")"
+        cat "$(get-scratch-filepath "${FILENAME}")"
+        return ${?}
+    elif [[ "${ACTION}" == "page" ]]; then
+        ${PAGER} "$(get-scratch-filepath "${FILENAME}")"
         return ${?}
     elif [[ "${ACTION}" == "list" ]]; then
         list-files "${SCRATCH_DIR}"
