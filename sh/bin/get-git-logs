@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# Given the path to a directory, find all git repositories in that directory and
+# run a git log command on each.
+
+include-source 'echo.sh'
+include-source 'git.sh'
+include-source 'shell.sh'
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [-n <log messages>] [-f|--format <log format>]  [ref1] [ref2] ... -- file1 [file2] ..."
+}
+
+function help-epilogue() {
+    echo "get the md5 hash for file(s) across commits or branches."
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h               display usage
+    --help           display this help message
+    -m/--md5-only    only return the md5 hash
+    -d/--diff        compare the md5 hashes of the files and exit with 0 if they
+                     are the same, 1 otherwise
+    --color          colorize the output (auto, always, never. default: auto)
+    -q/--quiet       don't print anything to stdout
+EOF
+}
+
+function parse-args() {
+    # Track whether positional arguments should be treated as files or not
+    local positional_files=0
+
+    # Default values
+    QUIET=0
+    DO_DIFF=0
+    COLOR=auto
+    HASH_ONLY=0
+    GIT_LOG_OPTS=()
+
+    # Loop over the arguments
+    declare -ga REFS
+    declare -ga FILEPATHS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -q)
+                QUIET=1
+                shift 1
+                ;;
+            -d)
+                DO_DIFF=1
+                shift 1
+                ;;
+            -m|--md5-only)
+                HASH_ONLY=1
+                shift 1
+                ;;
+            --)
+                positional_files=1
+                shift 1
+                ;;
+            -*)
+                GIT_LOG_OPTS+=("${1}")
+                exit 1
+                ;;
+            *)
+                if [ ${positional_files} -eq 0 ]; then
+                    REFS+=("${1}")
+                else
+                    FILEPATHS+=("${1}")
+                fi
+                shift 1
+                ;;
+        esac
+    done
+
+    # If no refs are provided, use HEAD
+    if [ ${#REFS[@]} -eq 0 ]; then
+        REFS+=("HEAD")
+    fi
+
+    # If no files are provided, then check if the ref is a commit. If it is, use
+    # the files modified in that commit.
+    if [ ${#FILEPATHS[@]} -eq 0 ]; then
+        if [ ${#REFS[@]} -eq 1 ]; then
+            local ref="${REFS[0]}"
+            if [ $(get-ref-type "${ref}") == "commit" ]; then
+                IFS=$'\n' FILEPATHS+=($(git log -1 --pretty=format: --name-only "${ref}"))
+            fi
+        fi
+    fi
+
+    # Set the positional arguments in the global array
+    set -- ${REFS[@]}
+    set -- ${FILEPATHS[@]}
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+}
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
