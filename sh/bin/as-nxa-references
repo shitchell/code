@@ -1,0 +1,66 @@
+#!/bin/bash
+#
+# Compile a list of all NxA services called by the FLOW files in the current
+# AssetSuite project.
+#
+# Can call NxA from tailored groovy
+
+FLOW_DIR="tailored/metadata/runtime/ui/FLOW"
+NXA_PROJECTS="nxa/SREData/MetaDataMgr/FileMgr/accounts"
+TAILORED_DIR="tailored/extensions"
+
+# Generate a list of all NxA projects
+readarray -t nxa_projects < <(
+    find "${NXA_PROJECTS}" -maxdepth 1 -type d -printf '%f\n' \
+        | sed 1d \
+        | grep -v '^System$'
+)
+
+# Get the list of FLOW files
+for flow_file in "${FLOW_DIR}"/*; do
+    # Echo the flow file name
+    printf "\033[1m%s\033[0m\n" "${flow_file}"
+
+    # Get all 'target="(.*?)"' strings from the FLOW file
+    readarray -t flow_targets < <(
+        grep -oP 'target="\K[^"]+' "${flow_file}" \
+            | sort \
+            | uniq
+    )
+
+    # Loop over the targets and determine if it is a valid NxA service
+    for target in "${flow_targets[@]}"; do
+        is_valid_nxa=false
+        # A target is a valid NxA service if it exists in the NxA directory
+        # or has an associated NxA package
+        ## get the first part of the target name (before the first '.')
+        target_name=${target%%.*}
+
+        if [[ -z "${target_name}" ]]; then
+            continue
+        fi
+
+        if [[ -f "${NXA_PROJECTS}/${target_name}" ]]; then
+            is_valid_nxa=true
+        else
+            # Determine if a package exists for the target
+            readarray -t target_package_candidates < <(
+                find "${NXA_PROJECTS}" -wholename "*/packages/${target_name}*"
+            )
+
+            # IF we got any results, then the target is a valid NxA service
+            if [[ "${#target_package_candidates[@]}" -gt 0 ]]; then
+                is_valid_nxa=true
+            fi
+        fi
+
+        # Print the target if it is a valid NxA service
+        if [[ "${is_valid_nxa}" = true ]]; then
+            printf "  - \033[32m%s\033[0m\n" "${target}"
+        fi
+    done
+done
+
+# Find all tailored references
+## Generate a regex for all NxA projects
+nxa_project_regex="(${nxa_projects[0]}$(printf '|%s' "${nxa_projects[@]:1}"))\."
