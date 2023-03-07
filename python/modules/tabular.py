@@ -60,7 +60,7 @@ class TableFile:
         column_names: list[str] = [],
         data: dict | _DataFrame = None,
         detect_types: bool = True,
-        na_values: list[str] = ["nan", "nat", "NaN", "NaT"],
+        na_values: list[str] = ["", "nan", "nat", "NaN", "NaT"],
         con: _Connection = None,
     ) -> None:
         """
@@ -493,8 +493,10 @@ class TableFile:
         if name is None:
             name = self.name
 
+        na_value: str = self.na_values[0]
+        print(f"Using '{na_value}' to represent missing values")
         if format == TabularFormat.CSV:
-            self.data.to_csv(filepath, **kwargs)
+            self.data.to_csv(filepath, na_rep=na_value, **kwargs)
         elif format == TabularFormat.SQLITE:
             with _sqlite3.connect(filepath) as conn:
                 # Determine if the table already exists
@@ -844,6 +846,9 @@ def run(**kwargs: object) -> None:
     )
     parser.add_argument(
         "-n", "--name", type=str, default=None, help="sheet or table name"
+    )
+    parser.add_argument(
+        "--nan", type=list, default=None, help="string to use for NaN values"
     )
     parser.add_argument(
         "-o",
