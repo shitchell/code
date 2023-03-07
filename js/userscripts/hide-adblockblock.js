@@ -27,6 +27,18 @@
 // up destroying many elements we'd rather keep. Please drop a comment with the link
 // to any page this breaks (although hopefully that number is tiny to nil)!
 
+// TODO:
+// - Use object rule lists?
+//   - e.g.:  [ { "classContains": "overlay", "zIndex": 5000, ... }, ... ]
+//   - rules: ["class", "classContains", "styleContains", "tagName", "zIndex",
+//             "position", "innerTextContains", "innerHTMLContains"]
+//   - logic: with some classes we might want a higher z-index, but with other
+//            classes we might want a lower z-index
+// - Allow matching candidate elements by innerText/innerHTML (use xpath)
+// - Rewrite bit that matches stuff based on lists to generate a single
+//   CSS selector
+// - Add more class names to search for
+
 var DEBUG = true;
 var VERIFIED_ELEMENTS = [];
 var TRIGGER_ZINDEX = 5000;
