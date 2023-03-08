@@ -10,6 +10,7 @@ include-source 'shell.sh'
 ################################################################################
 function parse-args() {
     # Parse the command args, subcommand, and subcommand args
+    
     declare -ga SUBCOMMAND
     declare -ga SUBCOMMAND_ARGS
 

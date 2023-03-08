@@ -61,11 +61,30 @@ echo
 # test extended color support
 color_support=$(tput colors)
 cs_pad=$(printf "${color_support}" | wc -c)
-echo -e "\e[35mTerminal supports \e[36;1m${color_support}\e[0m \e[35mcolors\e[0m"
+
+# Print "Terminal supports ${color_support} colors" with a rainbow of colors and
+# the color support in RGB (1st char = Red, 2nd char = Green, 3rd char = Blue)
+# echo -e "\e[35mTerminal supports \e[36;1m${color_support}\e[0m \e[35mcolors\e[0m"
+first_part="Terminal supports "
+second_part="${color_support}"
+third_part=" colors"
+while IFS= read -r -n1 char; do
+    printf "\e[38;5;%im%s" "$(((RANDOM % color_support) + 1))" "${char}"
+done <<< "${first_part}"
+color_support_colors=(31 32 34)
+i=0
+while read -r -n1 char; do
+    printf "\e[1;%im%s" "${color_support_colors[$((i++ % 3))]}" "${char}"
+done <<< "${second_part}"
+printf '\e[0m'
+while IFS= read -r -n1 char; do
+    printf "\e[38;5;%im%s" "$(((RANDOM % color_support) + 1))" "${char}"
+done <<< "${third_part}"
+printf '\e[0m\n'
 
 for i in `seq 0 $((color_support - 1))`; do
     printf "\e[38;5;%im\\\e[38;5;%0${cs_pad}im\e[0m" "${i}" "${i}"
-    if [[ $((i % 5)) -eq 0 ]]; then
+    if [[ $((i % 6)) -eq 0 || ${i} -eq 15 ]]; then
         echo
     else
         printf "    "

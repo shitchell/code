@@ -421,9 +421,9 @@ class TableFile:
             return
 
         if format == TabularFormat.CSV:
-            self.data = _pd.read_csv(filepath)
+            self.data = _pd.read_csv(filepath, na_values=[], keep_default_na=False)
         elif format == TabularFormat.TSV:
-            self.data = _pd.read_csv(filepath, sep="\t")
+            self.data = _pd.read_csv(filepath, sep="\t", na_values=self.na_values)
         elif format == TabularFormat.SQLITE:
             with _sqlite3.connect(filepath) as conn:
                 # A name is required to load a table from a sqlite database
@@ -493,10 +493,8 @@ class TableFile:
         if name is None:
             name = self.name
 
-        na_value: str = self.na_values[0]
-        print(f"Using '{na_value}' to represent missing values")
         if format == TabularFormat.CSV:
-            self.data.to_csv(filepath, na_rep=na_value, **kwargs)
+            self.data.to_csv(filepath, na_rep=self.na_rep, **kwargs)
         elif format == TabularFormat.SQLITE:
             with _sqlite3.connect(filepath) as conn:
                 # Determine if the table already exists

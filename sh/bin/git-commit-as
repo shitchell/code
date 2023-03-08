@@ -11,10 +11,11 @@ function help-full() {
     echo
     cat << EOF
     -h/--help               display this help message
-    -n/--name <name>        the name to commit with
-    -e/--email <email>      the email to commit with
-    -a/--author <author>    uses `git log --author=<author>` to find an existing
+    -N/--name <name>        the name to commit with
+    -E/--email <email>      the email to commit with
+    -A/--author <author>    uses `git log --author=<author>` to find an existing
                             author and use that author's name and email
+    -*/--*                  any other argument is passed to git commit
 EOF
 }
 

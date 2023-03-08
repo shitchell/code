@@ -218,7 +218,7 @@ function main() {
     fi
 
     # Display the statuses for the files to be propagated
-    echo-comment "Propagating ${#FILEPATHS[@]} files fromz ${SRC_REF}:"
+    echo-comment "Propagating ${#FILEPATHS[@]} files from ${SRC_REF}:"
     for filepath in "${FILEPATHS[@]}"; do
         git log -1 --name-status --format="" "${SRC_REF}" -- "${filepath}" \
             | sed -E 's/^(.)/[\1]/' \

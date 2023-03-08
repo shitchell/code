@@ -110,12 +110,20 @@ function parse-args() {
                 ;;
             --since)
                 local timestamp=$(date -d "${2}" +"${DATE_FORMAT}")
+                if [[ -z "${timestamp}" ]]; then
+                    echo "error: invalid date '${2}'" >&2
+                    exit 1
+                fi
                 WHERE+=("start >= '${timestamp}'")
                 WHERE_SPECIFIED=1
                 shift 2
                 ;;
             --before)
                 local timestamp=$(date -d "${2}" +"${DATE_FORMAT}")
+                if [[ -z "${timestamp}" ]]; then
+                    echo "error: invalid date '${2}'" >&2
+                    exit 1
+                fi
                 WHERE+=("start < '${timestamp}'")
                 WHERE_SPECIFIED=1
                 shift 2
@@ -146,7 +154,11 @@ function parse-args() {
                 ;;
             -b|--begin|--start)
                 # Process the argument using the $(date) command
-                local timestamp=$(date -d "${2}" +"%Y-%m-%d %H:%M:%S")
+                local timestamp=$(date -d "${2}" +"%Y-%m-%d %H:%M:%S" 2>/dev/null)
+                if [[ -z "${timestamp}" ]]; then
+                    echo "error: invalid date format '${2}'" >&2
+                    exit 1
+                fi
                 FIELDS+=("start=${timestamp}")
                 BEGIN_TIME="${timestamp}"
                 shift 2
@@ -154,6 +166,10 @@ function parse-args() {
             -e|--end|--finish|--done)
                 # Process the argument using the $(date) command
                 local timestamp=$(date -d "${2}" +"%Y-%m-%d %H:%M:%S")
+                if [[ -z "${timestamp}" ]]; then
+                    echo "error: invalid date format '${2}'" >&2
+                    exit 1
+                fi
                 FIELDS+=("end=${timestamp}")
                 END_TIME="${timestamp}"
                 shift 2
