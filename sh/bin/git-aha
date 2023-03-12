@@ -1,0 +1,162 @@
+#!/bin/bash
+#
+# Run `git log` or `git diff` and run the output through `aha` to make it
+# pretty and readable by people not using a terminal / ansi colors
+
+## imports #####################################################################
+################################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h/--help               display this help message
+    -c/--color              force color output (default)
+    -C/--no-color           force no color output
+    -b/--black              force black background
+    -w/--white              force white background (default)
+    --html-header           include the HTML header (default)
+    --no-header             do not include the HTML header
+    -t/--title <title>      set the title of the HTML page
+    -o/--output <file>      write the output to a file
+    --log                   run `git log` (default)
+    --diff                  run `git diff`
+    -*/--*                  any other argument is passed to git log or git diff
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-c|-C] [-b|-w] [--log|--diff] [<\`git log\` or \`git diff\` options>]"
+}
+
+function help-epilogue() {
+    echo "run \`git log\` or \`git diff\` and run the output through \`aha\`"
+}
+
+function parse-args() {
+    # Default values
+    COLOR=true # true, false. this tool needs no "auto" option
+    BACKGROUND="white" # white, black
+    DO_HTML_HEADER=true
+    GIT_CMD="log" # log, diff
+    GIT_CMD_ARGS=() # -c color.ui=always, -c color.ui=never
+    GIT_SUBCMD_ARGS=() # --no-pager, --stat, etc.
+    AHA_ARGS=()
+    OUTPUT_FILE="/dev/stdout" # if empty, output to stdout
+
+    # Loop over the arguments
+    local positional_args=()
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -c | --color)
+                COLOR=true
+                ;;
+            -C | --no-color)
+                COLOR=false
+                ;;
+            -b | --black)
+                BACKGROUND="black"
+                ;;
+            -w | --white)
+                BACKGROUND="white"
+                ;;
+            --html-header)
+                DO_HTML_HEADER=true
+                ;;
+            --no-header)
+                DO_HTML_HEADER=false
+                ;;
+            -t | --title)
+                AHA_ARGS+=("--title" "${2}")
+                shift 1
+                ;;
+            -o | --output)
+                OUTPUT_FILE="${2}"
+                shift 1
+                ;;
+            --log)
+                GIT_CMD="log"
+                ;;
+            --diff)
+                GIT_CMD="diff"
+                ;;
+            -* | --*)
+                positional_args+=("${1}")
+                ;;
+            *)
+                positional_args+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+
+    # Set the HTML header options
+    if ! ${DO_HTML_HEADER}; then
+        AHA_ARGS+=("--no-header")
+    fi
+
+    # Set the color and background options
+    if [[ "${BACKGROUND}" == "black" ]]; then
+        AHA_ARGS+=("--black")
+    fi
+
+    # Set the color options
+    if ${COLOR}; then
+        GIT_CMD_ARGS+=("-c" "color.ui=always")
+    else
+        GIT_CMD_ARGS+=("-c" "color.ui=never")
+    fi
+
+    # Use a standard, nice log format
+    if [[ "${GIT_CMD}" == "log" ]]; then
+        # git log \
+        #    --format="%C(auto,green)%h  %C(auto,bold blue)% %<(20)%ad %C(auto,nobold yellow)%<(20)%al%C(auto,reset)%s%C(bold red)% gD% D%C(nobold white)" \
+        #    --date="format-local:%Y-%m-%d %H:%M:%S"
+        GIT_SUBCMD_ARGS+=(
+            "--format=%C(auto,green)%h  %C(auto,bold blue)% %<(20)%ad %C(auto,nobold yellow)%<(20)%al%C(auto,reset)%s%C(bold red)% gD% D%C(nobold white)"
+            "--date=format-local:%Y-%m-%d %H:%M:%S"
+        )
+    fi
+
+    # Set the positional arguments
+    GIT_SUBCMD_ARGS+=("${positional_args[@]}")
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # Run the git command
+    debug "GIT_CMD_ARGS: ${GIT_CMD_ARGS[*]}"
+    debug "GIT_CMD: ${GIT_CMD}"
+    debug "GIT_SUBCMD_ARGS: ${GIT_SUBCMD_ARGS[*]}"
+    git "${GIT_CMD_ARGS[@]}" "${GIT_CMD}" "${GIT_SUBCMD_ARGS[@]}" \
+        | tr -d '\r' \
+        | aha "${AHA_ARGS[@]}" > "${OUTPUT_FILE}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
