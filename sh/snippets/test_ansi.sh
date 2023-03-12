@@ -82,9 +82,11 @@ while IFS= read -r -n1 char; do
 done <<< "${third_part}"
 printf '\e[0m\n'
 
+n=0
 for i in `seq 0 $((color_support - 1))`; do
     printf "\e[38;5;%im\\\e[38;5;%0${cs_pad}im\e[0m" "${i}" "${i}"
-    if [[ $((i % 6)) -eq 0 || ${i} -eq 15 ]]; then
+    [[ "${i}" == "16" ]] && n=3
+    if [[ $(((i + n) % 6)) -eq 0 || ${i} -eq 15 ]]; then
         echo
     else
         printf "    "
