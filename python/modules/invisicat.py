@@ -16,7 +16,7 @@ import re as _re
 
 def convert_to_bytes_str(text: str) -> str:
     # Convert the text to byte format to show all non-standard character codes
-    text_bytes: bytes = text.encode('utf-8', 'surrogatepass')
+    text_bytes: bytes = text.encode("utf-8", "surrogatepass")
     # Convert back to a string to keep the char formatting and remove `b'...'`
     text = str(text_bytes)[2:-1]
     # Add a newline after each '\n' for easier reading
@@ -39,13 +39,15 @@ def highlight_escape_chars(text: str) -> str:
         # r"(?<!\\)\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]", # ANSI escape characters
         # r"(?<!\\)\\x(?:(?!1b))[0-9a-zA-Z]{2}", # Hexadecimal escape characters (except \x1b)
         # r"(?<!\\)\\[nrtbfv0]", # Whitespace
-        r"\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]", # ANSI escape characters
-        r"\\x(?:(?!1b))[0-9a-zA-Z]{2}", # Hexadecimal escape characters (except \x1b)
-        r"\\[nrtbfv0]", # Whitespace
+        r"\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]",  # ANSI escape characters
+        r"\\x(?:(?!1b))[0-9a-zA-Z]{2}",  # Hexadecimal escape characters (except \x1b)
+        r"\\[nrtbfv0]",  # Whitespace
     ]
     # Search for the escape characters and add the ANSI reverse video escape sequence
     for pattern in escape_patterns:
-        text = _re.sub(pattern, lambda match: "\x1b[7m" + match.group(0) + "\x1b[0m", text)
+        text = _re.sub(
+            pattern, lambda match: "\x1b[7m" + match.group(0) + "\x1b[0m", text
+        )
     return text
 
 
@@ -59,16 +61,33 @@ if __name__ == "__main__":
 
     # Parse the command line arguments
     parser = argparse.ArgumentParser(description="View invisible characters in text")
-    parser.add_argument("filepaths", nargs="*", type=Path,
-                        help="files to read text from. - for stdin")
-    parser.add_argument("-v", "--video", action="store_true", dest="video",
-                        help="highlight escape characters with ANSI reverse video")
-    parser.add_argument("-V", "--no-video", action="store_false", dest="video",
-                        help="don't highlight escape characters")
-    parser.add_argument("-n", "--names", action="store_true", dest="show_names",
-                        help="show file names")
-    parser.add_argument("-N", "--no-names", action="store_false", dest="show_names",
-                        help="don't show file names")
+    parser.add_argument(
+        "filepaths", nargs="*", type=Path, help="files to read text from. - for stdin"
+    )
+    parser.add_argument(
+        "-v",
+        "--video",
+        action="store_true",
+        dest="video",
+        help="highlight escape characters with ANSI reverse video",
+    )
+    parser.add_argument(
+        "-V",
+        "--no-video",
+        action="store_false",
+        dest="video",
+        help="don't highlight escape characters",
+    )
+    parser.add_argument(
+        "-n", "--names", action="store_true", dest="show_names", help="show file names"
+    )
+    parser.add_argument(
+        "-N",
+        "--no-names",
+        action="store_false",
+        dest="show_names",
+        help="don't show file names",
+    )
     # Add epilog to show the usage message when the user requests help
     parser.epilog = "specifying '-' for a filepath will read from stdin"
     args: Namespace = parser.parse_args()
