@@ -197,9 +197,6 @@ function _subcommand_run-info() {
         return 1
     fi
 
-    # Get the pipeline id
-    pipeline_id=$(_subcommand_id "${pipeline}")
-
     # Get the pipeline run information
     local response=$(
         curl "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/build/builds/${run_id}?api-version=5.1" \
@@ -244,20 +241,23 @@ function _subcommand_run-info() {
 
 # Wait for a pipeline to complete
 # @description Wait for a pipeline to complete
-# @usage wait [-t|--timeout <seconds>] <run id>
+# @usage wait [-t|--timeout <seconds>] [-q|--quiet] <run id>
 function _subcommand_wait() {
     # Parse the arguments
     local timeout=0
     local run_id
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
-            -h|--help)
+            -h | --help)
                 _subcommand_help wait
                 exit 0
                 ;;
-            -t|--timeout)
+            -t | --timeout)
                 shift
                 timeout=${1}
+                ;;
+            -q | --quiet)
+                quiet=true
                 ;;
             *)
                 run_id="${1}"
@@ -301,7 +301,9 @@ function _subcommand_wait() {
     done
 
     # Print the pipeline details
-    _subcommand_run-info "${run_id}"
+    if ! ${quiet}; then
+        _subcommand_run-info "${run_id}"
+    fi
 }
 
 # @description List available pipelines
