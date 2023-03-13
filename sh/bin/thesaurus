@@ -13,6 +13,7 @@
 ################################################################################
 
 include-source 'echo.sh'
+include-source 'text.sh'
 include-source 'debug.sh'
 
 ## usage functions #############################################################
@@ -117,7 +118,7 @@ function main() {
     parse-args "${@}"
 
     # Get the synonyms
-    curl -s 'https://www.thesaurus.com/browse/start' \
+    curl -s "https://www.thesaurus.com/browse/$(urlencode "${WORD}")" \
         | grep -oP 'INITIAL_STATE =\K[^<]*' \
         | sed 's/.$//;s/^.//;s/undefined/null/g' \
         | python -m json.tool \
@@ -133,6 +134,24 @@ function main() {
                     # Print the debug message and line number to stderr
                     print "[" FILENAME ":" FNR "] " s > "/dev/stderr";
                 }
+            }
+            function urlunquote(s) {
+                # Unquote a URL
+                # Loop over the string and replace %XX with the character
+                # represented by the hex value XX
+                for (i = 1; i <= length(s); i++) {
+                    if (substr(s, i, 1) == "%") {
+                        # Get the hex value
+                        hex = substr(s, i + 1, 2);
+                        # Convert the hex value to a decimal value
+                        dec = strtonum("0x" hex);
+                        # Convert the decimal value to a character
+                        char = sprintf("%c", dec);
+                        # Replace the %XX with the character
+                        s = substr(s, 1, i - 1) char substr(s, i + 3);
+                    }
+                }
+                return s;
             }
             BEGIN {
                 inSearchData = 0;
@@ -195,7 +214,7 @@ function main() {
                     ### Print the search term
                     gsub(/.*"searchTerm": "/, "", $0);
                     gsub(/".*/, "", $0);
-                    print C_searchTerm $0 C_reset;
+                    print C_searchTerm urlunquote($0) C_reset;
                 } else if ($0 ~ /^                {/) {
                     inCategory = 1;
                     debug("BEGINNING OF CATEGORY");
@@ -224,7 +243,9 @@ function main() {
                 } else if ($0 ~ /                    ]/ || $0 ~ /"antonyms": \[\]/) {
                     inAntonyms = 0;
                     inSynonyms = 0;
-                    print "";
+                    if (! ($0 ~ /"antonyms": \[\]/)) {
+                        print "";
+                    }
                     debug("END OF ANTONYMS / SYNONYMS");
                 } else if ($0 ~ /"pos":/) {
                     ### Store the part of speech
