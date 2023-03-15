@@ -164,6 +164,12 @@ if __name__ == "__main__":
         help="The fields to include in the report",
     )
     parser.add_argument(
+        "-C",
+        "--capitalize-fields",
+        action="store_true",
+        help="Capitalize the field names in the report (title case)",
+    )
+    parser.add_argument(
         "-e",
         "--env",
         type=load_env,
@@ -246,33 +252,57 @@ if __name__ == "__main__":
     if len(args.fields) > default_fields_len:
         args.fields = args.fields[default_fields_len:]
 
-    print("logging in to jira with", args.jira_email, args.jira_token)
-    jira = JIRA(args.jira_email, args.jira_token)
-    print("authenticating with smtp server", args.smtp_server)
-    smtp_client: SMTPClient = SMTPClient(
-        args.smtp_email,
-        args.smtp_password,
-        args.smtp_server,
-        args.smtp_port,
-        args.smtp_tls,
+    print(
+        "logging in to jira with",
+        args.jira_email,
+        len(args.jira_token) * "*",
+        "... ",
+        flush=True,
+        end="",
     )
+    try:
+        jira = JIRA(args.jira_email, args.jira_token)
+    except Exception as e:
+        print("error:", e, flush=True, file=sys.stderr)
+        sys.exit(1)
+    print("success", flush=True)
+    print(
+        "authenticating with smtp server", args.smtp_server, "... ", flush=True, end=""
+    )
+    try:
+        smtp_client: SMTPClient = SMTPClient(
+            args.smtp_email,
+            args.smtp_password,
+            args.smtp_server,
+            args.smtp_port,
+            args.smtp_tls,
+        )
+    except Exception as e:
+        print("error:", e, flush=True, file=sys.stderr)
+        sys.exit(1)
+    print("success")
+    print("fetching custom fields ... ", end="")
     # Get a list of all custom fields
-    print("getting custom fields")
-    custom_fields_by_name: dict[str, str] = {
-        field["name"]: field["id"] for field in jira.fields()
-    }
-    custom_fields_by_id: dict[str, str] = {
-        v: k for k, v in custom_fields_by_name.items()
-    }
+    try:
+        custom_fields_by_name: dict[str, str] = {
+            field["name"]: field["id"] for field in jira.fields()
+        }
+        custom_fields_by_id: dict[str, str] = {
+            v: k for k, v in custom_fields_by_name.items()
+        }
+    except Exception as e:
+        print("error:", e, flush=True, file=sys.stderr)
+        sys.exit(1)
+    print("success", flush=True)
     df_prelist = []
     # Get all issues from the filter
     i = 0  # TODO: remove
-    print("getting issues from filter", args.filter)
+    print(f"processing filter {args.filter} ... ", flush=True, end="")
     for issue in jira.search_all_issues(f""" filter = {args.filter} """):
         # Get each field from the issue and add it to the dataframe
         issue_fields: dict[str, str] = {}
         for field in args.fields:
-            print(f"processing {issue}.{field}")
+            # print(f"processing {issue}.{field}")
             # Check if the field exists in either the raw issue or the custom fields
             field_id: str
             field_name: str
@@ -283,10 +313,17 @@ if __name__ == "__main__":
             elif field == "key":
                 field_id = "key"
             else:
-                print(f"Field {field} not found in issue {issue.key}, skipping")
-                # continue
-            if field_id != "key":
+                print(
+                    f"Field {field} not found in issue {issue.key}, skipping",
+                    flush=True,
+                )
+                continue
+            if args.capitalize_fields:
+                field_name = field.title()
+            elif field_id in custom_fields_by_id:
                 field_name = custom_fields_by_id[field_id]
+            else:
+                field_name = field
             # Get the value of the field
             if field_id == "key":
                 field_value = issue.key
@@ -304,12 +341,15 @@ if __name__ == "__main__":
                 field_value = dateutil.parser.parse(field_value).strftime(date_format)
             issue_fields[field_name] = field_value
         df_prelist.append(issue_fields)
-        # i += 1  # TODO: remove
+        i += 1
         # if i > 15:  # TODO: remove
         #     break  # TODO: remove this
+    print(f"{i} issues found", flush=True)
+    print("generating pandas dataframe ... ", flush=True)
     df = pd.DataFrame(df_prelist)
     print(df.head())
 
+    print("generating report ... ", end="", flush=True)
     # Get the filter name
     filter_name = jira.filter(args.filter).name
 
@@ -346,6 +386,9 @@ if __name__ == "__main__":
     else:
         print(f"Output type {args.output_type} not supported, exiting")
         sys.exit(1)
+
+    print("success", flush=True)
+    print("generating email ... ", flush=True, end="")
 
     # Format the HTML body
     html: str
@@ -480,28 +523,21 @@ if __name__ == "__main__":
         table_html = transform(table_html)
         html = html.replace("{{issue_table}}", table_html)
 
-    # def send_email(
-    #     self,
-    #     to: str | _Iterable | dict[str, str] = [],
-    #     subject: str = "No subject",
-    #     sender: str = None,
-    #     body_html: str = "",
-    #     body_text: str = "",
-    #     cc: str | _Iterable | dict[str, str] = [],
-    #     bcc: str | _Iterable | dict[str, str] = [],
-    #     attachments: dict[str, str | bytes | _Path | _IO] = {},
-    #     headers: dict[str, str] = {},
-    #     continue_on_error: bool = False,
-    #     raw: str = "",
-    # ) -> EmailMessage:
+    print("success", flush=True)
 
-    smtp_client.send_email(
-        to=args.to,
-        cc=args.cc,
-        bcc=args.bcc,
-        subject=args.subject,
-        sender=args.smtp_email,
-        body_html=html,
-        # body_text=df.to_string(),
-        attachments={export_name: export_data},
-    )
+    print("sending email ... ", flush=True, end="")
+    try:
+        smtp_client.send_email(
+            to=args.to,
+            cc=args.cc,
+            bcc=args.bcc,
+            subject=args.subject,
+            sender=args.smtp_email,
+            body_html=html,
+            # body_text=df.to_string(),
+            attachments={export_name: export_data},
+        )
+    except Exception as e:
+        print("error:", e, flush=True, file=sys.stderr)
+        sys.exit(1)
+    print("success", flush=True)
