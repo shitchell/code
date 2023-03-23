@@ -203,8 +203,8 @@ function _debug() {
     fi
 }
 
-# print debug information
-# mini copy/pastable version w/o debug levels
+# @description Print debug information if $DEBUG or $DEBUG_LOG are set
+# @usage _mini_debug <message>
 function _mini_debug() {
     local prefix timestamp
     if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
