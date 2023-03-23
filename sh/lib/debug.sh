@@ -204,13 +204,16 @@ function _debug() {
 }
 
 # print debug information
-# mini copy/pastable version w/o script name and debug levels
+# mini copy/pastable version w/o debug levels
 function _mini_debug() {
+    local prefix timestamp
     if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
-        local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        prefix="\033[36m[${timestamp}]\033[0m "
+        prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}"):"
+        prefix+="\033[1m${FUNCNAME[1]}:${BASH_LINENO[0]}\033[0m -- "
         printf "%s\n" "${@}" \
-            | awk -v prefix="\033[36m[${timestamp}]\033[0m \033[1;35m${FUNCNAME[1]}:${BASH_LINENO[0]}\033[0m -- " \
-                '{print prefix $0}' \
+            | awk -v prefix="${prefix}" '{print prefix $0}' \
             | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
     fi
 }
