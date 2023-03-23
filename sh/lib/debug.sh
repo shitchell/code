@@ -222,6 +222,6 @@ function _mini_debug() {
 # Temporarily turn on xtrace and run the given command
 function run-verbose() {
     set -x
-    ${@}
+    "${@}"
     set +x
 }
