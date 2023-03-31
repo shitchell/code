@@ -7,10 +7,12 @@ import textwrap
 from getpass import getpass
 from pprint import pformat
 from trinoor.jira import JIRA
+from typing import Iterable
 from jira import resources
 
 email: str = "maurice.moss@trinoor.com"
 keyinfo: str = ("system", "jira-mmoss")
+
 
 def login() -> JIRA:
     jira: JIRA = None
@@ -36,23 +38,112 @@ def login() -> JIRA:
             logged_in = True
             if store_password:
                 keyring.set_password(*keyinfo, password)
-    
+
     if not jira:
         raise Exception(f"Failed to authenticate '{email}'")
 
     return jira
 
-def normalize_value(value):
+
+# def normalize_value(value):
+#     valuestr = str(value)
+#     if isinstance(value, list):
+#         valuelist = []
+#         for subvalue in value:
+#             valuelist.append(normalize_value(subvalue))
+#         value = pformat(valuelist)
+#     elif isinstance(value, dict):
+#         valuedict = {}
+#         for k, v in value.items():
+#             valuedict[k] = normalize_value(v)
+#         value = pformat(valuedict)
+#     elif isinstance(value, resources.Watchers):
+#         value = value.watchCount
+#     elif isinstance(value, resources.TimeTracking):
+#         value = value.raw
+#     elif isinstance(value, resources.Comment):
+#         value = f"{value.author} ({value.created}): {value.body}"
+#     elif isinstance(value, resources.PropertyHolder):
+#         value = normalize_value(value.__dict__)
+#     elif isinstance(value, resources.UnknownResource):
+#         if hasattr(value, "comments"):
+#             value = normalize_value(value.comments)
+#     elif isinstance(value, resources.Resource):
+#         value = valuestr
+#     elif not isinstance(value, (int, float, str, bool)):
+#         value = valuestr
+#     elif isinstance(value, str):
+#         value = value.replace(r"\\ ", "\n")
+#         if value in ("NA", "N/A", "NULL"):
+#             value = None
+#     return value
+
+
+def normalize_issue_value(value: object, opts: dict = {}):
+    """
+    Normalize a JIRA issue field's value to a string.
+    """
     valuestr = str(value)
-    if isinstance(value, list):
+    if (
+        isinstance(value, Iterable)
+        and not isinstance(value, (str, bytes))
+        and "self" in value
+    ):
+        if "/resolution/" in value["self"]:
+            return value["name"]
+        elif "accountId" in value:
+            display_name = value.get("displayName", "")
+            email_address = value.get("emailAddress", "")
+            if display_name and email_address:
+                value = f"{display_name} <{email_address}>"
+            elif display_name:
+                value = display_name
+            elif email_address:
+                value = email_address
+        elif "fields" in value and "key" in value and "id" in value:
+            # We have an issue
+            value = f"{value['key']}: {value['fields']['summary']}"
+        elif "name" in value:
+            value = value["name"]
+        elif "value" in value:
+            value = value["value"]
+        elif "comments" in value:
+            commentlist = []
+            i = 0
+            if "commentLimit" in opts:
+                limit = opts["commentLimit"]
+            else:
+                limit = None
+            for c in value["comments"]:
+                i += 1
+                if limit and i > limit:
+                    break
+                author = c["author"]
+                # a_name = author.get("displayName", "")
+                # a_email = author.get("emailAddress", "")
+                # if a_name and a_email:
+                #     author = f"{a_name} <{a_email}>"
+                # else:
+                #     author = a_name or a_email
+                author = author.get(
+                    "displayName", author.get("emailAddress", "<unknown>")
+                )
+                comment = f"{author} on {c['created']}: {c['body']}"
+                # print(f"""comment: '''{comment}'''""")
+                commentlist.append(comment)
+            # print("commentlist:", commentlist)
+            value = "\n---\n".join(commentlist)
+    elif isinstance(value, list):
         valuelist = []
         for subvalue in value:
-            valuelist.append(normalize_value(subvalue))
+            subvalue_normalized = normalize_issue_value(subvalue)
+            valuelist.append(subvalue_normalized)
+        # print(f"valuelist: '''{valuelist}'''")
         value = pformat(valuelist)
     elif isinstance(value, dict):
         valuedict = {}
         for k, v in value.items():
-            valuedict[k] = normalize_value(v)
+            valuedict[k] = normalize_issue_value(v)
         value = pformat(valuedict)
     elif isinstance(value, resources.Watchers):
         value = value.watchCount
@@ -61,10 +152,10 @@ def normalize_value(value):
     elif isinstance(value, resources.Comment):
         value = f"{value.author} ({value.created}): {value.body}"
     elif isinstance(value, resources.PropertyHolder):
-        value = normalize_value(value.__dict__)
+        value = normalize_issue_value(value.__dict__)
     elif isinstance(value, resources.UnknownResource):
         if hasattr(value, "comments"):
-            value = normalize_value(value.comments)
+            value = normalize_issue_value(value.comments)
     elif isinstance(value, resources.Resource):
         value = valuestr
     elif not isinstance(value, (int, float, str, bool)):
@@ -75,81 +166,180 @@ def normalize_value(value):
             value = None
     return value
 
+
 def main() -> None:
+    import dateutil.parser
+    import re
+
     parser = argparse.ArgumentParser(description="jira pycli")
-    parser.add_argument("issues", nargs="+",
-                        help="issues to look up")
-    parser.add_argument("-f", "--field", action="append", default=[],
-                        help="Return only the listed fields")
+    parser.add_argument("issues", nargs="*", help="issues to look up")
+    parser.add_argument(
+        "-f",
+        "--fields",
+        action="append",
+        default=["summary", "description", "status", "updated"],
+        help="The fields to include in the report",
+    )
+    parser.add_argument(
+        "-F",
+        "--no-fields",
+        action="store_true",
+        help="Do not include any fields in the report, only matching issues",
+    )
+    parser.add_argument(
+        "-j",
+        "--jql",
+        help="The JQL query to use to find issues",
+    )
+    parser.add_argument(
+        "--or",
+        dest="jql_combine",
+        action="store_const",
+        default="OR",
+        const="OR",
+        help="Use OR instead of AND to combine JQL queries",
+    )
+    parser.add_argument(
+        "--and",
+        dest="jql_combine",
+        action="store_const",
+        const="AND",
+        help="Use AND instead of OR to combine JQL queries",
+    )
+    parser.add_argument(
+        "--sort",
+        help="The JQL sort order to use",
+        default="key ASC",
+    )
+    parser.add_argument(
+        "--comment-limit",
+        type=int,
+        default=0,
+        help="The maximum number of comments to include in the report",
+    )
+
     # p_continue.add_argument("-c", "--continue", dest="cont", action="store_true",
-                        # help="continue displaying the time since the timestring after it passes")
+    # help="continue displaying the time since the timestring after it passes")
     # p_continue.add_argument("-s", "--stop", action="store_true",
-                        # help="stop displaying the time until the timestring after it passes")
+    # help="stop displaying the time until the timestring after it passes")
     # parser.add_argument("-d", "--delay", type=float, default=1,
-                        # help="time between updates (in seconds)")
+    # help="time between updates (in seconds)")
     # parser.add_argument("-n", "--max-intervals", type=int, default=0,
-                        # help="stop counting down after n intervals")
+    # help="stop counting down after n intervals")
     # parser.add_argument("-p", "--precision", type=int, default=0,
-                        # help="round the smallest unit to this many decimal places")
+    # help="round the smallest unit to this many decimal places")
     # p_output.add_argument("-q", "--quiet", action="store_true",
-                        # help="don't print any output")
+    # help="don't print any output")
     # p_output.add_argument("-r", "--readable", action="store_true",
-                        # help="display time in human readable format")
+    # help="display time in human readable format")
     # p_output.add_argument("-T", "--tenths", action="store_true",
-                        # help="display time in seconds including tenths of a second")
+    # help="display time in seconds including tenths of a second")
     # p_output.add_argument("-S", "--seconds", action="store_true",
-                        # help="display time in seconds")
+    # help="display time in seconds")
     # p_output.add_argument("-H", "--hours", action="store_true",
-                        # help="display time in hours")
+    # help="display time in hours")
     # p_output.add_argument("-D", "--days", action="store_true",
-                        # help="display time in days")
+    # help="display time in days")
     # p_output.add_argument("-W", "--weeks", action="store_true",
-                        # help="display time in weeks")
+    # help="display time in weeks")
     # p_output.add_argument("-M", "--months", action="store_true",
-                        # help="display time in months")
+    # help="display time in months")
     # p_output.add_argument("-Y", "--years", action="store_true",
-                        # help="display time in years")
+    # help="display time in years")
     args = parser.parse_args()
-    
+
     # Log in
     jira: JIRA = login()
-    
+
+    # If fields are specified, remove the default fields
+    default_fields_len = len(parser.get_default("fields"))
+    if len(args.fields) > default_fields_len:
+        args.fields = args.fields[default_fields_len:]
+
     # Get all field ids/names
     jira_fields = jira.fields()
-    
-    for issue_key in args.issues:
-        issue = jira.issue(issue_key)
+    custom_fields_by_name: dict[str, str] = {
+        field["name"]: field["id"] for field in jira.fields()
+    }
+    custom_fields_by_id: dict[str, str] = {
+        v: k for k, v in custom_fields_by_name.items()
+    }
+
+    # Generate a search query for all the issues to reduce the number of API calls
+    search_query: str = ""
+    if args.issues:
+        search_query = (
+            "(" + " OR ".join([f'key="{issue_key}"' for issue_key in args.issues]) + ")"
+        )
+    if args.jql and search_query:
+        search_query += f" {args.jql_combine} "
+    if args.jql:
+        search_query += f"({args.jql})"
+    search_query += f" ORDER BY {args.sort}"
+
+    is_first: bool = True
+    for issue in jira.search_all_issues(search_query):
+        if args.no_fields:
+            print(issue.key)
+            continue
+        if not is_first:
+            print()
+        is_first = False
         print(issue.key)
-        print("-"*10)
-        # Get all fields in the issue that have values
-        fields: dict[str, object] = {}
-        for field in issue.raw['fields']:
-            value = getattr(issue.fields, field)
-            # print(field, ": ", value)
-            if field.startswith("customfield_"):
-                # get the field name
-                for jira_field in jira_fields:
-                    if jira_field["id"] == field:
-                        # print("setting", field, "to", jira_field["name"])
-                        field = jira_field["name"]
+        print("=" * len(issue.key))
+        issue_fields: dict[str, str] = {}
+        for field in args.fields:
+            # print(f"processing {issue}.{field}")
+            # Check if the field exists in either the raw issue or the custom fields
+            field_id: str
+            field_name: str
+            if field in issue.raw["fields"]:
+                field_id = field
+            elif field in custom_fields_by_name:
+                field_id = custom_fields_by_name[field]
+            elif field == "key":
+                field_id = "key"
             else:
-                field = field.capitalize()
-            if args.field and field not in args.field:
-                # print("skipping", field)
+                # print(f"Field {field} not found in issue {issue.key}, skipping")
                 continue
-            if value:
-                value = normalize_value(value)
-                fields[field] = value
-                if isinstance(value, str) and "\n" in value:
-                    lines = []
-                    valuelines = value.splitlines()
-                    lines.append(valuelines[0])
-                    for line in valuelines[1:]:
-                        lines.append(" "*21 + line)
-                    value = "\n".join(lines)
-                print(f"{field + ':':<20}", value)
+            if field_id != "key":
+                field_name = custom_fields_by_id[field_id]
+            else:
+                field_name = "Key"
+            # Get the value of the field
+            if field_id == "key":
+                field_value = issue.key
+            else:
+                field_value = normalize_issue_value(
+                    issue.raw["fields"][field_id],
+                    opts={"commentLimit": args.comment_limit},
+                )
+            # If the value is a date, format it just a little more nicely
+            if isinstance(field_value, str) and re.search(
+                r"\d{4}-\d{2}-\d{2}", field_value
+            ):
+                # Check if it includes a time
+                if re.search(r"\d{2}:\d{2}:\d{2}", field_value):
+                    date_format = "%Y-%m-%d %H:%M:%S (%z)"
+                else:
+                    date_format = "%Y-%m-%d"
+                field_value = dateutil.parser.parse(field_value).strftime(date_format)
+            issue_fields[field_name] = field_value
             # else:
-                # print("field", field, "has no values")
-            
+            # print("field", field, "has no values")
+
+        # Print the fields
+        ## Determine the max field name length
+        max_field_name_len: int = max(
+            len(field_name) for field_name in issue_fields.keys()
+        )
+        for field_name, field_value in issue_fields.items():
+            print((field_name + ":").ljust(max_field_name_len + 2), end="")
+            # Print the first line of the value normally and any subsequent lines indented
+            print(field_value.splitlines()[0])
+            for line in field_value.splitlines()[1:]:
+                print(" " * (max_field_name_len + 1), line)
+
+
 if __name__ == "__main__":
     main()
