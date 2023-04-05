@@ -79,17 +79,17 @@ function help-full() {
                                      output directory
     -P / --no-preserve-path          do not preserve the path of the file(s) in
                                      the output directory
-    -f / --follow-symlinks           for symlinks, copy the file the symlink
+    -l / --follow-symlinks           for symlinks, copy the file the symlink
                                      points to
-    -F / --no-follow-symlinks        for symlinks, copy the symlink itself
+    -L / --no-follow-symlinks        for symlinks, copy the symlink itself
     -s / --suffix <suffix>           append <suffix> to each output file
     -R / --rename <pattern>          rename the output file(s) using sed -E <pattern>
                                      if a suffix is specified, it is appended
                                      after the replacement
-    -o / --overwrite                 for downloaded files, overwrite the file
+    -f / --overwrite                 for downloaded files, overwrite the file
                                      if it already exists. for tar files, remove
                                      the tar file if it already exists.
-    -O / --no-overwrite              for downloaded files, do not overwrite the
+    -F / --no-overwrite              for downloaded files, do not overwrite the
                                      file if it already exists. for tar files,
                                      append to the tar file if it already exists.
     -t / --tar <file>                tar the file(s) into a single file
@@ -156,10 +156,10 @@ function parse-args() {
             -P | --no-preserve-path)
                 DO_PRESERVE_PATH=false
                 ;;
-            -f | --follow-symlinks)
+            -l | --follow-symlinks)
                 DO_PRESERVE_SYMLINKS=false
                 ;;
-            -F | --no-follow-symlinks)
+            -L | --no-follow-symlinks)
                 DO_PRESERVE_SYMLINKS=true
                 ;;
             -s | --suffix)
@@ -170,10 +170,10 @@ function parse-args() {
                 SED_PATTERN="${2}"
                 shift 1
                 ;;
-            -o | --overwrite)
+            -f | --overwrite)
                 DO_OVERWRITE=true
                 ;;
-            -O | --no-overwrite)
+            -F | --no-overwrite)
                 DO_OVERWRITE=false
                 ;;
             -t | --tar)

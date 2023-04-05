@@ -60,6 +60,16 @@ function trim() {
     echo "${string}"
 }
 
+# @description Join the specified strings with the specified delimiter
+# @usage join <delimiter> <string> [<string>...]
+function join() {
+    local delimiter="${1}"
+    shift
+    printf "%s" "${1}"
+    shift
+    printf "%s" "${@/#/${delimiter}}"
+}
+
 function urlencode() {
     local string="${1}"
     local data

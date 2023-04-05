@@ -105,14 +105,14 @@ function parse-args() {
     REPO_ENC="$(urlencode "${REPO}")"
 
     # Debug infos
-    echo "SUBCOMMAND: ${SUBCOMMAND}" >&3
-    echo "SUBCOMMAND_ARGS: $(printf "%q " "${SUBCOMMAND_ARGS[@]}")" >&3
-    echo "POSITIONAL_ARGS: $(printf "%q " "${POSITIONAL_ARGS[@]}")" >&3
-    echo "ORGANIZATION: ${ORGANIZATION}" >&3
-    echo "PROJECT: ${PROJECT}" >&3
-    echo "REPO: ${REPO}" >&3
-    echo "PASS_NAME: ${PASS_NAME}" >&3
-    echo "TOKEN: ${TOKEN}" >&3
+    debug "SUBCOMMAND: ${SUBCOMMAND}"
+    debug "SUBCOMMAND_ARGS: $(printf "%q " "${SUBCOMMAND_ARGS[@]}")"
+    debug "POSITIONAL_ARGS: $(printf "%q " "${POSITIONAL_ARGS[@]}")"
+    debug "ORGANIZATION: ${ORGANIZATION}"
+    debug "PROJECT: ${PROJECT}"
+    debug "REPO: ${REPO}"
+    debug "PASS_NAME: ${PASS_NAME}"
+    debug "TOKEN: ${TOKEN}"
 }
 
 function help-full() {
@@ -577,8 +577,7 @@ function _agents_in_pool() {
     local response=$(
         curl "https://dev.azure.com/${ORGANIZATION_ENC}/_apis/distributedtask/pools/${pool_id}/agents?api-version=7.0" \
             --silent \
-            --user ":${TOKEN}" \
-            | python -m json.tool
+            --user ":${TOKEN}"
     )
 
     # Print out the agent information
@@ -710,7 +709,7 @@ function _subcommand_list-agents() {
         local agents=$(
             _agents_in_pool "${pool_id}" $'\t' \
                 | awk -v online="${online}" -v offline="${offline}" -v all_agents="${all_agents}" '{
-
+                        print $0;
                 }'
         )
         # printf "%s" "${pool_name}"
@@ -839,11 +838,11 @@ function _subcommand_run() {
         esac
     done
 
-    echo "pipeline_name: ${pipeline_name}" >&3
-    echo "branch: ${branch}" >&3
-    echo "variables: $(printf "%q " "${variables[@]}")" >&3
-    echo "parameters: $(printf "%q " "${parameters[@]}")" >&3
-    echo "wait: ${wait}" >&3
+    debug "pipeline_name: ${pipeline_name}"
+    debug "branch: ${branch}"
+    debug "variables: $(printf "%q " "${variables[@]}")"
+    debug "parameters: $(printf "%q " "${parameters[@]}")"
+    debug "wait: ${wait}"
 
     # Ensure a pipeline name was specified
     if [ -z "${pipeline_name}" ]; then
@@ -1143,6 +1142,29 @@ function _subcommand_pr-complete() {
             | python -m json.tool
 }
 
+# @description Create a pull request from / to the specified branches and auto-complete it
+# @usage pr <source branch> <target branch> [title] [description]
+function _subcommand_pr() {
+    local pr_id
+
+    # Create the pull request and get the id
+    while IFS= read line; do
+        # Check for the pull request id
+        if [[ -z "${pr_id}" && "${line}" =~ "pullRequestId" ]]; then
+            pr_id="$(echo "${line}" | sed -E 's/.*: ([0-9]+),/\1/')"
+        fi
+        echo "${line}"
+    done < <(_subcommand_pr-create "${@}")
+
+    # Set the pull request to auto-complete
+    if [[ -n "${pr_id}" ]]; then
+        _subcommand_pr-auto-complete "${pr_id}"
+    else
+        echo "error: failed to create pull request" >&2
+        return 1
+    fi
+}
+
 # @description Cancel a pull request
 # @usage pr-cancel <pr id>
 function _subcommand_pr-cancel() {
@@ -1173,138 +1195,169 @@ function _subcommand_pr-list() {
 # @description Print the usage message or the help message for a subcommand
 # @args [<subcommand>]
 function _subcommand_help() {
-    local subcommand="${1:-${POSITIONAL_ARGS[0]}}"
+    # Default arguments
+    local subcommands=()
+    local do_minimal=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -m|--minimal)
+                do_minimal=true
+                shift 1
+                ;;
+            *)
+                subcommands+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    debug "subcommands: ${subcommands[@]}"
+    debug "do_minimal: ${do_minimal}"
 
     # If no subcommand was specified, then print the help message
-    if [ -z ${subcommand} ]; then
+    if [[ ${#subcommands[@]} -eq 0 ]]; then
+        debug "Getting subcommands from ${0}"
         # Parse for all the subcommands
-        local subcommands=()
-        while read -r line; do
-            if [[ "${line}" =~ ^_subcommand_[A-za-z0-9_-]+" (" ]]; then
-                subcommands+=($(echo "${line}" | grep -oP "_subcommand_\K[a-z_-]+"))
-            fi
-        done < <(declare -f)
+        # local subcommands=()
+        # while IFS= read -r line; do
+        #     if [[ "${line}" =~ ^_subcommand_[A-za-z0-9_-]+" (" ]]; then
+        #         subcommands+=($(echo "${line}" | grep -oP "_subcommand_\K[a-z_-]+"))
+        #     fi
+        # done < "${0}"
+        readarray -t subcommands < <(
+            grep -oP "_subcommand_\K[a-z_-]+" "${0}" | sort | uniq
+        )
+        if ${do_minimal}; then
+            printf "%s\n" "${subcommands[@]}"
+            return 0
+        fi
         echo "usage: $(basename "${0}") <subcommand> [options]"
         echo
         echo "Available subcommands:"
-        printf " - %s\n" "${subcommands[@]}"
+        printf "    %s\n" "${subcommands[@]}"
         echo
         echo "For help with a specific subcommand, run:"
         echo "    $(basename "${0}") help <subcommand>"
     else
-        # Determine if the subcommand is an alias for another subcommand
-        local code=$(type "_subcommand_${subcommand}" 2>/dev/null)
-        if grep -qE "^    _subcommand_" <<< "${code}"; then
-            subcommand=$(echo "${code}" | grep -oP "^    _subcommand_\K[a-z_-]+")
-        fi
+        local is_first=true
+        for subcommand in "${subcommands[@]}"; do
+            ${is_first} && is_first=false || printf '\n---\n\n'
+            # Determine if the subcommand is an alias for another subcommand
+            local code=$(type "_subcommand_${subcommand}" 2>/dev/null)
+            if grep -qE "^    _subcommand_" <<< "${code}"; then
+                subcommand=$(echo "${code}" | grep -oP "^    _subcommand_\K[a-z_-]+")
+            fi
 
-        debug "subcommand: ${subcommand}"
+            debug "subcommand: ${subcommand}"
 
-        # Otherwise, use awk to print the help message for the specified
-        # subcommand
-        awk -v subcommand="${subcommand}" -v prog="$(basename "${0}")" '
-            BEGIN {
-                # used to track the current help name for multi-line fields
-                cur_help_name = "";
-            }
-            # Define a function that wraps text to a specified width
-            function wrap(text, width) {
-                # If the text is longer than the width, then wrap it
-                if (length(text) > width) {
-                    # Split the text into words
-                    split(text, words, " ");
-
-                    # Loop through the words and add them to the line
-                    line = "";
-                    for (i in words) {
-                        # If the line is empty, then add the word
-                        if (length(line) == 0) {
-                            line = words[i];
-                        } else if (length(line) + length(words[i]) + 1 <= width) {
-                            # If the line is not empty and the word will fit on
-                            # the line, then add the word
-                            line = line " " words[i];
-                        } else {
-                            # Otherwise, print the line and start a new line
-                            print line;
-                            line = words[i];
-                        }
-                    }
-
-                    # Print the last line
-                    print line;
-                } else {
-                    # Otherwise, just print the text
-                    print text;
-                }
-            }
-            {
-                # Store any lines that start with "# @"
-                if ($0 ~ /^# @/) {
-                    help_name = gensub(/^# @([a-z-]+).*/, "\\1", "g", $0);
-                    help_text = gensub(/^# @([a-z-]+) (.*)/, "\\2", "g", $0);
-                    cur_help_name = help_name;
-                    help[help_name] = help_text;
-                } else if ($0 ~ /^function/) {
-                    # If we find a function, either print the help message or
-                    # clear the help message
+            # Otherwise, use awk to print the help message for the specified
+            # subcommand
+            awk -v subcommand="${subcommand}" -v prog="$(basename "${0}")" '
+                BEGIN {
+                    # used to track the current help name for multi-line fields
                     cur_help_name = "";
-                    found_cmd = gensub(/^function _subcommand_([a-z_-]+).*/, "\\1", "g", $0);
-                    if (found_cmd == subcommand) {
-                        # If there is no help message, then say as much
-                        if (length(help) == 0) {
-                            exit 2;
+                }
+                # Define a function that wraps text to a specified width
+                function wrap(text, width) {
+                    # If the text is longer than the width, then wrap it
+                    if (length(text) > width) {
+                        # Split the text into words
+                        split(text, words, " ");
+
+                        # Loop through the words and add them to the line
+                        line = "";
+                        for (i in words) {
+                            # If the line is empty, then add the word
+                            if (length(line) == 0) {
+                                line = words[i];
+                            } else if (length(line) + length(words[i]) + 1 <= width) {
+                                # If the line is not empty and the word will fit on
+                                # the line, then add the word
+                                line = line " " words[i];
+                            } else {
+                                # Otherwise, print the line and start a new line
+                                print line;
+                                line = words[i];
+                            }
                         }
-                        # If there is a description, print and delete it
-                        if (help["description"]) {
-                            print wrap(help["description"], 80);
-                            delete help["description"];
-                        } else {
-                            delete help["description"];
-                        }
-                        # If there are args, print and delete them
-                        if (help["args"] != "") {
-                            print "usage: " prog " " subcommand " " help["args"];
-                            delete help["args"];
-                        } else {
-                            delete help["args"];
-                        }
-                        # Loop over the remaining help messages and print them
-                        for (help_name in help) {
-                            print help_name ": " help[help_name];
-                        }
-                        exit;
+
+                        # Print the last line
+                        print line;
                     } else {
-                        split("", help);
+                        # Otherwise, just print the text
+                        print text;
                     }
-                } else if (cur_help_name != "" && $0 ~ /^# /) {
-                    # If we are in a multi-line field, then append the line to
-                    # the current help message
-                    help_text = gensub(/^#\s+(.*)/, "\\1", "g", $0);
-                    help[cur_help_name] = help[cur_help_name] " " help_text;
                 }
-            }
-            END {
-                if (found_cmd != subcommand) {
-                    exit 1;
+                {
+                    # Store any lines that start with "# @"
+                    if ($0 ~ /^# @/) {
+                        help_name = gensub(/^# @([a-z-]+).*/, "\\1", "g", $0);
+                        help_text = gensub(/^# @([a-z-]+) (.*)/, "\\2", "g", $0);
+                        cur_help_name = help_name;
+                        help[help_name] = help_text;
+                    } else if ($0 ~ /^function/) {
+                        # If we find a function, either print the help message or
+                        # clear the help message
+                        cur_help_name = "";
+                        found_cmd = gensub(/^function _subcommand_([a-z_-]+).*/, "\\1", "g", $0);
+                        if (found_cmd == subcommand) {
+                            # If there is no help message, then say as much
+                            if (length(help) == 0) {
+                                exit 2;
+                            }
+                            # If there is a description, print and delete it
+                            if (help["description"]) {
+                                print wrap(help["description"], 80);
+                                delete help["description"];
+                            } else {
+                                delete help["description"];
+                            }
+                            # If there are args, print and delete them
+                            if (help["args"] != "") {
+                                print "usage: " prog " " subcommand " " help["args"];
+                                delete help["args"];
+                            } else {
+                                delete help["args"];
+                            }
+                            # Loop over the remaining help messages and print them
+                            for (help_name in help) {
+                                print help_name ": " help[help_name];
+                            }
+                            exit;
+                        } else {
+                            split("", help);
+                        }
+                    } else if (cur_help_name != "" && $0 ~ /^# /) {
+                        # If we are in a multi-line field, then append the line to
+                        # the current help message
+                        help_text = gensub(/^#\s+(.*)/, "\\1", "g", $0);
+                        help[cur_help_name] = help[cur_help_name] " " help_text;
+                    }
                 }
-            }
-        ' "${BASH_SOURCE[0]}"
-        local exit_code=${?}
-        case ${exit_code} in
-            0)
-                # Do nothing
-                ;;
-            1)
-                echo-stderr "error: no such subcommand '${subcommand}'"
-                ;;
-            2)
-                echo-stderr "error: no help message found for subcommand '${subcommand}'"
-                ;;
-            *)
-                echo-stderr "error: awk exited with code ${exit_code}"
-                ;;
-        esac
+                END {
+                    if (found_cmd != subcommand) {
+                        exit 1;
+                    }
+                }
+            ' "${BASH_SOURCE[0]}"
+            local exit_code=${?}
+            case ${exit_code} in
+                0)
+                    # Do nothing
+                    ;;
+                1)
+                    echo-stderr "error: no such subcommand '${subcommand}'"
+                    ;;
+                2)
+                    echo-stderr "error: no help message found for subcommand '${subcommand}'"
+                    ;;
+                *)
+                    echo-stderr "error: awk exited with code ${exit_code}"
+                    ;;
+            esac
+        done
     fi
     exit ${exit_code}
 }
@@ -1397,6 +1450,7 @@ function main() {
     fi
 
     # Run the subcommand
+    debug "running subcommand '${SUBCOMMAND}' with args '${SUBCOMMAND_ARGS[*]}'"
     "${subcommand_func}" "${SUBCOMMAND_ARGS[@]}"
 }
 
@@ -1404,11 +1458,4 @@ function main() {
 ## run #########################################################################
 ################################################################################
 
-[ "${BASH_SOURCE[0]}" == "${0}" ] && (
-    if [ -n "${DEBUG}" ]; then
-        exec 3>&2
-        main "${@}"
-    else
-        main "${@}" 3>/dev/null
-    fi
-)
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"

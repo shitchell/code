@@ -252,11 +252,16 @@ function parse-args() {
                     else
                         timestring="${2}"
                     fi
-                    SINCE=$(date -d "${timestring}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
-                    if [ $? -ne 0 ]; then
-                        echo "error: invalid date '${2}'" >&2
-                        help-usage >&2
-                        exit 1
+                    if [[ "${timestring}" == "auto" ]]; then
+                        # Then simply set SINCE to "auto"
+                        SINCE="auto"
+                    else
+                        SINCE=$(date -d "${timestring}" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+                        if [ $? -ne 0 ]; then
+                            echo "error: invalid date '${2}'" >&2
+                            help-usage >&2
+                            exit 1
+                        fi
                     fi
                 fi
                 shift 2
@@ -483,14 +488,18 @@ function arg-type() {
     [[ "${arg_type}" != "unknown" ]]  # return 0 if arg_type is known, else 1
 }
 
-# Print a debug message if DEBUG=1 or write it to a log file if
-# DEBUG_LOG=<filepath> is set
+# @description Print debug information if $DEBUG or $DEBUG_LOG are set
+# @usage debug <message>
 function debug() {
+    local prefix timestamp
     if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
         timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-        prefix="\x1b[36m[${timestamp}]\x1b[0m \x1b[1;35m${FUNCNAME[1]}:${BASH_LINENO[0]}\x1b[0m --"
+        prefix="\033[36m[${timestamp}]\033[0m "
+        prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
+        [[ "${FUNCNAME[1]}" != "main" ]] && prefix+="\033[1m:${FUNCNAME[1]}()\033[0m"
+        prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
         printf "%s\n" "${@}" \
-            | sed -e "s/^/${prefix} /" \
+            | awk -v prefix="${prefix}" '{print prefix $0}' \
             | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
     fi
 }
@@ -783,6 +792,19 @@ function main() {
 
         # Release each customization individually
         for customization in "${CUSTOMIZATIONS[@]}"; do
+            # Generate the commit message for the cherry-pick now since we'll filter for it if $SINCE is set to "auto"
+            local dest_customization="${DEST_CUSTOMIZATION:-${customization}}"
+            local commit_msg=$(
+                echo "${DEST_COMMIT_PATTERN}" \
+                    | awk -v cust="${dest_customization}" '
+                        {
+                            gsub("{{CUST}}", cust);
+                            print $0
+                        }
+                    '
+            )
+            debug "using commit message: ${commit_msg}"
+
             if [[ ${DO_VALIDATE} -eq 1 ]]; then
                 # Validate that the latest changes have been cherry-picked to test
                 echo -en "* validating ${C_MAGENTA}${S_BOLD}${customization}${S_RESET} is up-to-date in ${C_YELLOW}test${S_RESET} ... "
@@ -815,6 +837,18 @@ function main() {
             # Generate a list of all files committed under that Customization ID using ${GIT_LOG_OPTS}
             # note if there is a `--since` filter in ${GIT_LOG_OPTS}
             local since_filter
+            # If $SINCE is "auto", then use the date of the last promotion to the target repo's $DEST_BRANCH
+            if [[ "${SINCE}" == "auto" ]]; then
+                local last_promotion=$(git -C "${DEST_REPO}" log -1 --format=%at --grep="${commit_msg}" origin/"${DEST_BRANCH}")
+                debug "Last promotion of ${customization} to '${DEST_REPO}:${DEST_BRANCH}' was at ${last_promotion}"
+                if [[ ${last_promotion} -gt 0 ]]; then
+                    since_filter=" since ${C_YELLOW}${S_BOLD}$(date -d @${last_promotion} "+%Y-%m-%d %H:%M:%S")${S_RESET}"
+                    SINCE=$(date -d @${last_promotion} "+%Y-%m-%d %H:%M:%S")
+                    debug "updated SINCE to ${SINCE} -- ${since_filter}"
+                else
+                    since_filter=""
+                fi
+            fi
             if [[ "${SINCE}" != "" ]]; then
                 since_filter=" since ${C_YELLOW}${S_BOLD}${SINCE}${S_RESET}"
             fi
@@ -870,20 +904,10 @@ function main() {
                 fi
 
                 # Commit the files
-                local dest_customization="${DEST_CUSTOMIZATION:-${customization}}"
-                local commit_msg=$(
-                    echo "${DEST_COMMIT_PATTERN}" \
-                        | awk -v cust="${dest_customization}" '
-                            {
-                                gsub("{{CUST}}", cust);
-                                print $0
-                            }
-                        '
-                )
                 echo -e "* committing ${C_MAGENTA}${change_count}${S_RESET} change${s} to ${C_BLUE}${S_BOLD}${DEST_REPO_NAME}${S_RESET} as ${C_MAGENTA}${S_BOLD}${dest_customization}${S_RESET}"
                 (
                     echo-run git -C "${DEST_REPO}" add -A \
-                    && echo-run git -C "${DEST_REPO}" commit -m "${commit_msg}"
+                    && echo-run git -C "${DEST_REPO}" commit --no-gpg-sign -m "${commit_msg}"
                 )
                 if [[ ${?} -ne 0 ]]; then
                     echo -e "error: failed to commit files to ${C_BLUE}${S_BOLD}${DEST_REPO}${S_RESET}, aborting"

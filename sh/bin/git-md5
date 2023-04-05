@@ -31,6 +31,7 @@ function help-full() {
                        format. see 'git log --help' for more information. three
                        addtional format specifiers are available:
                           - %fp (filepath)
+                          - %fn (filename)
                           - %ref (ref)
                           - %MD5 (the md5 hash of the file)
                        ex: --format "%h %fp %MD5"
@@ -227,7 +228,7 @@ function parse-args() {
         # Determine if the format string contains any git log format specifiers
         local test_format=$(
             echo "${FORMAT}" \
-                | sed -e 's/%MD5//g' -e 's/%fp//g' -e 's/%ref//g'
+                | sed -e 's/%MD5//g' -e 's/%fp//g' -e 's/%fn//g' -e 's/%ref//g'
         )
         if [[ "${test_format}" =~ % ]]; then
             # If it does, use git log
@@ -430,6 +431,7 @@ function main() {
                         -v md5="${md5}" \
                         -v fp="${relpath}" \
                         -v ref="${ref}" \
+                        -v fn="$(basename "${filepath}")" \
                         -v color="${color_format}" \
                         -v reset="${color_reset}" '
                             {
@@ -439,6 +441,8 @@ function main() {
                                 gsub(/%fp/, fp);
                                 # Replace `"%ref"` with `ref`
                                 gsub(/%ref/, ref);
+                                # Replace `"%fn"` with `fn`
+                                gsub(/%fn/, fn);
                                 # Print the result
                                 print;
                             }

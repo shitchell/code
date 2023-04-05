@@ -25,6 +25,7 @@ function help-full() {
     -w/--white              force white background (default)
     --html-header           include the HTML header (default)
     --no-header             do not include the HTML header
+    --(no-)show-command     (do not) show the command that was run
     -t/--title <title>      set the title of the HTML page
     -o/--output <file>      write the output to a file
     --log                   run `git log` (default)
@@ -46,10 +47,13 @@ function parse-args() {
     COLOR=true # true, false. this tool needs no "auto" option
     BACKGROUND="white" # white, black
     DO_HTML_HEADER=true
+    DO_SHOW_COMMAND=false
     GIT_CMD="log" # log, diff
     GIT_CMD_ARGS=() # -c color.ui=always, -c color.ui=never
     GIT_SUBCMD_ARGS=() # --no-pager, --stat, etc.
     AHA_ARGS=()
+    AHA_TITLE=""
+    COMMAND_FORMAT="%C(grey underline)> %C(green)git %C(teal)%subcmd %C(blue)%args"
     OUTPUT_FILE="/dev/stdout" # if empty, output to stdout
 
     # Loop over the arguments
@@ -83,8 +87,18 @@ function parse-args() {
             --no-header)
                 DO_HTML_HEADER=false
                 ;;
+            --show-command)
+                DO_SHOW_COMMAND=true
+                ;;
+            --no-show-command)
+                DO_SHOW_COMMAND=false
+                ;;
+            --command-style)
+                COMMAND_ANSI="${2}"
+                shift 1
+                ;;
             -t | --title)
-                AHA_ARGS+=("--title" "${2}")
+                AHA_TITLE="${2}"
                 shift 1
                 ;;
             -o | --output)
@@ -126,13 +140,17 @@ function parse-args() {
 
     # Use a standard, nice log format
     if [[ "${GIT_CMD}" == "log" ]]; then
-        # git log \
-        #    --format="%C(auto,green)%h  %C(auto,bold blue)% %<(20)%ad %C(auto,nobold yellow)%<(20)%al%C(auto,reset)%s%C(bold red)% gD% D%C(nobold white)" \
-        #    --date="format-local:%Y-%m-%d %H:%M:%S"
         GIT_SUBCMD_ARGS+=(
-            "--format=%C(auto,green)%h  %C(auto,bold blue)% %<(20)%ad %C(auto,nobold yellow)%<(20)%al%C(auto,reset)%s%C(bold red)% gD% D%C(nobold white)"
-            "--date=format-local:%Y-%m-%d %H:%M:%S"
+            --pretty="format:%C(auto,green)%h  %C(auto,bold blue)% %<(20)%ad %C(auto,nobold yellow)%<(20)%al%C(auto,reset)%s%C(bold red)% gD% D%C(nobold white)"
+            --date="format-local:%Y-%m-%d %H:%M:%S"
         )
+    fi
+
+    # Set the aha output file title
+    if [[ -n "${AHA_TITLE}" ]]; then
+        AHA_ARGS+=("--title" "${AHA_TITLE}")
+    else
+        AHA_ARGS+=("--title" "$(get-repo-name) | ${GIT_CMD}")
     fi
 
     # Set the positional arguments
@@ -140,19 +158,83 @@ function parse-args() {
 }
 
 
+## helpful functions ###########################################################
+################################################################################
+
+# @description Check if `aha` is installed and exit if not
+function check-aha() {
+    if ! command -v aha >/dev/null 2>&1; then
+        echo "error: \`aha\` is not installed" >&2
+        exit 1
+    fi
+}
+
+# @description Decode a url quoted string
+# @usage decode-url <string>
+function urldecode() {
+    local url_encoded="${1//+/ }"
+    printf '%b' "${url_encoded//%/\\x}"
+}
+
+# @description Determine the repo name from the git remote url
+# @usage get-repo-name
+function get-repo-name() {
+    local repo_url=$(git remote get-url "$(git remote | head -n 1)")
+    local repo_name=$(basename "${repo_url}" .git)
+    repo_name=$(urldecode "${repo_name}")
+    echo "${repo_name}"
+}
+
+
 ## main ########################################################################
 ################################################################################
 
 function main() {
+    # Parse the arguments
     parse-args "${@}"
 
-    # Run the git command
+    # Check for aha
+    check-aha
+
     debug "GIT_CMD_ARGS: ${GIT_CMD_ARGS[*]}"
     debug "GIT_CMD: ${GIT_CMD}"
     debug "GIT_SUBCMD_ARGS: ${GIT_SUBCMD_ARGS[*]}"
-    git "${GIT_CMD_ARGS[@]}" "${GIT_CMD}" "${GIT_SUBCMD_ARGS[@]}" \
-        | tr -d '\r' \
-        | aha "${AHA_ARGS[@]}" > "${OUTPUT_FILE}"
+
+    # Check if we should show the git command that is being run
+    local git_command_header=""
+    if ${DO_SHOW_COMMAND}; then
+        # Set up ansi colors for the git command
+        if ${DO_ANSI_COMMAND}; then
+            local c_start="\033[1;32m"
+            # local c_end="\033[0m"
+            # local c_arrow="\033[38;5;243m"
+            # local c_git="\033[32m"
+            # local c_cmd="\033[36m"
+            # local c_arg="\033[34m"
+            local c_reset="\033[0m"
+        fi
+        git_command_header=$(
+            printf "${c_start}${c_arrow}> ${c_git}git"
+            printf " ${c_cmd}%q" "${GIT_CMD}"
+            for arg in "${GIT_SUBCMD_ARGS[@]}"; do
+                # Skip formatting options
+                if [[ "${arg}" =~ "--"[a-z]+"=format" ]]; then
+                    continue
+                fi
+                printf " ${c_arg}%q" "${arg}"
+            done
+            printf "${c_reset}"
+        )
+    fi
+
+    # Run the git command
+    # Print the git command as a header
+    {
+        echo "${git_command_header}"
+        ${DO_SHOW_COMMAND} && echo
+        git "${GIT_CMD_ARGS[@]}" "${GIT_CMD}" "${GIT_SUBCMD_ARGS[@]}" \
+            | tr -d '\r'
+    } | aha "${AHA_ARGS[@]}" > "${OUTPUT_FILE}"
 }
 
 

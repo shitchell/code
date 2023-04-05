@@ -45,6 +45,10 @@ def login() -> JIRA:
     return jira
 
 
+def tsv_escape(value: str) -> str:
+    return value.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+
 # def normalize_value(value):
 #     valuestr = str(value)
 #     if isinstance(value, list):
@@ -217,6 +221,11 @@ def main() -> None:
         default=0,
         help="The maximum number of comments to include in the report",
     )
+    parser.add_argument(
+        "--tsv",
+        action="store_true",
+        help="Output in tab-separated values format",
+    )
 
     # p_continue.add_argument("-c", "--continue", dest="cont", action="store_true",
     # help="continue displaying the time since the timestring after it passes")
@@ -277,16 +286,24 @@ def main() -> None:
         search_query += f"({args.jql})"
     search_query += f" ORDER BY {args.sort}"
 
+    # Print the header if we're in TSV mode
+    if args.tsv:
+        tsv_columns = args.fields
+        if "key" not in args.fields:
+            tsv_columns.insert(0, "key")
+        print("\t".join(tsv_columns))
+
     is_first: bool = True
     for issue in jira.search_all_issues(search_query):
-        if args.no_fields:
+        if args.no_fields and not args.tsv:
             print(issue.key)
             continue
-        if not is_first:
+        if not is_first and not args.tsv:
             print()
         is_first = False
-        print(issue.key)
-        print("=" * len(issue.key))
+        if not args.tsv:
+            print(issue.key)
+            print("=" * len(issue.key))
         issue_fields: dict[str, str] = {}
         for field in args.fields:
             # print(f"processing {issue}.{field}")
@@ -330,15 +347,21 @@ def main() -> None:
 
         # Print the fields
         ## Determine the max field name length
-        max_field_name_len: int = max(
-            len(field_name) for field_name in issue_fields.keys()
-        )
-        for field_name, field_value in issue_fields.items():
-            print((field_name + ":").ljust(max_field_name_len + 2), end="")
-            # Print the first line of the value normally and any subsequent lines indented
-            print(field_value.splitlines()[0])
-            for line in field_value.splitlines()[1:]:
-                print(" " * (max_field_name_len + 1), line)
+        if not args.tsv:
+            max_field_name_len: int = max(
+                len(field_name) for field_name in issue_fields.keys()
+            )
+            for field_name, field_value in issue_fields.items():
+                print((field_name + ":").ljust(max_field_name_len + 2), end="")
+                # Print the first line of the value normally and any subsequent lines indented
+                print(field_value.splitlines()[0])
+                for line in field_value.splitlines()[1:]:
+                    print(" " * (max_field_name_len + 1), line)
+        else:
+            tsv_values = [tsv_escape(value) for value in issue_fields.values()]
+            if "key" not in args.fields:
+                tsv_values.insert(0, issue.key)
+            print("\t".join(tsv_values))
 
 
 if __name__ == "__main__":

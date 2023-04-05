@@ -7,6 +7,7 @@
 #   should be taken, and then perform the action after the options are parsed.
 # - Update to allow multiple filepaths, and if an action calls for only one
 #   filepath, simply use the first specified.
+# - Remove --list-names and just use --list-fmt '%f' instead.
 
 ## imports #####################################################################
 ################################################################################
@@ -43,6 +44,7 @@ function help-full() {
     --rmdir             remove the scratch directory
     --clear             clear the scratch directory
     --list              list the files in the scratch directory
+    --list-names        list the filenames in the scratch directory
     *--list-fmt <fmt>    list the files in the scratch directory with the
                         specified format, where <fmt> is a string with the
                         following placeholders:
@@ -156,6 +158,11 @@ function parse-args() {
                 debug "listing files in scratch directory"
                 ACTION="list"
                 list-files "${SCRATCH_DIR}"
+                exit 0
+                ;;
+            --list-names)
+                debug "listing filenames in scratch directory"
+                find "${SCRATCH_DIR}" -iname '[^.]*' -type f -printf '%f\n'
                 exit 0
                 ;;
             --list-summary)

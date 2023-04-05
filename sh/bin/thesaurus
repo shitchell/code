@@ -53,6 +53,7 @@ function parse-args() {
     SHOW_CATEGORIES=false
 
     # Loop over the arguments
+    local query_parts=()
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
             -h)
@@ -97,17 +98,26 @@ function parse-args() {
                 exit 1
                 ;;
             *)
-                WORD="${1}"
+                query_parts+=("${1}")
                 shift 1
                 ;;
         esac
     done
+    
+    WORD=$(join " " "${query_parts[@]}")
 
     # Check for required arguments
     if [[ -z "${WORD}" ]]; then
         echo-stderr "error: missing required argument: <word>"
         exit 1
     fi
+
+    debug "NUM: ${NUM}"
+    debug "WORD: ${WORD}"
+    debug "MAX_WIDTH: ${MAX_WIDTH}"
+    debug "SHOW_SCORE: ${SHOW_SCORE}"
+    debug "USE_COLOR: ${USE_COLOR}"
+    debug "SHOW_CATEGORIES: ${SHOW_CATEGORIES}"
 }
 
 

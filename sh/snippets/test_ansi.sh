@@ -83,13 +83,36 @@ done <<< "${third_part}"
 printf '\e[0m\n'
 
 n=0
-for i in `seq 0 $((color_support - 1))`; do
+include-source debug.sh
+needs_newline=true
+for ((i=0; i<color_support; i++)); do
+    # debug "[$i/$color_support] printing line $(printf "\e[38;5;%im\\\e[38;5;%0${cs_pad}im\e[0m" "${i}" "${i}")"
     printf "\e[38;5;%im\\\e[38;5;%0${cs_pad}im\e[0m" "${i}" "${i}"
-    [[ "${i}" == "16" ]] && n=3
-    if [[ $(((i + n) % 6)) -eq 0 || ${i} -eq 15 ]]; then
+
+    # for i < 16, print 4 colors per line
+    # for i >= 16, print 6 colors per line, shifted by 2
+    if [[ ${i} -lt 16 ]]; then
+        n=4 s=0
+    else
+        # n=7 and n=9 will not yield equal rows for 256 colors
+        #n=5 s=4
+        n=6  s=2
+        # n=8  s=0
+        # n=10 s=4
+    fi
+    if [[ $(((i + s) % n)) -eq $((n - 1)) ]]; then
         echo
+        needs_newline=false
     else
         printf "    "
+        needs_newline=true
     fi
 done
-echo
+${needs_newline} && echo
+
+    # [[ "${i}" == "16" ]] && n=3
+    # if [[ $(((i + n) % 6)) -eq 0 || ${i} -eq 15 ]]; then
+    #     echo
+    # else
+    #     printf "    "
+    # fi
