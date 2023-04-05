@@ -3,4 +3,9 @@
 # Beep boop
 # usage: beep [frequency] [duration in milliseconds]
 
+usage="$(basename "${0}"): usage: beep [frequency] [duration in milliseconds]"
+
+for arg in "${@}"; do
+  ! [[ "${arg}" -eq "${arg}" ]] 2>/dev/null && echo "${usage}" >&2 && exit 1
+done
 powershell.exe -command "[console]::beep(${1:-500},${2:-500})"
