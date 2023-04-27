@@ -1,0 +1,425 @@
+#!/bin/bash
+#
+# Convert between NxA service IDs and service names
+
+## imports #####################################################################
+################################################################################
+
+# include-source 'debug.sh'
+
+
+## usage #######################################################################
+################################################################################
+
+function help-epilogue() {
+    echo "convert between NxA service IDs and service names"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Identifies and prints information about services by name, ID, or path."
+    echo "If any of the arguments is a single '-', then services are read from"
+    echo "stdin."
+    echo
+    echo "Options:"
+    echo
+    cat << EOF
+    -h                             display usage
+    --help                         display this help message
+    -d/--nxa-dir <dir>             the NxA directory, defaults to '.'
+    -p/--service-prefix <prefix>   the service prefix, defaults to 'RedirectFileMgr'
+    -f/--format <format>           the output format, defaults to '{fullname} {path}'
+    -e/-E/--(no-)-errors           whether to print errors for missing services
+    -b/-B/--(no-)blank-lines       whether to print blank lines for missing services
+EOF
+    echo
+    echo "The format string can contain the following:"
+    echo
+    cat << EOF
+    {name}      the service name
+    {fullname}  the full service name (including project, package, etc)
+    {id}        the service ID
+    {path}      the service filepath
+    {project}   the service project name
+    {input}     the input string
+    \t          a tab character
+    \n          a newline character
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-d <dir>] [-p <prefix>] [-f <format>] [-e | -E] [-b | -B] <service> [<service> ...]"
+}
+
+function parse-args() {
+    # Default values
+    NXA_DIR=""
+    SERVICE_PREFIX="RedirectFileMgr"
+    OUTPUT_FORMAT="{fullname} {path}"
+    DO_ERRORS=true
+    DO_BLANK_LINES=true
+
+    # Loop over the arguments
+    declare -ga SERVICES
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -d | --nxa-dir)
+                NXA_DIR="${2}"
+                shift 2
+                ;;
+            -p | --service-prefix)
+                SERVICE_PREFIX="${2}"
+                shift 2
+                ;;
+            -f | --format)
+                OUTPUT_FORMAT="${2}"
+                shift 2
+                ;;
+            -e | --errors)
+                DO_ERRORS=true
+                shift 1
+                ;;
+            -E | --no-errors)
+                DO_ERRORS=false
+                shift 1
+                ;;
+            -b | --blank-lines)
+                DO_BLANK_LINES=true
+                shift 1
+                ;;
+            -B | --no-blank-lines)
+                DO_BLANK_LINES=false
+                shift 1
+                ;;
+            -)
+                # Read from stdin
+                while read -r line; do
+                    SERVICES+=("${line}")
+                done
+                shift 1
+                ;;
+            -*)
+                echo "unknown option: ${1}" >&2
+                help-usage >&2
+                exit 1
+                ;;
+            *)
+                SERVICES+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # If there is an 'nxa' directory in the current directory, use that, else
+    # use the current directory
+    if [[ -z "${NXA_DIR}" ]]; then
+        NXA_DIR=$([[ -d "nxa" ]] && echo "nxa" || echo ".")
+    elif [[ ! -d "${NXA_DIR}" ]]; then
+        echo "invalid NxA directory: ${NXA_DIR}" >&2
+        help-usage >&2
+        exit 1
+    fi
+
+    # Check that there are services
+    if [[ ${#SERVICES[@]} -eq 0 ]]; then
+        help-usage
+        help-epilogue
+        exit 1
+    fi
+
+    debug "NXA_DIR: ${NXA_DIR}"
+    debug "DO_ERRORS: ${DO_ERRORS}"
+    debug "DO_BLANK_LINES: ${DO_BLANK_LINES}"
+    debug "SERVICES: ${SERVICES[*]}"
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Print a debug message
+# @usage debug <message>
+function debug() {
+    local prefix timestamp
+    if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        prefix="\033[36m[${timestamp}]\033[0m "
+        prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
+        [[ "${FUNCNAME[1]}" != "main" ]] && prefix+="\033[1m:${FUNCNAME[1]}()\033[0m"
+        prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
+        printf "%s\n" "${@}" \
+            | awk -v prefix="${prefix}" '{print prefix $0}' \
+            | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
+    fi
+}
+
+# @description Determine if a string is a service ID
+# @usage is-service-id <string>
+function is-service-id() {
+    local string="${1:--}"
+    [[ "${string}" == "-" ]] && string=$(cat)
+    [[
+        "${string}" =~ ^[A-Z0-9]{8}$
+        || "${string}" =~ ^${SERVICE_PREFIX}_[A-Z0-9]+_[A-Z0-9]{8}$
+    ]]
+}
+
+# @description Determine if a string contains a service ID
+# @usage contains-service-id <string>
+function contains-service-id() {
+    local string="${1:--}"
+    [[ "${string}" == "-" ]] && string=$(cat)
+    [[ "${string}" =~ [A-Z0-9]{8} ]]
+}
+
+# @description Parse a service ID out of a filepath or filename
+# @usage parse-service-id <string>
+function parse-service-id() {
+    local string="${1:--}"
+
+    [[ "${string}" == "-" ]] && string=$(cat)
+
+    # Get just the filename if this is a filepath
+    local string=$(basename "${string}")
+
+    # Remove ${SERVICE_PREFIX} if it's there
+    if [[ -n "${SERVICE_PREFIX}" ]]; then
+        string="${string/${SERVICE_PREFIX}_/}"
+    fi
+
+    # Grab just the ID, which should match the regex '[A-Z0-9]{8}'
+    local service_id=$(echo "${string}" | grep -oE '[A-Z0-9]{8}')
+
+    # Check that the ID is valid
+    if ! is-service-id "${service_id}"; then
+        echo "error: no service ID found: ${string}" >&2
+        return 1
+    fi
+
+    echo "${service_id}"
+}
+
+# @description Find the filepath of a service ID
+# @usage find-service-files <service-id>
+function find-service-files() {
+    local service_id="${1:--}"
+
+    [[ "${service_id}" == "-" ]] && service_id=$(cat)
+
+    # Find the file
+    readarray -t service_files < <(
+        find "${NXA_DIR}" -name "*${service_id}*.xml"
+    )
+
+    # Check that we found results
+    if [[ ${#service_files[@]} -eq 0 ]]; then
+        echo "error: no service files found for ID: ${service_id}" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${service_files[@]}"
+}
+
+# @description Convert a service ID to a service name
+# @usage service-id-to-name <service-id>
+function service-id-to-name() {
+    local input_str="${1:--}"
+    local format="${2:-${OUTPUT_FORMAT}}"
+
+    [[ "${input_str}" == "-" ]] && input_str=$(cat)
+    local service_id="${input_str}"
+
+    # Ensure the service ID is valid
+    if ! is-service-id "${service_id}"; then
+        debug "parsing service ID from string: ${service_id}"
+        # Try to parse the service ID out of the string
+        service_id=$(parse-service-id "${service_id}")
+        [[ $? -ne 0 ]] && return 1
+    fi
+    debug "service_id: ${service_id}"
+
+    # Find the ctc file
+    local service_file
+    service_file=$(find-service-files "${service_id}" | grep "ctc")
+    [[ $? -ne 0 ]] && return 1
+    debug "service_file: ${service_file}"
+
+    # Get the service name
+    local service_name=$(
+        grep -oE 'contractName="[^"]+' "${service_file}" | cut -d'"' -f2
+    )
+    debug "service_name: ${service_name}"
+
+    # Combine the package and stuff
+    # e.g. for the service file:
+    #   nxa/SREData/MetaDataMgr/FileMgr/accounts/OPG_Helix/packages/WarehouseDistribution/Domain/RedirectFileMgr_1835_7L34EBVZ_ctc.xml
+    # the service name is:
+    #  OPG_Helix.WarehouseDistribution.Domain.${service_name}
+    local service_name_full
+    local filepath=$(echo "${service_file}" | grep -oE 'SREData/.*')
+    # Get everything past the 3rd directory after 'SREData'
+    local local_path=$(echo "${filepath}" | cut -d'/' -f5-)
+    # Remove the second 'packages' directory
+    local_path=$(echo "${local_path}" | sed 's/packages\///')
+    # Remove the file name
+    local local_dir=$(dirname "${local_path}")
+
+    # Get the project and package names
+    local project=$(echo "${local_dir}" | cut -d'/' -f1)
+    local package=$(echo "${local_dir}" | cut -d'/' -f2)
+    debug "filepath: ${filepath}"
+    debug "local_path: ${local_path}"
+    debug "local_dir: ${local_dir}"
+    debug "project: ${project}"
+    debug "package: ${package}"
+
+    if ! [[ -n "${project}" && -n "${package}" && -n "${service_name}" ]]; then
+        echo "error: could not parse service name: ${service_id} -- ${service_file}" >&2
+        return 1
+    fi
+
+    # Replace '/' with '.'
+    service_name_full="${local_dir//\//.}.${service_name}"
+
+    # Format the output
+    awk -v name="${service_name}" -v fullname="${service_name_full}" \
+        -v id="${service_id}" -v path="${service_file}" -v input="${input_str}" \
+        -v project="${project}" -v format="${format}" '{
+        gsub(/{name}/, name);
+        gsub(/{fullname}/, fullname);
+        gsub(/{id}/, id);
+        gsub(/{path}/, path);
+        gsub(/{input}/, input);
+        gsub(/{project}/, project);
+        gsub(/\\n/, "\n");
+        gsub(/\\t/, "\t");
+        gsub(/\\r/, "\r");
+        gsub(/\\0/, "\0");
+        gsub(/\\/, "");
+        print $0;
+    }' <<< "${format}"
+}
+
+# @description Convert a service name to a filepath
+# @usage service-name-to-filepath <service-name>
+function service-name-to-filepath() {
+    local input_str="${1:--}"
+    local format="${2:-${OUTPUT_FORMAT}}"
+
+    [[ "${input_str}" == "-" ]] && input_str=$(cat)
+    local service_name_full="${input_str}"
+
+    # Extract the project and package
+    local project=$(echo "${service_name_full}" | cut -d'.' -f1)
+    local package=$(echo "${service_name_full}" | cut -d'.' -f2)
+    local service_name=$(echo "${service_name_full}" | sed 's/.*\.//')
+
+    debug "project: ${project}"
+    debug "package: ${package}"
+    debug "service_name: ${service_name}"
+
+    # Locate the full project path in the NXA directory
+    local project_dir=$(find "${NXA_DIR}" -maxdepth 5 -name "${project}" -type d -print -quit)
+    debug "project_dir: ${project_dir}"
+
+    # Convert the service name to a path with "packages/" inserted after the project name and removing the service name
+    local local_dir=$(
+        echo "${service_name_full}" \
+            | tr '.' '/' \
+            | sed 's|/|/packages/|' \
+            | sed 's|/[^/]*$||'
+    )
+
+    # Put it together for the service directory
+    local service_dir="${project_dir}/${local_dir#*/}"
+    debug "service_dir: ${service_dir}"
+
+    # Grep for the service name
+    if ! [[ -d "${service_dir}" ]]; then
+        echo "error: could not find service directory: ${service_dir}" >&2
+        return 1
+    fi
+    local filepath=$(grep --color=never -loRE "contractName=\"${service_name}\"" "${service_dir}")
+    if [[ -z "${filepath}" ]]; then
+        debug "filepath empty for service: ${service_name_full}, returning 1"
+        echo "error: could not find service name: ${service_name_full}" >&2
+        return 1
+    fi
+
+    # Get the service ID
+    local service_id=$(parse-service-id "${filepath}")
+
+    # Format the output
+    awk -v name="${service_name}" -v fullname="${service_name_full}" \
+        -v id="${service_id}" -v path="${filepath}" -v input="${input_str}" \
+        -v project="${project}" -v format="${format}" '{
+        gsub(/{name}/, name);
+        gsub(/{fullname}/, fullname);
+        gsub(/{id}/, id);
+        gsub(/{path}/, path);
+        gsub(/{input}/, input);
+        gsub(/{project}/, project);
+        gsub(/\\n/, "\n");
+        gsub(/\\t/, "\t");
+        gsub(/\\r/, "\r");
+        gsub(/\\0/, "\0");
+        gsub(/\\/, "");
+        print $0;
+    }' <<< "${format}"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    local error_file
+    if ${DO_ERRORS}; then
+        error_file=/dev/stdout
+    else
+        error_file=/dev/null
+    fi
+
+    local output
+    local err_code
+    for service in "${SERVICES[@]}"; do
+        if contains-service-id "${service}"; then
+            debug "service-id-to-name '${service}'"
+            output=$(service-id-to-name "${service}" 2>"${error_file}")
+            err_code=${?}
+        else
+            debug "service-name-to-filepath '${service}'"
+            output=$(service-name-to-filepath "${service}" 2>"${error_file}")
+            err_code=${?}
+        fi
+        debug "${service} -- ${output} -- ${err_code}"
+        if [[ ${err_code} -eq 0 ]]; then
+            echo "${output}"
+        else
+            if ${DO_ERRORS}; then
+                echo "${output}" >&2
+            elif ${DO_BLANK_LINES}; then
+                echo
+            fi
+        fi
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

@@ -377,10 +377,6 @@ function parse-args() {
         exit 1
     fi
 
-    # Add the --since / --until options to the git log command
-    if [[ -n "${SINCE}" ]]; then
-        GIT_LOG_OPTS+=("--since=${SINCE}")
-    fi
     if [[ -n "${UNTIL}" ]]; then
         GIT_LOG_OPTS+=("--until=${UNTIL}")
     fi
@@ -847,6 +843,7 @@ function main() {
                     debug "updated SINCE to ${SINCE} -- ${since_filter}"
                 else
                     since_filter=""
+                    SINCE=""
                 fi
             fi
             if [[ "${SINCE}" != "" ]]; then
@@ -861,9 +858,13 @@ function main() {
                     }'
             )
             debug "grep_msg: ${grep_msg}"
+            git_log_opts=("${GIT_LOG_OPTS[@]}")
+            if [[ "${SINCE}" != "" ]]; then
+                git_log_opts+=("--since=${SINCE}")
+            fi
             readarray -t files < <(
                 git -C "${SOURCE_REPO}" log \
-                    "${GIT_LOG_OPTS[@]}" \
+                    "${git_log_opts[@]}" \
                     --pretty=format: \
                     --name-only \
                     --no-renames \

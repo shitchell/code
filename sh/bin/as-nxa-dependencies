@@ -1,0 +1,292 @@
+#!/bin/bash
+#
+# Build a map of NxA service dependencies
+#
+# DEPENDS: as-nxa-ids
+#
+# TODO: add support for reading a list of services from a directory
+
+## imports #####################################################################
+
+include-source 'echo.sh'
+include-source 'debug.sh'
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo "build a map of NxA service dependencies"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Takes a list of NxA services and prints a map of their dependencies."
+    echo "If any of the arguments is a single '-' then the list of services is"
+    echo "read from stdin. If any of the arguments is a directory then the list"
+    echo "of services is read from the files in that directory."
+    echo "Output can be formatted as a graphviz graph or as a list."
+    echo
+    echo "Options:"
+    echo
+    cat << EOF
+    -h                             display usage
+    --help                         display this help message
+    -d/--nxa-dir <dir>             the NxA directory root, defaults to './nxa'
+    -f/--format <format>           the output format, defaults to 'graph'
+EOF
+    echo
+    echo "The format string can be one of:"
+    echo
+    cat << EOF
+    graph                          a graphviz graph
+    list                           a list of dependencies
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [-d <dir>] [-f <format>] <service> [<service> ...]"
+}
+
+function parse-args() {
+    # Default values
+    NXA_DIR=''
+    OUTPUT_FORMAT='graph' # graph, list
+
+    # Loop over the arguments
+    declare -ga SERVICES
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -d | --nxa-dir)
+                NXA_DIR="${2}"
+                shift 2
+                ;;
+            -f | --format)
+                OUTPUT_FORMAT="${2}"
+                shift 2
+                ;;
+            -)
+                # Read from stdin
+                while read -r line; do
+                    SERVICES+=("${line}")
+                done
+                shift 1
+                ;;
+            -*)
+                echo "unknown option: ${1}" >&2
+                help-usage >&2
+                exit 1
+                ;;
+            *)
+                SERVICES+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # Validate the format
+    case ${OUTPUT_FORMAT} in
+        graph|list)
+            ;;
+        *)
+            echo "Unknown format: ${FORMAT}" >&2
+            help-usage >&2
+            exit 1
+            ;;
+    esac
+
+    # Validate the NXA directory
+    if [[ -z "${NXA_DIR}" ]]; then
+        NXA_DIR=$([[ -d "nxa" ]] && echo "nxa" || echo ".")
+    elif [[ ! -d "${NXA_DIR}" ]]; then
+        echo "invalid NxA directory: ${NXA_DIR}" >&2
+        help-usage >&2
+        exit 1
+    fi
+
+    # Check that there are services
+    if [[ ${#SERVICES[@]} -eq 0 ]]; then
+        help-usage
+        help-epilogue
+        exit 1
+    fi
+
+    debug "NXA_DIR: ${NXA_DIR}"
+    debug "OUTPUT_FORMAT: ${OUTPUT_FORMAT}"
+    debug "SERVICES: ${SERVICES[*]}"
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Recursively find the dependencies of an nxa file
+# @usage list-dependencies <filepath>
+function parse-dependencies() {
+    local filepath="${1}"
+
+    # Check that the file exists
+    if [[ ! -f "${filepath}" ]]; then
+        echo "invalid file: ${filepath}" >&2
+        return 1
+    fi
+
+    # Loop over all XML tags in the file
+    while read -r line; do
+        local tag=$(echo "${line}" | grep -oP '<\K[a-zA-Z0-9_-]+')
+        local key
+        case "${tag}" in
+            Header | ContractTestCases)
+                key='contractId'
+                ;;
+            CompIONode | HSContractNode | HSDataContainerType)
+                key='id'
+                ;;
+            IncomingNode)
+                key='incomingKey'
+                ;;
+            HSDefnNode)
+                key='key'
+                ;;
+            NXAShared*)
+                key='rdcId'
+                ;;
+            *)
+                debug "skipping tag: ${tag}"
+                continue
+                ;;
+        esac
+        debug "tag: ${tag}, key: ${key}"
+
+        # Get the value of the key
+        local value=$(
+            echo "${line}" \
+                | grep -oP "${key}=\"\K[^\"]+" \
+                | sed -E 's/\.[0-9]+$//'
+        )
+
+        if [[ -z "${value}" ]]; then
+            debug "no value found, skipping: ${line}"
+            continue
+        fi
+
+        # Print the id
+        echo "${value}"
+    done < <(grep -o '<[^>/]*>' "${filepath}") | sort -u
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    # Create associative arrays to track whether a service has been processed
+    declare -A processed_services
+    declare -A unprocessed_services
+
+    # Get the filename for each service
+    debug "getting filenames for initial set of services"
+    readarray -t initial_services < <(
+        as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{path}' "${SERVICES[@]}"
+    )
+    debug "initial_services: ${initial_services[*]}"
+
+    # Add each service to the unprocessed list
+    for service in "${initial_services[@]}"; do
+        local service_name=$(echo "${service}" | cut -f1)
+        local service_path=$(echo "${service}" | cut -f2)
+        local service_id=$(basename "${service_path}" | sed -E 's/_(ctc|dfn).*//')
+        debug "adding service: ${service_name} -- ${service_id}"
+        unprocessed_services["${service_id}"]="${service_name}::${service_path}"
+    done
+
+    # Print the header
+    case ${OUTPUT_FORMAT} in
+        graph)
+            echo 'digraph {'
+            echo '    rankdir=LR'
+            echo '    node [shape=box]'
+            echo '    edge [arrowhead=normal, arrowtail=none]'
+            ;;
+        list)
+            ;;
+    esac
+    # Loop until all services have been processed
+    until [[ ${#unprocessed_services[@]} -eq 0 ]]; do
+        local new_dependencies=()
+
+        # Loop over the services
+        for service_id in "${unprocessed_services[@]}"; do
+            debug "processing service: ${service_id}"
+
+            local service_info="${unprocessed_services["${service_id}"]}"
+            local service_name=$(echo "${service_info}" | awk -F '::' '{print $1}')
+            local service_path=$(echo "${service_info}" | awk -F '::' '{print $2}')
+
+            # Check if the service has already been processed
+            if [[ -n "${processed_services["${service_id}"]}" ]]; then
+                continue
+            fi
+
+            # Parse the service file for dependencies
+            readarray -t dependencies < <(parse-dependencies "${service_path}")
+
+            # Print the dependencies
+            if [[ "${OUTPUT_FORMAT}" == 'graph' ]]; then
+                printf "   ${service_name} -> %s\n" "${dependencies[@]}"
+            elif [[ "${OUTPUT_FORMAT}" == 'list' ]]; then
+                printf "${service_name}\t%s\n" "${dependencies[*]}"
+            fi
+
+            # Add the dependencies to the list of new dependencies
+            new_dependencies+=("${dependencies[@]}")
+
+            # Mark the service as processed
+            processed_services["${service_id}"]="${service_name}::${service_path}"
+            unset unprocessed_services["${service_id}"]
+        done
+
+        # Add the new dependencies to the list of unprocessed services
+        readarray -t dependency_info < <(
+            as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{path}' "${new_dependencies[@]}"
+        )
+        for dependency in "${dependency_info[@]}"; do
+            local dependency_name=$(echo "${dependency}" | cut -f1)
+            local dependency_path=$(echo "${dependency}" | cut -f2)
+            local dependency_id=$(basename "${dependency_path}" | sed -E 's/_(ctc|dfn).*//')
+
+            if [[ 
+                -z "${processed_services["${dependency_id}"]}" && 
+                -z "${unprocessed_services["${dependency_id}"]}" 
+            ]]; then
+                debug "adding dependency: ${dependency_id}"
+                unprocessed_services["${dependency_id}"]="${dependency_name}::${dependency_path}"
+            fi
+        done
+    done
+
+    # Print the footer
+    case ${OUTPUT_FORMAT} in
+        graph)
+            echo '}'
+            ;;
+    esac
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
