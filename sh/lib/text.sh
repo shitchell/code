@@ -67,7 +67,9 @@ function join() {
     shift
     printf "%s" "${1}"
     shift
-    printf "%s" "${@/#/${delimiter}}"
+    for string in "${@}"; do
+        printf "%s%s" "${delimiter}" "${string}"
+    done
 }
 
 function urlencode() {

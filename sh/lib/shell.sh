@@ -68,7 +68,7 @@ function is-in() {
 
 # Get the index of an item in an array.
 # usage: index-of <item> "${array[@]}"
-# returns the index of the item in the array, or -1 if not found
+# echoes the index of the item in the array. returns 0 if found, 1 otherwise
 function index-of() {
     local item=${1}
     shift
@@ -76,17 +76,17 @@ function index-of() {
 
     local e
     local index=0
-    local ret_value=-1
+    local found=false
     for e in "${!array[@]}"; do
-        if [ "${array[$e]}" = "${item}" ]; then
-            ret_value=${index}
+        if [[ "${array[$e]}" == "${item}" ]]; then
+            found=true
             break
         fi
         index=$((index + 1))
     done
 
-    echo ${ret_value}
-    return ${ret_value}
+    echo ${index}
+    ${found} && return 0 || return 1
 }
 
 # runs a command and stores stderr and stdout in specified variables
