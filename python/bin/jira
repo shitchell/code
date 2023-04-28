@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 import argparse
+import json
 import keyring
+import re
 import textwrap
 
 from getpass import getpass
@@ -46,7 +48,7 @@ def login() -> JIRA:
 
 
 def tsv_escape(value: str) -> str:
-    return value.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    return str(value).replace("\t", " ").replace("\r", " ").replace("\n", " ")
 
 
 # def normalize_value(value):
@@ -95,6 +97,10 @@ def normalize_issue_value(value: object, opts: dict = {}):
     ):
         if "/resolution/" in value["self"]:
             return value["name"]
+        elif "inwardIssue" in value:
+            return f"{value['type']['inward']}: {value['inwardIssue']['key']}: {value['inwardIssue']['fields']['summary']}"
+        elif "outwardIssue" in value:
+            return f"{value['type']['outward']}: {value['outwardIssue']['key']}: {value['outwardIssue']['fields']['summary']}"
         elif "accountId" in value:
             display_name = value.get("displayName", "")
             email_address = value.get("emailAddress", "")
@@ -143,12 +149,22 @@ def normalize_issue_value(value: object, opts: dict = {}):
             subvalue_normalized = normalize_issue_value(subvalue)
             valuelist.append(subvalue_normalized)
         # print(f"valuelist: '''{valuelist}'''")
-        value = pformat(valuelist)
+        # value = pformat(valuelist)
+        if len(valuelist) == 1:
+            indent = None
+        else:
+            indent = opts.get("indent", 2)
+        value = json.dumps(valuelist, indent=indent)
     elif isinstance(value, dict):
         valuedict = {}
         for k, v in value.items():
             valuedict[k] = normalize_issue_value(v)
-        value = pformat(valuedict)
+        # value = pformat(valuedict)
+        if len(valuelist) == 1:
+            indent = None
+        else:
+            indent = opts.get("indent", 2)
+        value = json.dumps(valuedict, indent=indent)
     elif isinstance(value, resources.Watchers):
         value = value.watchCount
     elif isinstance(value, resources.TimeTracking):
@@ -277,14 +293,13 @@ def main() -> None:
     # Generate a search query for all the issues to reduce the number of API calls
     search_query: str = ""
     if args.issues:
-        search_query = (
-            "(" + " OR ".join([f'key="{issue_key}"' for issue_key in args.issues]) + ")"
-        )
+        search_query = f"(key in ({','.join(args.issues)}))"
     if args.jql and search_query:
         search_query += f" {args.jql_combine} "
     if args.jql:
-        search_query += f"({args.jql})"
-    search_query += f" ORDER BY {args.sort}"
+        search_query += args.jql
+    if "order by" not in search_query.lower():
+        search_query += f" ORDER BY {args.sort}"
 
     # Print the header if we're in TSV mode
     if args.tsv:
@@ -329,7 +344,10 @@ def main() -> None:
             else:
                 field_value = normalize_issue_value(
                     issue.raw["fields"][field_id],
-                    opts={"commentLimit": args.comment_limit},
+                    opts={
+                        "commentLimit": args.comment_limit,
+                        "indent": None if args.tsv else 2,
+                    },
                 )
             # If the value is a date, format it just a little more nicely
             if isinstance(field_value, str) and re.search(
