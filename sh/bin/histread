@@ -3,6 +3,7 @@
 # Pretty print a bash history file
 
 include-source 'echo.sh'
+include-source 'debug.sh'
 
 ## usage functions #############################################################
 ################################################################################
@@ -87,6 +88,12 @@ function parse-args() {
                 ;;
         esac
     done
+
+    # If no history file is specified, add the default history file
+    if [ ${#HIST_FILES[@]} -eq 0 ]; then
+        debug "adding hist file: ${HISTFILE}"
+        HIST_FILES=("${HISTFILE}")
+    fi
 }
 
 
@@ -138,13 +145,9 @@ function echo-command() {
 ################################################################################
 
 function main() {
+    echo foo
     # Parse the arguments
     parse-args "${@}"
-
-    # If no history file is specified, add the default history file
-    if [ ${#HIST_FILES[@]} -eq 0 ]; then
-        HIST_FILES=("${HISTFILE}")
-    fi
 
     # Determine if we'll colorize the output
     if [ ${DO_COLOR} -eq 0 ]; then
@@ -155,9 +158,12 @@ function main() {
         fi
     fi
 
+    debug "looping over -- ${HIST_FILES[*]}"
     # Loop over the history files
     for histfile in "${HIST_FILES[@]}"; do
+        debug "loading '${histfile}'"
         local histdata=$(cat "${histfile}")
+        debug "${histfile}: $(echo "${histdata}" | wc -c) bytes"
 
         # If we're reversing the output, reverse the history data
         if [ ${DO_REVERSE} -eq 1 ]; then
@@ -290,6 +296,12 @@ function main() {
 
 # [ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
 
+if [[ ${#} -gt 0 ]]; then
+    FILES=("${@}")
+else
+    FILES=("${HISTFILE}")
+fi
+
 awk '
     function print_cmd(timestamp, lines) {
         timestamp = strftime("%Y-%m-%d %H:%M:%S", timestamp);
@@ -326,4 +338,4 @@ awk '
         if (timestamp != "" && length(command_lines) > 0) {
             print_cmd(timestamp, command_lines);
         }
-    }' "${@}"
+    }' "${FILES}"
