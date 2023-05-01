@@ -181,6 +181,12 @@ function parse-dependencies() {
             continue
         fi
 
+        # Make sure the value is a valid service
+        if ! [[ "${value}" =~ [0-9]+_[A-Z0-9]{8} ]]; then
+            debug "invalid value, skipping: ${value}"
+            continue
+        fi
+
         # Print the id
         echo "${value}"
     done < <(grep -o '<[^>/]*>' "${filepath}") | sort -u
@@ -191,88 +197,163 @@ function parse-dependencies() {
 
 function main() {
     parse-args "${@}"
+    local service service_path service_id processed_services unprocessed_services
 
     # Create associative arrays to track whether a service has been processed
     declare -A processed_services
     declare -A unprocessed_services
 
-    # Get the filename for each service
+    # Get the filename for each service, replacing any stderr output with
+    # 'ERROR' so that we can track which services failed to be found
     debug "getting filenames for initial set of services"
     readarray -t initial_services < <(
-        as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{path}' "${SERVICES[@]}"
+         {
+            as-nxa-ids -d "${NXA_DIR}" -f '{path}' "${SERVICES[@]}" 2>&1 1>&3 3>&- \
+                | sed 's/.*/ERROR/'
+        } 3>&1
     )
     debug "initial_services: ${initial_services[*]}"
 
     # Add each service to the unprocessed list
-    for service in "${initial_services[@]}"; do
-        local service_name=$(echo "${service}" | cut -f1)
-        local service_path=$(echo "${service}" | cut -f2)
-        local service_id=$(basename "${service_path}" | sed -E 's/_(ctc|dfn).*//')
-        debug "adding service: ${service_name} -- ${service_id}"
-        unprocessed_services["${service_id}"]="${service_name}::${service_path}"
+    for ((i=0; i<${#initial_services[@]}; i++)); do
+        service="${initial_services[${i}]}"
+        # Check that the service was found
+        if [[ "${service}" == 'ERROR' ]]; then
+            echo -n "service not processed: ${SERVICES[${i}]}" >&2
+            # Look to see if we can find the service in the NXA directory
+            service=$(basename "${SERVICES[${i}]}" | sed 's/.*\.xml//')
+            service=$(
+                find "${NXA_DIR}" -type f -name "*${service}*.xml" | xargs
+            )
+            if [[ -n "${service}" ]]; then
+                echo " (found in ${service})" >&2
+            else
+                echo >&2
+                continue
+            fi
+        fi
+        service_id=$(basename "${service}" | sed -E 's/_?(ctc|dfn|rdc.*)?\.xml//')
+        debug "adding service: ${service} -- ${service_id}"
+        unprocessed_services["${service_id}"]="${service_id}"
     done
+    debug "setup unprocessed_services: ${unprocessed_services[*]}"
 
     # Print the header
     case ${OUTPUT_FORMAT} in
         graph)
             echo 'digraph {'
-            echo '    rankdir=LR'
-            echo '    node [shape=box]'
+            echo '    node [shape=box, penwidth=2, fontname="system-ui, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif"]'
             echo '    edge [arrowhead=normal, arrowtail=none]'
+            echo
             ;;
         list)
             ;;
     esac
+
     # Loop until all services have been processed
     until [[ ${#unprocessed_services[@]} -eq 0 ]]; do
+        debug "processing batch: ${unprocessed_services[*]}"
+        local current_batch=("${!unprocessed_services[@]}")
         local new_dependencies=()
 
-        # Loop over the services
-        for service_id in "${unprocessed_services[@]}"; do
-            debug "processing service: ${service_id}"
+        # Fetch the info for the current batch of unprocessed services
+        readarray -t services_info < <(
+            {
+                as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{path}' "${unprocessed_services[@]}" 2>&1 1>&3 3>&- \
+                    | sed 's/.*/ERROR/'
+            } 3>&1
+        )
+        debug "got batch info: ${services_info[*]}"
 
-            local service_info="${unprocessed_services["${service_id}"]}"
-            local service_name=$(echo "${service_info}" | awk -F '::' '{print $1}')
-            local service_path=$(echo "${service_info}" | awk -F '::' '{print $2}')
+        # Loop over the services
+        for ((i=0; i<${#services_info[@]}; i++)); do
+            service_info="${services_info[${i}]}"
+            # Check if there was an error
+            if [[ "${service_info}" == 'ERROR' ]]; then
+                service="${current_batch[${i}]}"
+                echo "service not processed: ${service}" >&2
+                continue
+            fi
+            local service_name=$(echo "${service_info}" | cut -f 1)
+            local service_path=$(echo "${service_info}" | cut -f 2)
+            local service_id=$(basename "${service_path}" | sed -E 's/_?(ctc|dfn|rdc.*)?\.xml//')
+            debug "processing service: ${service_name} -- ${service_id} -- ${service_path}"
+
+            if [[ "${OUTPUT_FORMAT}" == "graph" ]]; then
+                printf "    node_%s [label=\"%s\", tooltip=\"%s\"]\n" "${service_id}" "${service_name/./\\n}" "${service_path}"
+            fi
 
             # Check if the service has already been processed
             if [[ -n "${processed_services["${service_id}"]}" ]]; then
+                debug "skipping already processed service: ${service_id}"
                 continue
             fi
 
-            # Parse the service file for dependencies
-            readarray -t dependencies < <(parse-dependencies "${service_path}")
-
-            # Print the dependencies
-            if [[ "${OUTPUT_FORMAT}" == 'graph' ]]; then
-                printf "   ${service_name} -> %s\n" "${dependencies[@]}"
-            elif [[ "${OUTPUT_FORMAT}" == 'list' ]]; then
-                printf "${service_name}\t%s\n" "${dependencies[*]}"
+            # Parse the service files for dependencies
+            service_dfn="${service_path//_ctc.xml/_dfn.xml}"
+            if [[ -f "${service_dfn}" ]]; then
+                debug "service_dfn exists, parsing for dependencies: ${service_dfn}"
+                readarray -t dfn_dependencies < <(parse-dependencies "${service_dfn}")
+            else
+                debug "service_dfn does not exist, skipping dependency check: ${service_dfn}"
+                dfn_dependencies=()
+            fi
+            debug "dfn_dependencies: ${dfn_dependencies[*]}"
+            if [[ -f "${service_path}" ]]; then
+                debug "service_path exists, parsing for dependencies: ${service_path}"
+                readarray -t svc_dependencies < <(parse-dependencies "${service_path}")
+            else
+                debug "service_path does not exist, skipping dependency check: ${service_path}"
+                svc_dependencies=()
+            fi
+            debug "svc_dependencies: ${svc_dependencies[*]}"
+            # Combine the dependencies
+            readarray -t dependencies < <(
+                printf "%s\n" "${dfn_dependencies[@]}" "${svc_dependencies[@]}" \
+                    | sort -u \
+                    | grep -vF "${service_id}" \
+                    | grep -v '^$'
+            )
+            debug "dependencies: ${dependencies[*]}"
+            if [[ ${#dependencies[@]} -gt 0 ]]; then
+                if [[ "${OUTPUT_FORMAT}" == 'graph' ]]; then
+                    printf "    node_${service_id} -> node_%s\n" "${dependencies[@]}"
+                elif [[ "${OUTPUT_FORMAT}" == 'list' ]]; then
+                    printf "${service_id}\t%s\n" "${dependencies[*]}"
+                fi
+                new_dependencies+=("${dependencies[@]}")
+            else
+                if [[ "${OUTPUT_FORMAT}" == 'graph' ]]; then
+                    # echo "    node_${service_id}"
+                    # Turns out this is redundant; the line above which defines
+                    # settings for the node is sufficient to create the node
+                elif [[ "${OUTPUT_FORMAT}" == 'list' ]]; then
+                    echo "${service_id}"
+                fi
             fi
 
-            # Add the dependencies to the list of new dependencies
-            new_dependencies+=("${dependencies[@]}")
-
             # Mark the service as processed
-            processed_services["${service_id}"]="${service_name}::${service_path}"
+            debug "marking service as processed: ${service_id}"
+            processed_services["${service_id}"]="${service_path}"
             unset unprocessed_services["${service_id}"]
         done
 
-        # Add the new dependencies to the list of unprocessed services
-        readarray -t dependency_info < <(
-            as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{path}' "${new_dependencies[@]}"
-        )
-        for dependency in "${dependency_info[@]}"; do
-            local dependency_name=$(echo "${dependency}" | cut -f1)
-            local dependency_path=$(echo "${dependency}" | cut -f2)
-            local dependency_id=$(basename "${dependency_path}" | sed -E 's/_(ctc|dfn).*//')
+        # Check that the unprocessed_services array is empty
+        if ! [[ ${#unprocessed_services[@]} -eq 0 ]]; then
+            echo "error: could not process services: ${!unprocessed_services[@]}" >&2
+            # Clear the unprocessed_services array and continue
+            unset unprocessed_services
+            declare -A unprocessed_services
+        fi
 
+        # Add the new dependencies to the list of unprocessed services
+        for dependency in "${new_dependencies[@]}"; do
             if [[ 
-                -z "${processed_services["${dependency_id}"]}" && 
-                -z "${unprocessed_services["${dependency_id}"]}" 
+                -z "${processed_services["${dependency}"]}" && 
+                -z "${unprocessed_services["${dependency}"]}" 
             ]]; then
-                debug "adding dependency: ${dependency_id}"
-                unprocessed_services["${dependency_id}"]="${dependency_name}::${dependency_path}"
+                debug "adding dependency: ${dependency}"
+                unprocessed_services["${dependency}"]="${dependency}"
             fi
         done
     done

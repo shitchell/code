@@ -31,7 +31,7 @@ function help-full() {
     -d/--nxa-dir <dir>             the NxA directory, defaults to '.'
     -p/--service-prefix <prefix>   the service prefix, defaults to 'RedirectFileMgr'
     -f/--format <format>           the output format, defaults to '{fullname} {path}'
-    -e/-E/--(no-)-errors           whether to print errors for missing services
+    -e/-E/--(no-)print-errors           whether to print errors for missing services
     -b/-B/--(no-)blank-lines       whether to print blank lines for missing services
 EOF
     echo
@@ -86,11 +86,11 @@ function parse-args() {
                 OUTPUT_FORMAT="${2}"
                 shift 2
                 ;;
-            -e | --errors)
+            -e | --print-errors)
                 DO_ERRORS=true
                 shift 1
                 ;;
-            -E | --no-errors)
+            -E | --no-print-errors)
                 DO_ERRORS=false
                 shift 1
                 ;;
@@ -251,15 +251,47 @@ function service-id-to-name() {
 
     # Find the ctc file
     local service_file
-    service_file=$(find-service-files "${service_id}" | grep "ctc")
-    [[ $? -ne 0 ]] && return 1
-    debug "service_file: ${service_file}"
+    readarray -t service_files < <(
+        find-service-files "${service_id}" \
+            | grep -vE 'dfn\.xml$'
+    )
+    debug "service files: ${service_files[*]}"
+    if [[ ${#service_files[@]} -eq 0 ]]; then
+        echo "error: no service files found for ID: ${service_id}" >&2
+        return 1
+    fi
+
+    # If more than 1 file appears, that's... not supposed to happen... so we'll
+    # log it, but continue with the first non-dfn file
+    service_file="${service_files[0]}"
+    debug "service file: ${service_file}"
 
     # Get the service name
-    local service_name=$(
-        grep -oE 'contractName="[^"]+' "${service_file}" | cut -d'"' -f2
-    )
+    local service_name
+    if [[ "${service_file}" =~ "/rdcs/" ]]; then
+        # We need to remove all newlines and get the the name key from the
+        # HSDataContainerType element
+        service_name=$(
+            cat "${service_file}" \
+                | tr -d '\n' \
+                | grep -oE '<HSDataContainerType [^>]+>' \
+                | grep -oE 'name="[^"]+' \
+                | cut -d'"' -f2
+        )
+    elif [[ "${service_file}" =~ "_ctc.xml"$ ]]; then
+        # We need the contractName attribute from the HSContract element
+        service_name=$(
+            cat "${service_file}" \
+                | grep -oE '<HSContract [^>]+>' \
+                | grep -oE 'contractName="[^"]+' \
+                | cut -d'"' -f2
+        )
+    fi
     debug "service_name: ${service_name}"
+    if [[ -z "${service_name}" ]]; then
+        echo "error: no service name found for ID: ${service_id}" >&2
+        return 1
+    fi
 
     # Combine the package and stuff
     # e.g. for the service file:

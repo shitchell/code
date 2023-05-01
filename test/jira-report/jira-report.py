@@ -76,12 +76,16 @@ def parse_value(value: str) -> str | int | float | bool:
     return value
 
 
-def normalize_issue_value(value: object):
+def normalize_issue_value(value: object, opts: dict = {}):
     """
     Normalize a JIRA issue field's value to a string.
     """
     valuestr = str(value)
-    if isinstance(value, Iterable) and "self" in value:
+    if (
+        isinstance(value, Iterable)
+        and not isinstance(value, (str, bytes))
+        and "self" in value
+    ):
         if "/resolution/" in value["self"]:
             return value["name"]
         elif "accountId" in value:
@@ -97,10 +101,38 @@ def normalize_issue_value(value: object):
             value = value["name"]
         elif "value" in value:
             value = value["value"]
+        elif "comments" in value:
+            commentlist = []
+            i = 0
+            if "commentLimit" in opts:
+                limit = opts["commentLimit"]
+            else:
+                limit = None
+            for c in value["comments"]:
+                i += 1
+                if limit and i > limit:
+                    break
+                author = c["author"]
+                # a_name = author.get("displayName", "")
+                # a_email = author.get("emailAddress", "")
+                # if a_name and a_email:
+                #     author = f"{a_name} <{a_email}>"
+                # else:
+                #     author = a_name or a_email
+                author = author.get(
+                    "displayName", author.get("emailAddress", "<unknown>")
+                )
+                comment = f"{author} on {c['created']}: {c['body']}"
+                # print(f"""comment: '''{comment}'''""")
+                commentlist.append(comment)
+            # print("commentlist:", commentlist)
+            value = "\n---\n".join(commentlist)
     elif isinstance(value, list):
         valuelist = []
         for subvalue in value:
-            valuelist.append(normalize_issue_value(subvalue))
+            subvalue_normalized = normalize_issue_value(subvalue)
+            valuelist.append(subvalue_normalized)
+        print(f"valuelist: '''{valuelist}'''")
         value = pformat(valuelist)
     elif isinstance(value, dict):
         valuedict = {}
@@ -168,6 +200,17 @@ if __name__ == "__main__":
         "--capitalize-fields",
         action="store_true",
         help="Capitalize the field names in the report (title case)",
+    )
+    parser.add_argument(
+        "--comment-limit",
+        type=int,
+        default=0,
+        help="The maximum number of comments to include in the report",
+    )
+    parser.add_argument(
+        "--include-test-issues",
+        action="store_true",
+        help="Include issues with the 'test' label or '[test]' in the summary",
     )
     parser.add_argument(
         "-e",
@@ -299,6 +342,13 @@ if __name__ == "__main__":
     i = 0  # TODO: remove
     print(f"processing filter {args.filter} ... ", flush=True, end="")
     for issue in jira.search_all_issues(f""" filter = {args.filter} """):
+        # Determine if this is a test issue and whether we should skip it
+        if not args.include_test_issues:
+            if "test" in issue.fields.labels or issue.fields.summary.startswith(
+                "[test]"
+            ):
+                continue
+
         # Get each field from the issue and add it to the dataframe
         issue_fields: dict[str, str] = {}
         for field in args.fields:
@@ -313,22 +363,20 @@ if __name__ == "__main__":
             elif field == "key":
                 field_id = "key"
             else:
-                print(
-                    f"Field {field} not found in issue {issue.key}, skipping",
-                    flush=True,
-                )
-                continue
-            if args.capitalize_fields:
-                field_name = field.title()
-            elif field_id in custom_fields_by_id:
+                print(f"Field {field} not found in issue {issue.key}, skipping")
+                # continue
+            if field_id != "key":
                 field_name = custom_fields_by_id[field_id]
             else:
-                field_name = field
+                field_name = "Key"
             # Get the value of the field
             if field_id == "key":
                 field_value = issue.key
             else:
-                field_value = normalize_issue_value(issue.raw["fields"][field_id])
+                field_value = normalize_issue_value(
+                    issue.raw["fields"][field_id],
+                    opts={"commentLimit": args.comment_limit},
+                )
             # If the value is a date, format it just a little more nicely
             if isinstance(field_value, str) and re.match(
                 r"\d{4}-\d{2}-\d{2}", field_value
