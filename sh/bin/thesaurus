@@ -127,11 +127,33 @@ function parse-args() {
 function main() {
     parse-args "${@}"
 
+    local html json json_formatted
+
     # Get the synonyms
-    curl -s "https://www.thesaurus.com/browse/$(urlencode "${WORD}")" \
-        | grep -oP 'INITIAL_STATE =\K[^<]*' \
-        | sed 's/.$//;s/^.//;s/undefined/null/g' \
-        | python -m json.tool \
+    html=$(curl -s "https://www.thesaurus.com/browse/$(urlencode "${WORD}")")
+    if [[ -z "${html}" ]]; then
+        echo-stderr "empty response from thesaurus.com"
+        return 1
+    fi
+    debug "raw fetched HTML:"
+    debug "${html}"
+    json=$(
+        echo "${html}" \
+          | grep -oP 'INITIAL_STATE =\K[^<]*' \
+          | sed 's/.$//;s/^.//;s/undefined/null/g'
+    )
+    if [[ -z "${json}" ]]; then
+        echo-stderr "could not find JSON in response"
+        return 1
+    fi
+    debug "parsed json:"
+    debug "${json}"
+    json_formatted=$(echo "${json}" | python -m json.tool 2>/dev/null)
+    if [[ -z "${json_formatted}" ]]; then
+        echo-stderr "failed to parse JSON"
+        return 1
+    fi
+    echo "${json_formatted}" \
         | awk -v use_color="${USE_COLOR}" \
               -v num_colors=$(tput colors) \
               -v max_width="${MAX_WIDTH}" \
