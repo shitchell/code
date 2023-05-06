@@ -72,24 +72,102 @@ function join() {
     done
 }
 
+# @description Format a string to be URL encoded
+# @usage urlencode <string>
+# @caveats Does not handle special characters / UTF-8 well
 function urlencode() {
     local string="${1}"
-    local data
+    local strlen=${#string}
+    local encoded=""
+    local pos c o
 
-    if [[ $# != 1 ]]; then
-        echo "usage: urlencode <string>" >&2
+    for ((pos=0; pos<strlen; pos++)); do
+        c=${string:$pos:1}
+        case "$c" in
+            [-_.~a-zA-Z0-9])
+                o="${c}"
+                ;;
+            *)
+                printf -v o '%%%02x' "'$c"
+                ;;
+        esac
+
+        encoded+="${o}"
+    done
+    printf "%s\n" "${encoded}"
+    # You can either set a return variable (FASTER)   REPLY="${encoded}"
+    #+or echo the result (EASIER)... or both... :p}'"
+}
+
+# @description Format a string to be URL encoded
+# @usage urlencode <string>
+# @usage echo <string> | urlencode -
+function urlencode() {
+    local string="${1}"
+    local LANG=C
+    local IFS=
+
+    if [[ "${string}" == "-" ]]; then
+        string="$(cat && echo x)"
+        string="${string%x}"
+    fi
+
+    if [[ -z "${string}" ]]; then
         return 1
     fi
 
-    data="$(curl -s -o /dev/null -w %{url_effective} --get --data-urlencode "${string}" "")"
-    if [[ $? != 3 ]]; then
-        echo "Unexpected error" 1>&2
-        return 2
-    fi
-
-    echo "${data##/?}"
+    printf "%s" "${string}" | while read -n1 -r -d "$(echo -n "\000")" c; do
+        case "$c" in
+            [-_.~a-zA-Z0-9])
+                echo -n "$c"
+                ;;
+            *)
+                printf '%%%02x' "'$c"
+                ;;
+        esac
+    done
 }
 
+# function urlencode() {
+    # local string="${1}"
+    # local data
+#
+    # if [[ $# != 1 ]]; then
+        # echo "usage: urlencode <string>" >&2
+        # return 1
+    # fi
+#
+    # data="$(curl -s -o /dev/null -w %{url_effective} --get --data-urlencode "${string}" "")"
+    # if [[ $? != 3 ]]; then
+        # echo "Unexpected error" 1>&2
+        # return 2
+    # fi
+#
+    # echo "${data##/?}"
+# }
+
+# @description Parse a URL encoded string into plain text
+# @usage urldecode <string>
+# @usage echo <string> | urldecode -
+function urldecode() {
+    local string="${1}"
+    local LANG=C
+    local IFS=
+
+    if [[ "${string}" == "-" ]]; then
+        string="$(cat && echo x)"
+        string="${string%x}"
+    fi
+
+    if [[ -z "${string}" ]]; then
+        return 1
+    fi
+
+    # This is perhaps a risky gambit, but since all escape characters must be
+    # encoded, we can replace %NN with \xNN and pass the lot to printf -b, which
+    # will decode hex for us
+    printf '%b' "${string//%/\\x}"
+}
 
 ## awk/sed #####################################################################
 ################################################################################
@@ -129,7 +207,7 @@ function json-escape() {
 
     [[ -z "${text}" ]] && text=$(cat -)
     [[ -z "${text}" ]] && return
-    
+
     awk -v do_quotes="${do_quotes}" '
         BEGIN {
             for ( i = 1; i <= 127; i++ ) {
@@ -235,7 +313,7 @@ function json-map-from-keys() {
         local key="${key_value_pair%%=*}"
         local value="${key_value_pair#*=}"
         debug "key_value_pair: ${key} = ${value}"
-        
+
         # Detect type if requested
         if ${detect_types}; then
             local json_type="$(json-type "${value}")"
