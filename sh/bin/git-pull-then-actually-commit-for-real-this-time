@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Redo the most recent commit by resetting head and re-commiting
 
 RESET_COUNT="${1:-1}"

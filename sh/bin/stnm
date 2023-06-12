@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 URL='http://wwc.instacam.com/instacamimg/STNMN/STNMN_l.jpg'
 FILENAME=$(basename "$URL")

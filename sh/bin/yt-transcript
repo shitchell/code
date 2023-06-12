@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Download a youtube video transcript
 # curl -s 'https://www.youtube.com/youtubei/v1/get_transcript?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8' \
@@ -20,6 +20,7 @@
 
 include-source 'echo.sh'
 include-source 'debug.sh'
+include-source 'text.sh'
 
 
 ## usage functions #############################################################
@@ -40,29 +41,31 @@ function help-full() {
     echo "Uses youtubei to download a video transcript. The transcript is"
     echo "formatted as a list of lines, each line containing the time and text."
     echo "The format of each line can be specified using the --format option:"
-    echo "    {timeStart}     the time the line starts in HH:MM:SS format"
-    echo "    {timeEnd}       the time the line ends in HH:MM:SS format"
-    echo "    {timeDuration}  the duration of the line in HH:MM:SS format"
-    echo "    {text}          the text of the line"
-    echo "    {n}             a newline character"
-    echo "    {t}             a tab character"
-    echo "    {{}             a literal { character"
-    echo "    {}}             a literal } character"
+    echo "    {timeStart}      the time the line starts in HH:MM:SS format"
+    echo "    {timeEnd}        the time the line ends in HH:MM:SS format"
+    echo "    {timeDuration}   the duration of the line in HH:MM:SS format"
+    echo "    {text}           the text of the line"
+    echo "    {n}              a newline character"
+    echo "    {t}              a tab character"
+    echo "    {{}              a literal { character"
+    echo "    {}}              a literal } character"
     echo
     cat << EOF
-    -h                        display usage
-    --help                    display this help message
-    -f / --format <format>    display each line of the transcript in the
-                              specified format
-                              (default: '{timeStart} {text}')
-    -c / --color              colorize the output
-    --no-color                do not colorize the output
-    --color-time <ansi code>  colorize the time using the specified ansi code.
-                              if specified, implies --color (default: 1)
-    --color-text <ansi code>  colorize the text using the specified ansi code
-                              if specified, implies --color (default: 0)
-    -v                        verbose output
-    -o <output file>          write the transcript to the specified file
+    -h                         display usage
+    --help                     display this help message
+    -f / --format <format>     display each line of the transcript in the
+                               specified format
+                               (default: '{timeStart} {text}')
+    -c / --color               colorize the output
+    --no-color                 do not colorize the output
+    --color-time <ansi code>   colorize the time using the specified ansi code.
+                               if specified, implies --color (default: 1)
+    --color-text <ansi code>   colorize the text using the specified ansi code
+                               if specified, implies --color (default: 0)
+    -l/--lang <language code>  the language code of the transcript to download
+                               if available (defaults to the video default)
+    -v                         verbose output
+    -o <output file>           write the transcript to the specified file
 EOF
 }
 
@@ -74,6 +77,7 @@ function parse-args() {
     COLOR_TEXT=0
     FORMAT="{timeStart}  {text}"
     OUTPUT_FILE=""
+    LANG=""
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -103,6 +107,10 @@ function parse-args() {
             --color-text)
                 COLOR_TEXT="${2}"
                 DO_COLOR=1
+                shift 2
+                ;;
+            -l | --lang)
+                LANG="${2}"
                 shift 2
                 ;;
             -f | --format)
@@ -179,7 +187,40 @@ function parse-video-id() {
 function get-transcript() {
     local video_id="${1}"
     local output_file="${2}"
+    local lang="${3}"
     local transcript
+
+    # Format the language code
+    ## https://stackoverflow.com/a/70013529
+    ## 1. Get the language initials like "ru" for russian
+    ## 2. Encode \n\x00\x12\x02LANGUAGE_INITIALS\x1a\x00 in base64, e.g.:
+    ##    A=$(printf '\n\x00\x12\x02LANGUAGE_INITIALS\x1a\x00' | base64)
+    ##    => CgASAnJ1GgA=
+    ## 3. Encode the result as a URL by replacing the = to %3D, e.g.:
+    ##    B=$(printf %s $A | jq -sRr @uri)
+    ##    => CgASAnJ1GgA%3D
+    ## 4. Only if using shell commands: replace the single % to two %, e.g.:
+    ##    C=$(echo $B | sed 's/%/%%/')
+    ##    => CgASAnJ1GgA%%3D
+    ## 5. Encode \n\x0bVIDEO_ID\x12\x0e$C, e.g. for VIDEO_ID=lo0X2ZdElQ4:
+    ##    D=$(printf "\n\x0bVIDEO_ID\x12\x0e$C" | base64)
+    ##    => CgtsbzBYMlpkRWxRNBIOQ2dBU0FuSjFHZ0ElM0Q=
+    ## 6. Use this params value from the Captions in default language section:
+    ##    curl -s 'https://www.youtube.com/youtubei/v1/get_transcript?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8' -H 'Content-Type: application/--data-raw "{\"context\":{\"client\":{\"clientName\":\"WEB\",\"clientVersion\":\"2.2021111\"}},\"params\":\"$D\"}"
+    if [[ -n "${lang}" ]]; then
+        local A=$(printf '\n\x00\x12\x02%s\x1a\x00' "${lang}" | base64)
+        debug "lang_b64.A: ${A}"
+        local B=$(urlencode "${A}")
+        debug "lang_b64.B: ${B}"
+        local C=$(echo "${B}" | sed 's/%/%%/')
+        debug "lang_b64.C: ${C}"
+        local lang_b64=$''"${C}"
+        debug "lang_b64: ${lang_b64}"
+    fi
+    local params=$(printf '\n\x0b%s\x12\x0e%s' "${video_id}" "${lang_b64}" | base64)
+    debug "video_id: ${video_id}"
+    debug "lang: ${lang}"
+    debug "params: ${params}"
 
     transcript=$(
         curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
@@ -191,7 +232,7 @@ function get-transcript() {
                     "clientVersion": "2.2021111",
                 }
             },
-            "params": "'"$(printf '\n\x0b%s' "${video_id}" | base64)"'"
+            "params": "'"${params}"'"
         }' \
             | awk -v color="${DO_COLOR}" -v format="${FORMAT}" \
             -v color_time="${COLOR_TIME}" -v color_text="${COLOR_TEXT}" '
@@ -295,7 +336,7 @@ function ms-to-hms() {
 function main() {
     parse-args "${@}"
 
-    get-transcript "${VIDEO_ID}" "${OUTPUT_FILE}"
+    get-transcript "${VIDEO_ID}" "${OUTPUT_FILE}" "${LANG}"
 }
 
 

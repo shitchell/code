@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # This git command will propagate a set of objects or commits across multiple
 # branches. If no branches are specified, it will propagate across all branches.

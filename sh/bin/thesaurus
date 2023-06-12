@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Uses thesaurus.com to find synonyms for a word
 
@@ -343,7 +343,7 @@ function main() {
                     printf(term_str);
                     inTerm = 0;
                 }
-            }'
+            }' | printf "%b" "$(cat)" ; echo
 }
 
 

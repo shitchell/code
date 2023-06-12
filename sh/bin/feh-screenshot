@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Use -u for a dry run so that we can append
 # an identifier "_fs" and the extension.

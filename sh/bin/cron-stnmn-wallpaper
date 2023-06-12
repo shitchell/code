@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # export DBUS_SESSION_BUS_ADDRESS environment variable
 #PID=$(pgrep cinnamon | awk NR==1)

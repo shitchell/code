@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Use stow to (re)create symlinks for:
 #  * ~/code/**/bin/* -> ~/code/bin/

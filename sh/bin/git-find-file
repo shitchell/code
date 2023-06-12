@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 scriptname=$(basename $(readlink -f $0))
 

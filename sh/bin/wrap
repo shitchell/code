@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Basically just an alias for `fold` that defaults to `fold -s -w 80`
 

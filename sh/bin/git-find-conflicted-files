@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Use pattern detection to find the files that are merge conflicted
 

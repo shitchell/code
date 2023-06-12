@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Adds the ability to create a `.ls` file in any directory which, when `ls` is
 # used in that directory, defines options to be passed to the command

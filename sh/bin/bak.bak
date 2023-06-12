@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # For each filepath passed in as an argument, creates a copy with the name
 # '<filename>.bak' in the same directory as the original file. If

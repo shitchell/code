@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # In supporting terminals, set the terminal title using escape sequences
 

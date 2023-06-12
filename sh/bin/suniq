@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Run `sort` and `uniq` on stdin or a file
 

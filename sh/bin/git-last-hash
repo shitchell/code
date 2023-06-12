@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Shows the last commit hash for the current branch.
 # TODO: If an argument is provided, passes that as a pattern to `--grep` and

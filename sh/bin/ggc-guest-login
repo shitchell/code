@@ -1,3 +1,3 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 curl -m 5 -s 'http://198.18.34.1/reg.php' -d field1=guy -d field2=fawkes -d field3="lol@wat.com" -d checkbox=checkbox | grep 'ah_popup' &>/dev/null && echo "Successful!" || echo "Error logging in"

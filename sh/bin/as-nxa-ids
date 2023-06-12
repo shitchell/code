@@ -1,12 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Convert between NxA service IDs and service names
 
-## imports #####################################################################
+## globals #####################################################################
 ################################################################################
 
-# include-source 'debug.sh'
-
+SERVICE_ID_REGEX_TEMPLATE='{SERVICE_PREFIX}_[0-9]+_[A-Z0-9]{8}'
+SERVICE_ID_REGEX=$(echo "${SERVICE_ID_REGEX_TEMPLATE}" | sed -e 's/{SERVICE_PREFIX}/[-_A-Za-z0-9]+/g')
 
 ## usage #######################################################################
 ################################################################################
@@ -30,8 +30,11 @@ function help-full() {
     --help                         display this help message
     -d/--nxa-dir <dir>             the NxA directory, defaults to '.'
     -p/--service-prefix <prefix>   the service prefix, defaults to 'RedirectFileMgr'
+    -N/--service-names             interpret arguments as service names
+    -I/--service-ids               interpret arguments as service IDs
+    -A/--auto                      interpret arguments as service names, IDs, or paths (default)
     -f/--format <format>           the output format, defaults to '{fullname} {path}'
-    -e/-E/--(no-)print-errors           whether to print errors for missing services
+    -e/-E/--(no-)print-errors      whether to print errors for missing services
     -b/-B/--(no-)blank-lines       whether to print blank lines for missing services
 EOF
     echo
@@ -56,8 +59,9 @@ function help-usage() {
 function parse-args() {
     # Default values
     NXA_DIR=""
-    SERVICE_PREFIX="RedirectFileMgr"
+    SERVICE_PREFIX=""
     OUTPUT_FORMAT="{fullname} {path}"
+    INTERPRET_AS="auto" # auto, name, id
     DO_ERRORS=true
     DO_BLANK_LINES=true
 
@@ -74,12 +78,28 @@ function parse-args() {
                 help-full
                 exit 0
                 ;;
+            -N | --service-names)
+                INTERPRET_AS="name"
+                shift 1
+                ;;
+            -I | --service-ids)
+                INTERPRET_AS="id"
+                shift 1
+                ;;
+            -A | --auto)
+                INTERPRET_AS="auto"
+                shift 1
+                ;;
             -d | --nxa-dir)
                 NXA_DIR="${2}"
                 shift 2
                 ;;
             -p | --service-prefix)
                 SERVICE_PREFIX="${2}"
+                SERVICE_ID_REGEX=$(
+                    echo "${SERVICE_ID_REGEX_TEMPLATE}" \
+                        | awk -v prefix="${SERVICE_PREFIX}" '{gsub(/{SERVICE_PREFIX}/, prefix); print}'
+                )
                 shift 2
                 ;;
             -f | --format)
@@ -160,7 +180,8 @@ function debug() {
         prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
         printf "%s\n" "${@}" \
             | awk -v prefix="${prefix}" '{print prefix $0}' \
-            | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
+            >>"${DEBUG_LOG:-/dev/stderr}"
+            # | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
     fi
 }
 
@@ -169,10 +190,14 @@ function debug() {
 function is-service-id() {
     local string="${1:--}"
     [[ "${string}" == "-" ]] && string=$(cat)
-    [[
-        "${string}" =~ ^[A-Z0-9]{8}$
-        || "${string}" =~ ^${SERVICE_PREFIX}_[A-Z0-9]+_[A-Z0-9]{8}$
-    ]]
+    if [[ -n "${SERVICE_PREFIX}" ]]; then
+        [[ "${string}" =~ ^${SERVICE_ID_REGEX}$ ]]
+    else
+        [[
+            "${string}" =~ ^[A-Z0-9]{8}$
+            || "${string}" =~ ^${SERVICE_ID_REGEX}$
+        ]]
+    fi
 }
 
 # @description Determine if a string contains a service ID
@@ -180,7 +205,7 @@ function is-service-id() {
 function contains-service-id() {
     local string="${1:--}"
     [[ "${string}" == "-" ]] && string=$(cat)
-    [[ "${string}" =~ [A-Z0-9]{8} ]]
+    [[ "${string}" =~ [0-9]+_[A-Z0-9]{8} ]]
 }
 
 # @description Parse a service ID out of a filepath or filename
@@ -193,13 +218,8 @@ function parse-service-id() {
     # Get just the filename if this is a filepath
     local string=$(basename "${string}")
 
-    # Remove ${SERVICE_PREFIX} if it's there
-    if [[ -n "${SERVICE_PREFIX}" ]]; then
-        string="${string/${SERVICE_PREFIX}_/}"
-    fi
-
     # Grab just the ID, which should match the regex '[A-Z0-9]{8}'
-    local service_id=$(echo "${string}" | grep -oE '[A-Z0-9]{8}')
+    local service_id=$(echo "${string}" | grep -oE "${SERVICE_ID_REGEX}")
 
     # Check that the ID is valid
     if ! is-service-id "${service_id}"; then
@@ -276,7 +296,8 @@ function service-id-to-name() {
                 | tr -d '\n' \
                 | grep -oE '<HSDataContainerType [^>]+>' \
                 | grep -oE 'name="[^"]+' \
-                | cut -d'"' -f2
+                | cut -d'"' -f2 \
+                | head -1
         )
     elif [[ "${service_file}" =~ "_ctc.xml"$ ]]; then
         # We need the contractName attribute from the HSContract element
@@ -383,6 +404,7 @@ function service-name-to-filepath() {
         return 1
     fi
     local filepath=$(grep --color=never -loRE "contractName=\"${service_name}\"" "${service_dir}")
+    debug "filepath: ${filepath}"
     if [[ -z "${filepath}" ]]; then
         debug "filepath empty for service: ${service_name_full}, returning 1"
         echo "error: could not find service name: ${service_name_full}" >&2
@@ -428,14 +450,30 @@ function main() {
     local output
     local err_code
     for service in "${SERVICES[@]}"; do
-        if contains-service-id "${service}"; then
+        local service_type
+
+        # Determine if the input is a service ID or name
+        if [[ "${INTERPRET_AS}" == "auto" ]]; then
+            if contains-service-id "${service}"; then
+                service_type="id"
+            else
+                service_type="name"
+            fi
+        else
+            service_type="${INTERPRET_AS}"
+        fi
+
+        if [[ "${service_type}" == "id" ]]; then
             debug "service-id-to-name '${service}'"
             output=$(service-id-to-name "${service}" 2>"${error_file}")
             err_code=${?}
-        else
+        elif [[ "${service_type}" == "name" ]]; then
             debug "service-name-to-filepath '${service}'"
             output=$(service-name-to-filepath "${service}" 2>"${error_file}")
             err_code=${?}
+        else
+            output="error: invalid service type: ${service_type}"
+            err_code=1
         fi
         debug "${service} -- ${output} -- ${err_code}"
         if [[ ${err_code} -eq 0 ]]; then

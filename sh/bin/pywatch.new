@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # TODO: exclude specified files / directories
 # TODO: ignore hidden files/folders

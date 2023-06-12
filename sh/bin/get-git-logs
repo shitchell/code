@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Given the path to a directory, find all git repositories in that directory and
 # run a git log command on each.

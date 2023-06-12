@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Show all of the direct descendants of (commits that came immediately after) a
 # given commit

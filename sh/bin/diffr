@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Attribution: https://unix.stackexchange.com/a/463214/538359
 #
 # Compare two directories using rsync and print the differences

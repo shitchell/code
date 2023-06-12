@@ -1,16 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Build a map of NxA service dependencies
 #
 # DEPENDS: as-nxa-ids
 #
 # TODO: add support for reading a list of services from a directory
-
-## imports #####################################################################
-
-include-source 'echo.sh'
-include-source 'debug.sh'
-
 
 ## usage functions #############################################################
 ################################################################################
@@ -76,6 +70,14 @@ function parse-args() {
                 OUTPUT_FORMAT="${2}"
                 shift 2
                 ;;
+            --graph)
+                OUTPUT_FORMAT='graph'
+                shift 1
+                ;;
+            --list)
+                OUTPUT_FORMAT='list'
+                shift 1
+                ;;
             -)
                 # Read from stdin
                 while read -r line; do
@@ -130,6 +132,23 @@ function parse-args() {
 
 ## helpful functions ###########################################################
 ################################################################################
+
+# @description Print a debug message
+# @usage debug <message>
+function debug() {
+    local prefix timestamp
+    if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        prefix="\033[36m[${timestamp}]\033[0m "
+        prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
+        [[ "${FUNCNAME[1]}" != "main" ]] && prefix+="\033[1m:${FUNCNAME[1]}()\033[0m"
+        prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
+        printf "%s\n" "${@}" \
+            | awk -v prefix="${prefix}" '{print prefix $0}' \
+            >>"${DEBUG_LOG:-/dev/stderr}"
+            # | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
+    fi
+}
 
 # @description Recursively find the dependencies of an nxa file
 # @usage list-dependencies <filepath>
@@ -327,6 +346,7 @@ function main() {
                     # echo "    node_${service_id}"
                     # Turns out this is redundant; the line above which defines
                     # settings for the node is sufficient to create the node
+                    :
                 elif [[ "${OUTPUT_FORMAT}" == 'list' ]]; then
                     echo "${service_id}"
                 fi

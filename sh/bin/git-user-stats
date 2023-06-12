@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Show user stats (commits, files modified, insertions, deletions, and total
 # lines modified) for a repo

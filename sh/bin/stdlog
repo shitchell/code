@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Send the output of COMMAND to stdout and stderr as well as the files
 # COMMAND.out and COMMAND.err

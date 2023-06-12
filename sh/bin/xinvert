@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 alias invert="xcalib -d :0 -invert -alter"
 

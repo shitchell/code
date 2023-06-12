@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 directory="/sys/class/backlight/intel_backlight/"
 file=$directory"brightness"
 level=$(cat $file)

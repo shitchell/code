@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Compile a list of all NxA services called by the FLOW files in the current
 # AssetSuite project.

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 function super-shred() {
 	# perform a random pass over the file

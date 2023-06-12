@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 COOKIES="$(cat $HOME/.d2l.cookie)"
 

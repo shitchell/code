@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Run `git log` or `git diff` and run the output through `aha` to make it
 # pretty and readable by people not using a terminal / ansi colors

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 for filepath in "$@"; do
 	# remove any trailing slashes from directory names

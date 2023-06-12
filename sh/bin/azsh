@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Run pipelines and view/download logs
 
@@ -1025,6 +1025,7 @@ function _subcommand_download-logs() {
     local pipeline_name=$(echo "${run_info}" | grep -oP '^Pipeline: +\K.*')
     local run_name=$(echo "${run_info}" | grep -oP '^Run: +\K.*')
     local created_date=$(echo "${run_info}" | grep -oP '^Finished: +\K.*')
+    local branch_name=$(echo "${run_info}" | grep -oP '^Branch: +refs/heads/\K.*' | tr '/' '_')
     echo "${run_info}"
 
     # If no output file specified, use the run info
@@ -1034,7 +1035,7 @@ function _subcommand_download-logs() {
             echo "error: unable to determine output file name" >&2
             return 1
         fi
-        output="${pipeline_name}-${run_name}-${run_id}-$(date -d "${created_date}" "+%Y%m%d_%H%M%S").zip"
+        output="${pipeline_name}_${run_name}_${run_id}_$(date -d "${created_date}" "+%Y%m%d-%H%M%S")_${branch_name}.zip"
     fi
     echo
     echo "Downloading logs to ${output} ..."

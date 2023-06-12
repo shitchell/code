@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 cmds=(
 #	"/usr/bin/cmatrix -u 9 -C green"

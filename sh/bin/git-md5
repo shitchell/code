@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Get the md5 hash for file(s) across commits, tags, or branches. If no
 # filepaths are provided and the ref is a commit, the files modified in that

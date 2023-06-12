@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Returns whether or not the Azure DevOps agent is running
 

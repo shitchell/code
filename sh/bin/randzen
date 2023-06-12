@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Get quotes
 quotes=$(gkeep --auth ~/.config/gkeep get-note 1564400053268.394798136 | grep '•')

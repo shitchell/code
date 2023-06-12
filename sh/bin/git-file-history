@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Given a list of branches and filepaths, list every commit where those files
 # were changed in a customizable format. By default, the format for a single

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Searches for git repositories in the current directory and runs the specified
 # git command in each.

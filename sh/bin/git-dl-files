@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Fetch a file as it exists in a specific ref of a git repository. Output based
 # off `git checkout`

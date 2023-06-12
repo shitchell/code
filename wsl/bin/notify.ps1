@@ -17,12 +17,25 @@ $Positional = @()
 # Process command line arguments
 for ($i = 0; $i -lt $args.Count; $i++) {
     $arg = $args[$i]
-    switch ($arg) {
+    switch -Wildcard ($arg) {
         "-Help" {
             $Help = $true
         }
-        "-Beep" {
-            $Beep = $true
+        "-Beep*" {
+            if ($arg -eq "-Beep") {
+                $Beep = $true
+            } elseif ($arg -match "-Beep=\d+(,\d+){0,2}$") {
+                $Beep = $true
+                if ($arg -match "-Beep=(\d+)") {
+                    $BeepCount = $Matches[1]
+                }
+                if ($arg -match "-Beep=\d+,(\d+)") {
+                    $BeepFrequency = $Matches[1]
+                }
+                if ($arg -match "-Beep=\d+,\d+,(\d+)") {
+                    $BeepDuration = $Matches[1]
+                }
+            }
         }
         "-Text" {
             $Text = $args[$i + 1]
@@ -100,19 +113,20 @@ if ($Help) {
     Write-Host "Display a notification in the Windows 10 notification area"
     Write-Host ""
     Write-Host "Popup Options:"
-    Write-Host "  -Text <text>        The main body of the notification"
-    Write-Host "  -Title <title>      The title of the notification"
-    Write-Host "  -Icon <icon>        The icon to display"
-    Write-Host "  -Timeout <timeout>  The number of milliseconds to display the notification"
+    Write-Host "  -Text <text>              The main body of the notification"
+    Write-Host "  -Title <title>            The title of the notification"
+    Write-Host "  -Icon <icon>              The icon to display"
+    Write-Host "  -Timeout <timeout>        The number of milliseconds to display the notification"
     Write-Host ""
     Write-Host "Sound Options:"
-    Write-Host "  -Beep               Play a beep sound"
-    Write-Host "  -BeepCount <count>  The number of times to play the beep"
-    Write-Host "  -BeepFrequency <freq>  The frequency of the beep"
+    Write-Host "  -Beep                     Play a beep sound"
+    Write-Host "  -BeepCount <count>        The number of times to play the beep"
+    Write-Host "  -BeepFrequency <freq>     The frequency of the beep"
     Write-Host "  -BeepDuration <duration>  The duration of the beep"
+    Write-Host "  -Beep=<count>[,<freq>[,<duration>]]"
     Write-Host ""
     Write-Host "Action Options:"
-    Write-Host "  -ActionURI <uri>    The URI to open when the notification is clicked"
+    Write-Host "  -ActionURI <uri>          The URI to open when the notification is clicked"
     exit 0
 }
 

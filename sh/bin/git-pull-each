@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # git command to pull each branch specified on the command line. if no branches
 # given, updates all branches
