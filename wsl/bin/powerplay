@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# Convert WSL paths to Windows paths before running powerplay.ps1
+
+path="${1}"
+
+# Validate the path
+if [[ -z "${path}" ]]; then
+  echo "usage: $(basename "${0}") <audio file>" >&2
+  exit 1
+elif ! [[ -r "${path}" ]]; then
+  echo "error: cannot read '${path}'" >&2
+  exit 1
+elif ! [[ -f "${path}" ]]; then
+  echo "error: '${path}' is not a file" >&2
+  exit 1
+elif ! file "${path}" 2>&1 | grep -Eqi 'audio|media'; then
+  echo "error: '${path}' is not an audio file" >&2
+  exit 1
+fi
+
+# Convert to a Windows path and play
+win_path=$(wslpath -am "${path}")
+if [[ ${?} -ne 0 || -z "${win_path}" ]]; then
+  echo "error: could not convert '${path}' to a Windows path" >&2
+  exit 1
+fi
+
+powerplay.ps1 "${win_path}"
