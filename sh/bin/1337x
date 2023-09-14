@@ -1,0 +1,40 @@
+#!/bin/bash
+#
+# Search 1337x.to for torrents
+
+include-source 'debug.sh'
+
+query="${*}"
+
+[[ -z "${query}" ]] && echo "usage: $(basename "${0}") <query>"
+
+# replace all non-alphanumeric characters with a +
+query=$(echo "${query}" | sed -E 's/[^A-Za-z0-9]/ /g')
+
+html=$(curl -s "https://1337x.to/search/${query}/1/")
+
+results=$(
+  echo "${html}" \
+    | tr -d '\n' \
+    | sed -E 's|</?tr>|\n|g' \
+    | grep '<td[^>]class="coll-1' \
+    | while read line; do
+        debug "processing line: ${line}"
+        url=$(echo "${line}" | grep -oP '</i></a><a href="\K[^"]+')
+        url="https://1337x.to${url}"
+        seeds=$(echo "${line}" | grep -oP '<td class="coll-2 seeds">\K\d+')
+        leechers=$(echo "${line}" | grep -oP '<td class="coll-3 leeches">\K\d+')
+        date=$(echo "${line}" | grep -oP '<td class="coll-date">\K[^<]+')
+        size=$(echo "${line}" | grep -oP '<td class="coll-4 size[^"]*">\K[^<]+')
+        echo -e "${seeds}\t${leechers}\t${date}\t${size}\t${url}"
+      done
+)
+
+if [[ -n "${results}" ]]; then
+  {
+    echo -e "S\tL\tdate\tsize\turl"
+    echo "${results}"
+  } | column -s $'\t' -t
+else
+  echo "no results found :'("
+fi
