@@ -139,21 +139,21 @@ class ColorSet:
 		return fin[:-1]
 
 def completesAssignment(x):
-	match = re.findall("\s*(\w+)\s*=[^=]\s*[[{]*(\S+)", x)
+	match = re.findall(r"\s*(\w+)\s*=[^=]\s*[[{]*(\S+)", x)
 	if match:
 		return True
 	else:
 		return False
 
 def doesAssignment(x):
-	match = re.findall("\s*(\w+)\s*=[^=]\s*(\S+)", x)
+	match = re.findall(r"\s*(\w+)\s*=[^=]\s*(\S+)", x)
 	if match:
 		return True
 	else:
 		return False
 
 def getAssignment(x):
-	match = re.search("\s*(\w+)\s*=[^=]\s*(.+)", x)
+	match = re.search(r"\s*(\w+)\s*=[^=]\s*(.+)", x)
 	if match:
 		return match[0]
 	else:
