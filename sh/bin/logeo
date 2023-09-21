@@ -2,7 +2,7 @@
 # Log the stdout and stderr of a command to separate log files
 
 usage() {
-    echo "usage: $(basename "$0" | sed 's/./ /g') command"
+    echo "usage: $(basename "$0") command"
     echo "       $(basename "$0") command <stdout log file> <stderr log file>"
 }
 

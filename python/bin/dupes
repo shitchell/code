@@ -22,8 +22,7 @@ parser.add_option("--debug", action="store_true", dest="debug", default=False,
 (options, optionargs) = parser.parse_args()
 
 if not parser.largs:
-	parser.print_help()
-	quit()
+    parser.largs = ["."]
 
 class Stats:
 	files_scanned = 0
@@ -133,4 +132,4 @@ print('%s files scanned.' % Stats.files_scanned)
 print('%s files skipped.' % Stats.files_skipped)
 print('%s duplicates found.' % Stats.duplicates)
 print('%s files deleted.' % Stats.deleted)
-print('%s seconds' % Stats.time)
+print('%.04f seconds' % Stats.time)

@@ -107,10 +107,272 @@ function urlencode() {
     echo "${string_urlencoded}"
 }
 
+# @description Format a string to be URL encoded
+# @usage urlencode <string>
+# @caveats Does not handle special characters / UTF-8 well
+function urlencode() {
+    local string="${1}"
+    local strlen=${#string}
+    local encoded=""
+    local pos c o
+
+    for ((pos=0; pos<strlen; pos++)); do
+        c=${string:$pos:1}
+        case "$c" in
+            [-_.~a-zA-Z0-9])
+                o="${c}"
+                ;;
+            *)
+                printf -v o '%%%02x' "'$c"
+                ;;
+        esac
+
+        encoded+="${o}"
+    done
+    printf "%s\n" "${encoded}"
+    # You can either set a return variable (FASTER)   REPLY="${encoded}"
+    #+or echo the result (EASIER)... or both... :p}'"
+}
+
+# @description Format a string to be URL encoded
+# @usage urlencode <string>
+# @usage echo <string> | urlencode -
+function urlencode() {
+    local string="${1}"
+    local LANG=C
+    local IFS=
+
+    if [[ "${string}" == "-" ]]; then
+        string="$(cat && echo x)"
+        string="${string%x}"
+    fi
+
+    if [[ -z "${string}" ]]; then
+        return 1
+    fi
+
+    printf "%s" "${string}" | while read -n1 -r -d "$(echo -n "\000")" c; do
+        case "$c" in
+            [-_.~a-zA-Z0-9])
+                echo -n "$c"
+                ;;
+            *)
+                printf '%%%02x' "'$c"
+                ;;
+        esac
+    done
+}
+
+# function urlencode() {
+    # local string="${1}"
+    # local data
+#
+    # if [[ $# != 1 ]]; then
+        # echo "usage: urlencode <string>" >&2
+        # return 1
+    # fi
+#
+    # data="$(curl -s -o /dev/null -w %{url_effective} --get --data-urlencode "${string}" "")"
+    # if [[ $? != 3 ]]; then
+        # echo "Unexpected error" 1>&2
+        # return 2
+    # fi
+#
+    # echo "${data##/?}"
+# }
+
+# @description Parse a URL encoded string into plain text
+# @usage urldecode <string>
+# @usage echo <string> | urldecode -
+function urldecode() {
+    local string="${1}"
+    local LANG=C
+    local IFS=
+
+    if [[ "${string}" == "-" ]]; then
+        string="$(cat && echo x)"
+        string="${string%x}"
+    fi
+
+    if [[ -z "${string}" ]]; then
+        return 1
+    fi
+
+    # This is perhaps a risky gambit, but since all escape characters must be
+    # encoded, we can replace %NN with \xNN and pass the lot to printf -b, which
+    # will decode hex for us
+    printf '%b' "${string//%/\\x}"
+}
+
+
+
+
+
+
+
 
 ## awk/sed #####################################################################
 ################################################################################
 
 function awk-csv() {
     awk -v FPAT="([^,]*)|(\"[^\"]*\")"
+}
+
+
+## json ########################################################################
+################################################################################
+
+# @description Escape a string for use in JSON, e.g. as a key or value
+# @usage json-escape [--(no-)quotes] <string>
+# @attribution https://stackoverflow.com/a/29653643 https://stackoverflow.com/a/74426351/794241
+function json-escape() {
+    local text=()
+    local do_quotes="" # false if empty
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -q | --quotes)
+                do_quotes=true
+                shift
+                ;;
+            -Q | --no-quotes)
+                do_quotes=""
+                shift
+                ;;
+            *)
+                text+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "${text}" ]] && text=$(cat -)
+    [[ -z "${text}" ]] && return
+
+    awk -v do_quotes="${do_quotes}" '
+        BEGIN {
+            for ( i = 1; i <= 127; i++ ) {
+                # Handle reserved JSON characters and special characters
+                switch ( i ) {
+                    case 8:  repl[ sprintf( "%c", i) ] = "\\b"; break
+                    case 9:  repl[ sprintf( "%c", i) ] = "\\t"; break
+                    case 10: repl[ sprintf( "%c", i) ] = "\\n"; break
+                    case 12: repl[ sprintf( "%c", i) ] = "\\f"; break
+                    case 13: repl[ sprintf( "%c", i) ] = "\\r"; break
+                    case 34: repl[ sprintf( "%c", i) ] = "\\\""; break
+                    case 92: repl[ sprintf( "%c", i) ] = "\\\\"; break
+                    default: repl[ sprintf( "%c", i) ] = sprintf( "\\u%04x", i );
+                }
+            }
+
+            for ( i = 1; i < ARGC; i++ ) {
+                if (i == 1 && do_quotes) {
+                    printf("\"")
+                } else if (i > 1) {
+                    printf(" ")
+                }
+
+                s = ARGV[i]
+                while ( match( s, /[\001-\037\177"\\]/ ) ) {
+                    printf("%s%s", \
+                        substr(s,1,RSTART-1), \
+                        repl[ substr(s,RSTART,RLENGTH) ] \
+                    )
+                    s = substr(s,RSTART+RLENGTH)
+                }
+
+                printf("%s", s)
+                if (i == (ARGC - 1) && do_quotes) {
+                    printf("\"")
+                }
+            }
+            exit
+        }
+    ' "${text[@]}"
+}
+
+# @description determine the type of a JSON value
+# @usage json-type <value>
+function json-type() {
+    local value="${1}"
+    local json_type
+
+    if [[ "${value}" == "null" ]]; then
+        type="null"
+    elif [[ "${value}" == "true" || "${value}" == "false" ]]; then
+        type="boolean"
+    elif [[ "${value}" =~ ^[0-9]+$ ]]; then
+        type="integer"
+    elif [[ "${value}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        type="float"
+    elif [[ "${value}" =~ ^\".*\"$ ]]; then
+        type="string"
+    elif [[ "${value}" =~ ^\[.*\]$ ]]; then
+        type="array"
+    elif [[ "${value}" =~ ^\{.*\}$ ]]; then
+        type="object"
+    else
+        type="unknown"
+    fi
+
+    echo "${type}"
+}
+
+# @description Convert an array with values in the format `key=value` to a JSON object
+# @usage json-map-from-keys [--detect-types] <key=value>...
+function json-map-from-keys() {
+    local key_value_pairs=()
+    local detect_types=true
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -d | --detect-types)
+                detect_types=true
+                shift
+                ;;
+            -D | --no-detect-types)
+                detect_types=false
+                shift
+                ;;
+            *)
+                key_value_pairs+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    # if no values given, check stdin
+    if [ ${#key_value_pairs[@]} -eq 0 ]; then
+        while read -r line; do
+            key_value_pairs+=("${line}")
+        done
+    fi
+
+    local json='{'
+    for key_value_pair in "${key_value_pairs[@]}"; do
+        local key="${key_value_pair%%=*}"
+        local value="${key_value_pair#*=}"
+        debug "key_value_pair: ${key} = ${value}"
+
+        # Detect type if requested
+        if ${detect_types}; then
+            local json_type="$(json-type "${value}")"
+            case "${json_type}" in
+                "integer" | "float" | "boolean" | "null" | "array" | "object")
+                    value="${value}"
+                    ;;
+                "string" | "unknown")
+                    value=$(json-escape -q "${value}")
+                    ;;
+            esac
+        else
+            value=$(json-escape -q "${value}")
+        fi
+        json="${json}\"${key}\": ${value}, "
+    done
+    json="${json%, }}"
+
+    echo "${json}"
 }
