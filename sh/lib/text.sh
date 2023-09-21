@@ -74,6 +74,7 @@ function join() {
     done
 }
 
+## latest urlencode from work laptop
 # function urlencode() {
 #     local string="${1}"
 #     local data
@@ -92,47 +93,48 @@ function join() {
 #     echo "${data##/?}"
 # }
 
-function urlencode() {
-    # urlencode <string>
-    local string="${1}"
-    local string_urlencoded=""
-    local length="${#1}"
-    for (( i = 0; i < length; i++ )); do
-        local c="${1:i:1}"
-        case $c in
-            [a-zA-Z0-9.~_-]) string_urlencoded+="${c}" ;;
-            *) string_urlencoded+=$(printf '%%%02X' "'$c") ;;
-        esac
-    done
-    echo "${string_urlencoded}"
-}
+# function urlencode() {
+    # # urlencode <string>
+    # local string="${1}"
+    # local string_urlencoded=""
+    # local length="${#1}"
+    # for (( i = 0; i < length; i++ )); do
+        # local c="${1:i:1}"
+        # case $c in
+            # [a-zA-Z0-9.~_-]) string_urlencoded+="${c}" ;;
+            # *) string_urlencoded+=$(printf '%%%02X' "'$c") ;;
+        # esac
+    # done
+    # echo "${string_urlencoded}"
+# }
 
-# @description Format a string to be URL encoded
-# @usage urlencode <string>
-# @caveats Does not handle special characters / UTF-8 well
-function urlencode() {
-    local string="${1}"
-    local strlen=${#string}
-    local encoded=""
-    local pos c o
-
-    for ((pos=0; pos<strlen; pos++)); do
-        c=${string:$pos:1}
-        case "$c" in
-            [-_.~a-zA-Z0-9])
-                o="${c}"
-                ;;
-            *)
-                printf -v o '%%%02x' "'$c"
-                ;;
-        esac
-
-        encoded+="${o}"
-    done
-    printf "%s\n" "${encoded}"
-    # You can either set a return variable (FASTER)   REPLY="${encoded}"
-    #+or echo the result (EASIER)... or both... :p}'"
-}
+## latest urlencode/decode from librem
+# # @description Format a string to be URL encoded
+# # @usage urlencode <string>
+# # @caveats Does not handle special characters / UTF-8 well
+# function urlencode() {
+    # local string="${1}"
+    # local strlen=${#string}
+    # local encoded=""
+    # local pos c o
+# 
+    # for ((pos=0; pos<strlen; pos++)); do
+        # c=${string:$pos:1}
+        # case "$c" in
+            # [-_.~a-zA-Z0-9])
+                # o="${c}"
+                # ;;
+            # *)
+                # printf -v o '%%%02x' "'$c"
+                # ;;
+        # esac
+# 
+        # encoded+="${o}"
+    # done
+    # printf "%s\n" "${encoded}"
+    # # You can either set a return variable (FASTER)   REPLY="${encoded}"
+    # #+or echo the result (EASIER)... or both... :p}'"
+# }
 
 # @description Format a string to be URL encoded
 # @usage urlencode <string>
@@ -203,12 +205,6 @@ function urldecode() {
     # will decode hex for us
     printf '%b' "${string//%/\\x}"
 }
-
-
-
-
-
-
 
 
 ## awk/sed #####################################################################
