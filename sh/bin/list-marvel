@@ -7,248 +7,224 @@ include-source 'echo.sh'
 # Determine whether to colorize the output
 [[ -t 0 && -t 1 ]] && ECHO_FORMATTED=always || ECHO_FORMATTED=no
 
-# @description List movies
-# @echo The Marvel movies and release dates
-# @return 0
-function _subcommand-movies() {
-    local show_header=1
+# Setup the component IDs
+COMPONENT_IDS=(
+    "movies::665076"
+    "movies_news::6367736"
+    "movies_other::664931"
+    "tv_news::6367841"
+    "tv_disney::1082986"
+    "tv_disney_nonfiction::1083016"
+    "tv_series_d::1350061"
+    "tv_hulu::1156041"
+    "tv_animation::1083056"
+    "movies_all::665076 664931"
+    "tv_all::1082986 1083016 1350061 1156041 1083056"
+    "all::665076 6367736 664931 6367841 1082986 1083016 1350061 1156041 1083056"
+)
+
+# Set up a couple of maps by looping over the COMPONENT_IDS array
+declare -A COMPONENT_IDS_BY_NAME
+declare -A COMPONENT_IDS_BY_ID
+for component_id in "${COMPONENT_IDS[@]}"; do
+    # Split the component ID into its name and ID
+    name="${component_id%%::*}"
+    id="${component_id##*::}"
+
+    # Store the name and ID in the maps
+    COMPONENT_IDS_BY_NAME["${name}"]="${id}"
+    COMPONENT_IDS_BY_ID["${id}"]="${name}"
+done
+
+### Component IDs
+###
+## Movies
+# 6367736 - Latest Movies News
+# 665076 - Marvel Movies
+# 664931 - Other Movies
+## TV
+# 6367841 - Latest TV News
+# 1082986 - Marvel on Disney+
+# 1083016 - Non-Fiction Disney+
+# 1350061 - Marvel Series on D+
+# 1156041 - Marvel on Hulu
+# 1083056 - Animation
+
+# @description Fetch a list of results from a component ID
+# @usage _fetch-results [--offset <int>] [--limit <int>] [(--no)-header] [--format <format>] [--sort] [--sort-column <int>] <component ID>
+# @example _fetch-results 665076
+# @example _fetch-results --offset 100 --limit 100 movies_all tv_all
+# @example _fetch-results --no-header --format '{title}\t({date})' 665076 --sort --sort-column 2
+# @return 0 all components were fetched successfully
+# @return 1 all components were unable to be fetched
+# @return 2 some components were unable to be fetched
+# @return 3 invalid component ID provided
+# @return 4 invalid component ID provided
+function _fetch-results() {
+    local offset=0 limit=100 component="" component_id="" component_ids=()
+    local format="{date}\t{title}\t{component}"
+    local header do_header=false
+    local sort_column=1 do_sort=true
+    local exit_code=0
+    local qs url response json
 
     # Parse the arguments
     while [ ${#} -gt 0 ]; do
         case "${1}" in
-            -nh|--no-header)
-                show_header=0
+            --offset)
+                offset="${2}"
+                shift 2
+                ;;
+            --limit)
+                limit="${2}"
+                shift 2
+                ;;
+            --format)
+                format="${2}"
+                shift 2
+                ;;
+            --header)
+                do_header=true
                 shift
                 ;;
-            -H|--header)
-                show_header=1
+            --no-header)
+                do_header=false
                 shift
                 ;;
             *)
-                shift
+                component_id="${1}"
+                if [[ "${component_id}" != [0-9]+ ]];  then
+                    component_id="${COMPONENT_IDS_BY_NAME["${component_id}"]}"
+                fi
+                # Make sure it's in the list of valid component IDs
+                if [[ -z "${component_id}" || -z "${COMPONENT_IDS_BY_ID["${component_id}"]}" ]]; then
+                    echo-error "error: invalid component ID: ${component_id}"
+                    return 3
+                fi
+                component_ids+=(${component_id})
+                shift 1
                 ;;
         esac
     done
 
-    # Show the header
-    if [ ${show_header} -eq 1 ]; then
-        echo-formatted -c $'Release Date\tTitle'
+    # Check if the component ID is valid
+    if [[ -z "${component_ids}" ]]; then
+        echo-error "error: no component ID provided"
+        return 4
     fi
 
-    # Return a table of Marvel movies and their release dates in the format:
-    #   <release year>-<release month>-<release day>\t<title>
-    curl -s 'https://www.marvel.com/v1/pagination/content_grid_cards?componentId=665076&offset=0&limit=100' 2>/dev/null \
-        | python -m json.tool \
-        | awk '
+    # Show the header
+    if ${do_header}; then
+        header=$(
+            awk '{
+                gsub(/{date}/, "Release Date");
+                gsub(/{title}/, "Title");
+                gsub(/{component}/, "Type");
+                print $0;
+            }' <<< "${format}" | printf "%b" "$(cat)"
+        )
+        echo "${header}"
+    fi
+
+    # If we should sort, then use 
+
+    # Loop over the component IDs
+    for component_id in "${component_ids[@]}"; do
+        # Fetch the results
+        qs="componentId=${component_id}&offset=${offset}&limit=${limit}"
+        url="https://www.marvel.com/v1/pagination/content_grid_cards?${qs}"
+        response=$(curl -s "${url}" 2>/dev/null)
+        json=$(echo "${response}" | python -m json.tool 2>/dev/null)
+        if [ -z "${json}" ]; then
+            echo-error "error: failed to fetch results from ${url}"
+            [[ ${exit_code} -eq 0 ]] && exit_code=1
+        fi
+
+        awk -v component="${COMPONENT_IDS_BY_ID["${component_id}"]}" -v format="${format}" '
+            function is_int(x) {
+                return x ~ /^[0-9]+$/;
+            }
+            BEGIN {
+                # Set the row number to 1
+                row = 1;
+            }
             /"headline":/ {
                 # Store the title
-                title = gensub(/.*"headline": "(.*?)".*/, "\\1", 1);
+                title = gensub(/.*"headline": " *(.*?) *".*/, "\\1", 1);
                 next;
             }
             /"day":/ {
                 # Store the day
                 day = gensub(/.*"day": "(.*?)".*/, "\\1", 1);
+                # If the day is not a number or is all 0s, then set it to "??"
+                if (!is_int(day) || day == "00") {
+                    day = "??";
+                }
                 next;
             }
             /"month":/ {
                 # Store the month
                 month = gensub(/.*"month": "(.*?)".*/, "\\1", 1);
+                # If the month is not a number or is all 0s, then set it to "??"
+                if (!is_int(month) || month == "00") {
+                    month = "??";
+                }
                 next;
             }
             /"year":/ {
                 # Store the year
                 year = gensub(/.*"year": "(.*?)".*/, "\\1", 1);
-                next;
-            }
-            # If we have a title, day, month, and year, print them out
-            title != "" && day != "" && month != "" && year != "" {
-                print year "-" month "-" day "\t" title;
-                # Reset the title, day, month, and year
-                title = "";
-                day = "";
-                month = "";
-                year = "";
-            }
-        '
-}
-
-# @description List TV shows
-# @echo The Marvel TV shows and release dates
-# @return 0
-function _subcommand-tv() {
-    local show_header=1
-
-    # Parse the arguments
-    while [ ${#} -gt 0 ]; do
-        case "${1}" in
-            -nh|--no-header)
-                show_header=0
-                shift
-                ;;
-            -H|--header)
-                show_header=1
-                shift
-                ;;
-            *)
-                shift
-                ;;
-        esac
-    done
-
-    # Show the header
-    if [ ${show_header} -eq 1 ]; then
-        echo-formatted -c $'Release Date\tTitle'
-    fi
-
-    # Return a table of Marvel TV shows and their release dates in the format:
-    #   <release year>-<release month>-<release day>\t<title>
-    # "content_type": "tv_show_season"
-    curl -s 'https://www.marvel.com/tv-shows' \
-        | grep -oP '__NEXT_DATA__ = \K.*' \
-        | python -m json.tool \
-        | awk '
-            /"content_type": "tv_show_season"/ {
-                # Only process the below lines if the content type is a TV show
-                is_show = 1;
-            }
-            /"headline":/ && is_show == 1 {
-                # Store the title
-                title = gensub(/.*"headline": "\s*(.*?)\s*",?$/, "\\1", 1);
-                # Check if this title has already been printed
-                if (title in titles) {
-                    # Reset the title
-                    title = "";
-                    # Reset the is_show flag
-                    is_show = 0;
-                    next;
-                } else {
-                    # Store the title in the titles array
-                    titles[title] = 1;
-                }
-                next;
-            }
-            /"day":/ && is_show == 1 {
-                # Store the day
-                day = gensub(/.*"day": ("(.*?)"|(null)),?$/, "\\2\\3", 1);
-                if (day == "null") {
-                    day = "??";
-                }
-                next;
-            }
-            /"month":/ && is_show == 1 {
-                # Store the month
-                month = gensub(/.*"month": ("(.*?)"|(null)),?$/, "\\2\\3", 1);
-                if (month == "null") {
-                    month = "??";
-                }
-                next;
-            }
-            /"year":/ && is_show == 1 {
-                # Store the year
-                year = gensub(/.*"year": "(.*?)",?$/, "\\1", 1);
-                if (year == "0000") {
+                # If the year is not a number or is all 0s, then set it to "????"
+                if (!is_int(year) || year == "0000") {
                     year = "????";
                 }
                 next;
             }
             # If we have a title, day, month, and year, print them out
             title != "" && day != "" && month != "" && year != "" {
-                print year "-" month "-" day "\t" title;
+                # print year "-" month "-" day "\t" title "\t" component;
+                line = gensub(/{date}/, year "-" month "-" day, 1, format);
+                line = gensub(/{title}/, title, 1, line);
+                line = gensub(/{component}/, component, 1, line);
+                print line;
+
                 # Reset the title, day, month, and year
                 title = "";
                 day = "";
                 month = "";
                 year = "";
-                is_show = 0;
             }
-        ' \
-    | sort
-}
+        ' <<< "${json}"
+        [[ ${exit_code} -eq 1 ]] && exit_code=2
+    done | (
+        ${do_sort} && sort -k ${sort_column} || cat
+    )
 
-# @description List all movies and TV shows
-# @echo The Marvel movies and TV shows and release dates
-# @return 0
-function _subcommand-all() {
-    local show_header=1
-
-    # Parse the arguments
-    while [ ${#} -gt 0 ]; do
-        case "${1}" in
-            -nh|--no-header)
-                show_header=0
-                shift
-                ;;
-            -H|--header)
-                show_header=1
-                shift
-                ;;
-            *)
-                shift
-                ;;
-        esac
-    done
-
-    # Show the header
-    if [ ${show_header} -eq 1 ]; then
-        echo-formatted -c $'Release Date\tTitle\tType'
-    fi
-
-    # Return a table of Marvel movies and their release dates in the format:
-    #   <release year>-<release month>-<release day>\t<title>
-    (
-        _subcommand-movies -nh | awk '{ print $0 "\tmovie" }'
-        _subcommand-tv -nh | awk '{ print $0 "\tseries" }'
-    ) | sort
-}
-
-# @description List subcommands
-# @echo The subcommands
-# @return 0
-function _subcommand-help() {
-    echo "List Marvel movies and TV shows from the Marvel website"
-    echo "Commands:"
-    cat "${0}" \
-        | awk '
-            /# @description/ {
-                # Store the description
-                description = gensub(/.*# @description (.*)/, "\\1", 1);
-                next;
-            }
-            /^function/ {
-                # If the function is a subcommand, print the name and description
-                if (match($0, /_subcommand-/)) {
-                    subcommand = gensub(/function _subcommand-(.*)\(\) \{/, "\\1", 1);
-                    print subcommand "\t" description;
-                }
-                # Reset the name and description
-                subcommand = "";
-                description = "";
-            }
-        ' \
-        | column -t -s $'\t' \
-        | sort \
-        | sed 's/^/    /'
+    return ${exit_code}
 }
 
 ## main ########################################################################
 ################################################################################
 
 function main() {
-    local subcommand="${1:-all}"
-    shift
-
-    # Determine if the subcommand exists
-    if ! declare -f "_subcommand-${subcommand}" >/dev/null; then
-        echo-error "Unknown subcommand: ${subcommand}"
-        echo-error "Run '${0} help' for usage."
-        exit 1
+    if [[ "${1}" =~ "help"|"-h"|"--help" || -z "${1}" ]]; then
+        echo "List Marvel movies and TV shows from the Marvel website"
+        echo "usage: $(basename "${0}") category [category ...]"
+        echo
+        echo "Categories:"
+        # Print all of the components
+        for component in "${COMPONENT_IDS[@]}"; do
+            name="${component%%::*}"
+            id="${component##*::}"
+            echo -e "- ${name}\t(${id})"
+        done | column -t -s $'\t'
+        [[ -n "${1}" ]] && return 0
     fi
 
-    # Call the subcommand
-    "_subcommand-${subcommand}" "${@}" | column -t -s $'\t'
+    _fetch-results --header "${@}" | column -t -s $'\t'
 }
 
 ## run #########################################################################
 ################################################################################
 
-[ "${BASH_SOURCE[0]}" = "${0}" ] && main "${@}"
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
