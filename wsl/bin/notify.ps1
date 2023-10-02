@@ -12,6 +12,7 @@ $BeepCount = 1
 $BeepFrequency = 1000
 $BeepDuration = 1000
 $ActionURI = $null
+$Debug = $false
 $Positional = @()
 
 # Process command line arguments
@@ -68,6 +69,9 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         "-ActionURI" {
             $ActionURI = $args[$i + 1]
             $i++
+        }
+        "-Debug" {
+            $Debug = !$Debug
         }
         default {
             $Positional += $arg
@@ -137,8 +141,10 @@ $global:balmsg = New-Object System.Windows.Forms.NotifyIcon
 $parentPid = (Get-WmiObject Win32_Process -Filter "ProcessId = $pid").ParentProcessId
 $path = (Get-Process -id $parentPid).Path
 # $path = (Get-Process -id $pid)
-Write-Host $path
 # $path = (Get-Process -id $pid).Path
+if ($Debug) {
+    Write-Host "Parent process path: $path"
+}
 
 $balmsg.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($path)
 # If an icon was specified, use it
@@ -166,5 +172,8 @@ if ($Beep) {
     }
 }
 
-Write-Host "Displaying notification: $Text"
+# Display the notification
+if ($Debug) {
+    Write-Host "Displaying notification: $Text"
+}
 $balmsg.ShowBalloonTip($Timeout)
