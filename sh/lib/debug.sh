@@ -137,6 +137,16 @@ function debug() {
     fi
 }
 
+# @description Print the values of a list of variables given their names
+# @usage debug-vars <var1> <var2> ...
+# @example foo=bar bar=baz debug-vars "foo" "bar"
+function debug-vars() {
+    local var
+    for var in "${@}"; do
+        debug "${var} = ${!var}"
+    done
+}
+
 # print debug information, test version
 function _debug() {
     local debug_file
