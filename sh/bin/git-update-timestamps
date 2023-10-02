@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# Loop over a list of files in a git repo and update their timestamps to match
+# their respective git commit timestamps.
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo "update the timestamps of files to match their respective git commit timestamps"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Updates the timestamps of files to match their most recent git commit"
+    echo "timestamps. Any options specified other than the options listed below"
+    echo "are passed to \`git log\` when searching for the commit timestamp."
+    echo
+    cat << EOF
+    -h / --help          display this help message
+    <git log options>    any options that can be passed to \`git log\`
+    --                   treat all remaining arguments as files
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [git log options] [--] file1 [file2] ..."
+}
+
+function parse-args() {
+    # Loop over the arguments
+    declare -ga FILEPATHS
+    declare -ga GIT_LOG_OPTS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h | --help)
+                help-full
+                exit 0
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                GIT_LOG_OPTS+=("${1}")
+                exit 1
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # If any arguments were left over, treat them as files
+    if [ ${#} -gt 0 ]; then
+        FILEPATHS+=("${@}")
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+
+    for file in "${FILEPATHS[@]}"; do
+        timestamp=$(
+            git log \
+                "${GIT_LOG_OPTS[@]}" \
+                -n 1 \
+                --date=format:%Y%m%d%H%M.%S \
+                --pretty=format:%cd \
+                --date-order \
+                -- "${file}"
+        )
+        if [ -z "${timestamp}" ]; then
+            echo "ERROR: skipping '${file}' -- no git log found" >&2
+            continue
+        fi
+        touch -m -t "${timestamp}" "${file}"
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"

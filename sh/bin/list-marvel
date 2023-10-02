@@ -19,8 +19,8 @@ COMPONENT_IDS=(
     "tv_hulu::1156041"
     "tv_animation::1083056"
     "movies_all::665076 664931"
-    "tv_all::1082986 1083016 1350061 1156041 1083056"
-    "all::665076 6367736 664931 6367841 1082986 1083016 1350061 1156041 1083056"
+    "tv_all::1082986 1350061 1156041 1083056"
+    "all::665076 6367736 664931 6367841 1082986 1350061 1156041 1083056"
 )
 
 # Set up a couple of maps by looping over the COMPONENT_IDS array
@@ -98,7 +98,7 @@ function _fetch-results() {
                 fi
                 # Make sure it's in the list of valid component IDs
                 if [[ -z "${component_id}" || -z "${COMPONENT_IDS_BY_ID["${component_id}"]}" ]]; then
-                    echo-error "error: invalid component ID: ${component_id}"
+                    echo-error "error: invalid component: ${1}"
                     return 3
                 fi
                 component_ids+=(${component_id})
@@ -118,6 +118,9 @@ function _fetch-results() {
         header=$(
             awk '{
                 gsub(/{date}/, "Release Date");
+                gsub(/{dateY}/, "Release Year");
+                gsub(/{dateM}/, "Release Month");
+                gsub(/{dateD}/, "Release Day");
                 gsub(/{title}/, "Title");
                 gsub(/{component}/, "Type");
                 print $0;
@@ -184,6 +187,9 @@ function _fetch-results() {
             title != "" && day != "" && month != "" && year != "" {
                 # print year "-" month "-" day "\t" title "\t" component;
                 line = gensub(/{date}/, year "-" month "-" day, 1, format);
+                line = gensub(/{dateY}/, year, 1, line);
+                line = gensub(/{dateM}/, month, 1, line);
+                line = gensub(/{dateD}/, day, 1, line);
                 line = gensub(/{title}/, title, 1, line);
                 line = gensub(/{component}/, component, 1, line);
                 print line;
@@ -207,7 +213,7 @@ function _fetch-results() {
 ################################################################################
 
 function main() {
-    if [[ "${1}" =~ "help"|"-h"|"--help" || -z "${1}" ]]; then
+    if [[ "${1}" =~ ^"help"|"-h"|"--help"$ || -z "${1}" ]]; then
         echo "List Marvel movies and TV shows from the Marvel website"
         echo "usage: $(basename "${0}") category [category ...]"
         echo

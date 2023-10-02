@@ -74,6 +74,58 @@ function join() {
     done
 }
 
+# @description Convert text to lowercase
+# @usage to-lower <string>
+function to-lower() {
+    awk '{print tolower($0)}' <<< "${1-$(cat)}"
+}
+
+# @description Convert text to uppercase
+# @usage to-upper <string>
+function to-upper() {
+    awk '{print toupper($0)}' <<< "${1-$(cat)}"
+}
+
+# @description Convert text to randomized upper/lowercase
+# @usage to-random-case <string>
+# function to-random-case() {
+#     local string="${1}"
+#     local random_string=""
+#     local char=""
+#     local random_number=0
+#     local random_number_max=0
+#     local random_number_min=0
+#     local random_number_range=0
+
+#     for (( i = 0; i < ${#string}; i++ )); do
+#         char="${string:i:1}"
+#         random_number_max=1
+#         random_number_min=0
+#         random_number_range=$(( random_number_max - random_number_min + 1 ))
+#         random_number=$(( RANDOM % random_number_range + random_number_min ))
+#         if [ ${random_number} -eq 0 ]; then
+#             random_string+="${char,,}"
+#         else
+#             random_string+="${char^^}"
+#         fi
+#     done
+
+#     echo "${random_string}"
+# }
+function to-random-case() {
+    awk '{
+        srand()
+        for (i=1; i<=length($0); i++) {
+            if (rand() < 0.5) {
+                printf("%s", toupper(substr($0, i, 1)))
+            } else {
+                printf("%s", tolower(substr($0, i, 1)))
+            }
+        }
+        printf("\n")
+    }' <<< "${1-$(cat)}"
+}
+
 ## latest urlencode from work laptop
 # function urlencode() {
 #     local string="${1}"
@@ -214,6 +266,60 @@ function awk-csv() {
     awk -v FPAT="([^,]*)|(\"[^\"]*\")"
 }
 
+# @description Uniqueify lines based on one or more fields
+# @usage uniqueify [-d <delimiter>] [-c <column>] file
+# @usage cat file | uniqueify [-d <delimiter>] [-c <column>]
+function uniqueify() {
+    local delimiter=" "
+    local columns=()
+    local file="/dev/stdin"
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -d | --delimiter)
+                delimiter="${2}"
+                shift 2
+                ;;
+            -c | --column)
+                columns+=("${2}")
+                shift 2
+                ;;
+            *)
+                file="${1}"
+                shift 1
+                ;;
+        esac
+    done
+
+    # Use awk to uniqueify the lines
+    awk -v delimiter="${delimiter}" -v columns="${columns[*]}" '
+        BEGIN {
+            split(columns, columns_array, " ")
+            for (i in columns_array) {
+                column = columns_array[i]
+                if (column ~ /^[0-9]+$/) {
+                    column_array[column] = 1
+                } else {
+                    column_array[column] = 0
+                }
+            }
+        }
+        {
+            key = ""
+            for (i in column_array) {
+                if (column_array[i] == 1) {
+                    key = key delimiter $i
+                } else {
+                    key = key delimiter "\"" $i "\""
+                }
+            }
+            if (!seen[key]++) {
+                print
+            }
+        }
+    ' "${file}"
+}
 
 ## json ########################################################################
 ################################################################################

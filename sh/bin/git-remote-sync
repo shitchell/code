@@ -1,0 +1,14 @@
+#!/bin/bash
+#
+# Perform a git hard reset on a list of files to sync them with the current
+# state of the remote branch, then perform a clean
+
+# Get the current branch name
+BRANCH="${1:-$(git rev-parse --abbrev-ref HEAD)}"
+
+# Get the current remote
+REMOTE=$(git config --get branch."${BRANCH}".remote)
+
+git fetch
+git reset --hard "${REMOTE}"/"${BRANCH}"
+git clean -fd
