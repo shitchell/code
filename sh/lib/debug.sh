@@ -153,21 +153,28 @@ function debug() {
 # @usage debug-vars <var1> <var2> ...
 # @example foo=bar bar=baz debug-vars "foo" "bar"
 function debug-vars() {
-    local var_name declare_str
+    local var_name debug_message declare_str
 
-    declare_str=$(
+    debug_message=$(
         for var_name in "${@}"; do
-            declare -p "${var_name}" \
-                | sed -E '
-                    s/^declare -[^ ]+ ([^=]+)=(.*)$/\1\x1e== \2/;s/ \)$/)/
-                    2,$s/^/ \x1e.. /
-                '
+            declare_str=$(declare -p "${var_name}" 2>/dev/null)
+            if [[ -z "${declare_str}" ]]; then
+                echo -e "${var_name}\x1e== <not found>"
+            elif ! [[ "${declare_str}" =~ "=" ]]; then
+                echo -e "${var_name}\x1e== <unset>"
+            else
+                echo "${declare_str}" \
+                    | sed -E '
+                        s/^declare -[^ ]+ ([^=]+)=(.*)$/\1\x1e== \2/;s/ \)$/)/
+                        2,$s/^/ \x1e.. /
+                    '
+            fi
         done | column -t -s $'\x1e'
     )
     DEBUG_FUNCTION_NAME="${FUNCNAME[1]}" \
     DEBUG_SCRIPT_NAME="${BASH_SOURCE[1]##*/}" \
     DEBUG_LINE_NUMBER="${BASH_LINENO[0]}" \
-        debug "${declare_str}"
+        debug "${debug_message}"
 }
 
 # print debug information, test version
