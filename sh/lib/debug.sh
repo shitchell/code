@@ -70,13 +70,25 @@ function debug() {
         timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
         # get the calling function name
-        function_name=${FUNCNAME[$((DEBUG_SOURCE_LEVEL + 1))]}
+        if [[ -n "${DEBUG_FUNCTION_NAME}" ]]; then
+            function_name="${DEBUG_FUNCTION_NAME}"
+        else
+            function_name=${FUNCNAME[$((DEBUG_SOURCE_LEVEL + 1))]}
+        fi
 
         # get the calling script name
-        script_name=$(basename "${BASH_SOURCE[$((DEBUG_SOURCE_LEVEL - 1))]}")
+        if [[ -n "${DEBUG_SCRIPT_NAME}" ]]; then
+            script_name="${DEBUG_SCRIPT_NAME}"
+        else
+            script_name=$(basename "${BASH_SOURCE[$((DEBUG_SOURCE_LEVEL - 1))]}")
+        fi
 
         # get the calling line number
-        line_number=${BASH_LINENO[0]}
+        if [[ -n "${DEBUG_LINE_NUMBER}" ]]; then
+            line_number="${DEBUG_LINE_NUMBER}"
+        else
+            line_number=${BASH_LINENO[0]}
+        fi
 
         # handle color and some formatting
         if [[ "${DEBUG_COLOR}" =~ ^"false"|"0"$ ]]; then
@@ -142,6 +154,7 @@ function debug() {
 # @example foo=bar bar=baz debug-vars "foo" "bar"
 function debug-vars() {
     local var_name declare_str
+
     declare_str=$(
         for var_name in "${@}"; do
             declare -p "${var_name}" \
@@ -151,7 +164,10 @@ function debug-vars() {
                 '
         done | column -t -s $'\x1e'
     )
-    debug "${declare_str}"
+    DEBUG_FUNCTION_NAME="${FUNCNAME[1]}" \
+    DEBUG_SCRIPT_NAME="${BASH_SOURCE[1]##*/}" \
+    DEBUG_LINE_NUMBER="${BASH_LINENO[0]}" \
+        debug "${declare_str}"
 }
 
 # print debug information, test version
