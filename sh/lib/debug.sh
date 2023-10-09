@@ -70,10 +70,10 @@ function debug() {
         timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
         # get the calling function name
-        function_name=${FUNCNAME[1]}
+        function_name=${FUNCNAME[$((DEBUG_SOURCE_LEVEL + 1))]}
 
         # get the calling script name
-        script_name=$(basename "${BASH_SOURCE[-1]}")
+        script_name=$(basename "${BASH_SOURCE[$((DEBUG_SOURCE_LEVEL - 1))]}")
 
         # get the calling line number
         line_number=${BASH_LINENO[0]}
@@ -89,7 +89,7 @@ function debug() {
             [[ -n "${line_number}" ]] && line_loc+=":${line_number}"
 
             # handle specific categories of debug messages
-            if [[ "${1}" =~ ^(error|warn|info|success)$ ]]; then
+            if [[ "${1}" =~ ^("error"|"warn"|"info"|"success")$ ]]; then
                 text_color=""
                 shift
             fi
@@ -141,10 +141,17 @@ function debug() {
 # @usage debug-vars <var1> <var2> ...
 # @example foo=bar bar=baz debug-vars "foo" "bar"
 function debug-vars() {
-    local var
-    for var in "${@}"; do
-        debug "${var} = ${!var}"
-    done
+    local var_name declare_str
+    declare_str=$(
+        for var_name in "${@}"; do
+            declare -p "${var_name}" \
+                | sed -E '
+                    s/^declare -[^ ]+ ([^=]+)=(.*)$/\1\x1e== \2/;s/ \)$/)/
+                    2,$s/^/ \x1e.. /
+                '
+        done | column -t -s $'\x1e'
+    )
+    debug "${declare_str}"
 }
 
 # print debug information, test version
