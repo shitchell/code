@@ -1,0 +1,144 @@
+#!/bin/bash
+#
+# Search $PATH for a command using a regex
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo 'search $PATH for a command using a regex'
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h                   display usage
+    --help               display this help message
+    -a                   print all matches, not just the first
+    -n/--name            apply the regex to the command name only
+    -p/--path            apply the regex to the full command path
+    -E/--extended        use extended regex syntax
+    -P/--perl            use perl regex syntax
+    -i/--ignore-case     ignore case when matching
+    -v/--invert-match    print all commands that don't match
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename $0) [-h] [-a] [-n|-p] [-E|-P] [-i] [-v] <regex>"
+}
+
+function parse-args() {
+    # Default values
+    GREP_OPTS=()
+    REGEX_PATTERN=""
+    DO_RETURN_ALL=false
+    DO_IGNORE_CASE=false
+    DO_INVERT_MATCH=false
+    DO_MATCH_NAME_ONLY=true
+    REGEX_SYNTAX="extended" # extended, perl
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            -h | --help)
+                help-full
+                exit 0
+                ;;
+            -a)
+                DO_RETURN_ALL=true
+                ;;
+            -n | --name)
+                DO_MATCH_NAME_ONLY=true
+                ;;
+            -p | --path)
+                DO_MATCH_NAME_ONLY=false
+                ;;
+            -E | --extended)
+                REGEX_SYNTAX="extended"
+                ;;
+            -P | --perl)
+                REGEX_SYNTAX="perl"
+                ;;
+            -i | --ignore-case)
+                DO_IGNORE_CASE=true
+                ;;
+            -v | --invert-match)
+                DO_INVERT_MATCH=true
+                ;;
+            -*)
+                echo "error: unknown option ${1}" >&2
+                help-usage >&2
+                return 1
+                ;;
+            *)
+                REGEX_PATTERN="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # Set up the grep options
+    ${DO_IGNORE_CASE} && GREP_OPTS+=("-i")
+    ${DO_INVERT_MATCH} && GREP_OPTS+=("-v")
+    if [[ "${REGEX_SYNTAX}" == "perl" ]]; then
+        GREP_OPTS+=("-P")
+    elif [[ "${REGEX_SYNTAX}" == "extended" ]]; then
+        GREP_OPTS+=("-E")
+    fi
+
+
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}"
+    
+    local path_dirs=() executable_paths=() executable_names=()
+    local grep=$(which grep) # Use the system grep without any options/aliases
+    readarray -t path_dirs < <(tr ':' '\n' <<< "${PATH}" | sort -u)
+    readarray -t executable_paths < <(
+        find "${path_dirs[@]}" -maxdepth 1 -type f -executable 2>/dev/null
+    )
+    executable_names=( "${executable_paths[@]##*/}" )
+
+    # If we need to match the name only, then perform the grep on the names,
+    # returning only the line numbers of the matches. Then use those line
+    # numbers to index into the array of executable paths.
+    if ${DO_MATCH_NAME_ONLY}; then
+        local executable_names_str=$(printf "%s\n" "${executable_names[@]}")
+        local match_indexes=()
+
+        readarray -t match_indexes < <(
+            printf "%s\n" "${executable_names[@]}" \
+                | "${grep}" "${GREP_OPTS[@]}" -n "${REGEX_PATTERN}" \
+                | cut -d ':' -f 1
+        )
+
+        # Return the executable paths that match the indexes
+        for index in "${match_indexes[@]}"; do
+            echo "${executable_paths[$((index - 1))]}"
+            ${DO_RETURN_ALL} || return 0
+        done
+    else
+        # Otherwise, perform the grep on the paths
+        printf "%s\n" "${executable_paths[@]}" \
+            | "${grep}" "${GREP_OPTS[@]}" "${REGEX_PATTERN}"
+    fi
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
