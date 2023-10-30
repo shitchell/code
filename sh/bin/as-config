@@ -1,0 +1,305 @@
+#!/bin/bash
+
+function debug() {
+    if [[ "${DEBUG}" =~ ^"1"|"true"$ || -n "${DEBUG_LOG}" ]]; then
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        printf "\e[36m[%s]\e[0m \e[1;35m%s:%s\e[0m -- %s\n" \
+            "${timestamp}" "${FUNCNAME[1]}" "${BASH_LINENO[0]}" "${@}" \
+            >>"${DEBUG_LOG:-/dev/stderr}"
+    fi
+}
+
+# @description Return AssetSuite configuration settings
+# @usage as-config <property name/pattern>
+# @example as-config server.mode
+# @example as-config "server\..*"
+function as-config() {
+    # Help text
+    local usage="[-d|--assetsuite-dir <dir>] [-n|--num-results <num>] [-i|--include <REGEXP>] [-x|--exclude <REGEXP>] [-s|--sort] [-S|--no-sort] [-k|--show-keys] [-K|--no-show-keys] [-f|--show-filenames] [-F|--no-show-filenames] [-c|--columns] [-C|--no-columns] <property name/REGEXP>"
+
+    # Default values
+    local key="$"
+    local num_results=""
+    local do_sort=false
+    local do_show_filenames=true
+    local do_show_linenumbers=true
+    local do_show_keys=true
+    local do_show_columns=true
+    local properties_includes=""
+    local properties_excludes=""
+    local grep_args=()
+    local as_dir="${ASSETSUITE_DIR:-/abb/assetsuite}"
+    local return_str=""
+    local properties_files=() properties_files_unfiltered=()
+
+    # If no arguments provided, print help text
+    if [[ $# -le 0 ]]; then
+        echo "usage: as-config ${usage}"
+        return 0
+    fi
+
+    # Process arguments
+    while [ $# -gt 0 ]; do
+        debug "processing arg: $1"
+        case "$1" in
+            -h|--help)
+                echo "usage: as-config ${usage}"
+                return 0
+                ;;
+            -d|--assetsuite-dir)
+                as_dir="$2"
+                shift 2
+                ;;
+            -n|--num-results)
+                # Check if the value is a number
+                if [[ ! "${2}" =~ ^[0-9]+$ ]]; then
+                    echo "ERROR: The value '$2' is not a number" >&2
+                    return 1
+                fi
+                num_results="${2}"
+                shift 2
+                ;;
+            -i|--include)
+                properties_includes="${2}"
+                shift 2
+                ;;
+            -x|--exclude)
+                properties_excludes="${2}"
+                shift 2
+                ;;
+            -s|--sort)
+                do_sort=true
+                shift
+                ;;
+            -S|--no-sort)
+                do_sort=false
+                shift
+                ;;
+            -k|--show-keys)
+                do_show_keys=true
+                shift
+                ;;
+            -K|--no-show-keys)
+                do_show_keys=false
+                shift
+                ;;
+            -f|--show-filenames)
+                do_show_filenames=true
+                shift
+                ;;
+            -F|--no-show-filenames)
+                do_show_filenames=false
+                shift
+                ;;
+            -l|--show-linenumbers)
+                do_show_linenumbers=true
+                shift
+                ;;
+            -L|--no-show-linenumbers)
+                do_show_linenumbers=false
+                shift
+                ;;
+            -c|--columns)
+                do_show_columns=true
+                shift
+                ;;
+            -C|--no-columns)
+                do_show_columns=false
+                shift
+                ;;
+            *)
+                key="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # If filenames aren't being shown, ensure line numbers aren't either
+    ! ${do_show_filenames} && do_show_linenumbers=false
+
+    debug "key:                  ${key}"
+    debug "num_results:          ${num_results}"
+    debug "do_sort:              ${do_sort}"
+    debug "do_show_keys:         ${do_show_keys}"
+    debug "do_show_columns:      ${do_show_columns}"
+    debug "do_show_filenames:    ${do_show_filenames}"
+    debug "do_show_linenumbers:  ${do_show_linenumbers}"
+    debug "as_dir:               ${as_dir}"
+    debug "properties_includes:  ${properties_includes}"
+    debug "properties_excludes:  ${properties_excludes}"
+
+    # Check if the AssetSuite directory exists
+    if [[ ! -d "${as_dir}" ]]; then
+        echo "ERROR: the AssetSuite directory '${as_dir}' does not exist" >&2
+        return 1
+    fi
+
+    # Find all properties files, filtering based on the include/exclude patterns
+    debug "finding properties files"
+    readarray -t properties_files < <(
+        find "${as_dir}" -type f -name '*.properties' 2>/dev/null \
+            | ([[ -n "${properties_includes}" ]] && command grep -E "${properties_includes}" || cat) \
+            | ([[ -n "${properties_excludes}" ]] && command grep -vE "${properties_excludes}" || cat)
+    )
+    debug "found ${#properties_files[@]} properties files"
+
+    # Ensure we found properties files
+    if [[ ${#properties_files[@]} -le 0 ]]; then
+        echo "error: no properties files found under '${as_dir}'" >&2
+        return 1
+    fi
+
+    # Get the key value(s)
+    debug "searching for key pattern '${key}'"
+    readarray -t results < <(
+        awk -v key="${key}" -v debug="${DEBUG}" \
+            -v do_filenames="${do_show_filenames}" \
+            -v do_linenums="${do_show_linenumbers}" '
+        function dbg(msg) {
+            if (debug == 1 || debug == "true") {
+                print "awk debug: " msg > "/dev/stderr";
+            }
+        }
+        BEGIN {
+            # Add a leading ^ and trailing $ to the key if not present
+            if (key !~ "^\\^") {
+                key = "^" key;
+            }
+            if (key !~ "\\$$") {
+                key = key "$";
+            }
+            dbg("key: " key);
+        }
+        {
+            # Save the line for printing later
+            line = $0;
+            # Skip lines starting with #
+            if ($0 ~ /^ *#/) {
+                next;
+            }
+            # Trim the value from the line and remove whitespace from the key
+            gsub(/ *=.*/, "", $0);
+            gsub(/^ */, "", $0);
+            if ($0 ~ key) {
+                if (do_filenames) {
+                    if (do_linenums) {
+                        print FILENAME ":" FNR ":" line;
+                    } else {
+                        print FILENAME ":" line;
+                    }
+                } else {
+                    print line;
+                }
+            }
+        }' "${properties_files[@]}"
+    )
+    debug "found ${#results[@]} results"
+
+    # If no results were found, return an error
+    if [[ ${#results[@]} -le 0 ]]; then
+        echo "error: no results found for '${key}'" >&2
+        return 1
+    fi
+    debug "sample results[0]: ${results[0]}"
+
+    # Strip leading/trailing whitespace from the keys and values
+    debug "stripping leading/trailing whitespace"
+    if ${do_show_filenames} && ${do_show_linenumbers}; then
+        # Skip the first 2 colons
+        readarray -t results < <(
+            printf '%s\n' "${results[@]}" | sed -E 's/^([^:]+:[0-9]+:) *([^= ]+) *= *(.*) *$/\1\2=\3/'
+        )
+    elif ${do_show_filenames} && ! ${do_show_linenumbers}; then
+        # Skip the first colon
+        readarray -t results < <(
+            printf '%s\n' "${results[@]}" | sed -E 's/^([^:]*:) *([^= ]+) *= *(.*) *$/\1\2=\3/'
+        )
+    else
+        # Don't skip any colons
+        readarray -t results < <(
+            printf '%s\n' "${results[@]}" | sed -E 's/^ *([^= ]+) *= *(.*) *$/\1=\2/'
+        )
+    fi
+    debug "sample results[0]: ${results[0]}"
+
+    # Sort the array if requested
+    if ${do_sort}; then
+        debug "sorting results"
+        readarray -t results < <(printf '%s\n' "${results[@]}" | sort)
+        debug "sample results[0]: ${results[0]}"
+        debug "\${#results[@]}: ${#results[@]}"
+    fi
+
+    # Reduce the array size if requested
+    if [[ -n "${num_results}" && ${num_results} -lt ${#results[@]} ]]; then
+        debug "reducing results to ${num_results} results"
+        readarray -t results < <(printf '%s\n' "${results[@]}" | head -n "${num_results}")
+        debug "sample results[0]: ${results[0]}"
+        debug "\${#results[@]}: ${#results[@]}"
+    fi
+
+    # Remove key names if do_show_keys=false
+    if ! ${do_show_keys}; then
+        debug "removing key names..."
+        if ${do_show_filenames}; then
+            if ${do_show_linenumbers}; then
+                debug "...with filenames and line numbers"
+                # Remove everything from the second : to the next =
+                readarray -t results < <(
+                    printf '%s\n' "${results[@]}" | sed -E 's/^([^:]+:[0-9]+:)[^=]*=/\1/'
+                )
+            else
+                debug "...with filenames but no line numbers"
+                readarray -t results < <(
+                    printf '%s\n' "${results[@]}" | sed -E 's/^([^:]*:)[^=]*=/\1/'
+                )
+            fi
+        else
+            debug "...with no filenames"
+            readarray -t results < <(
+                printf '%s\n' "${results[@]}" | sed -E 's/^[^=]*=//'
+            )
+        fi
+        debug "sample results[0]: ${results[0]}"
+        debug "\${#results[@]}: ${#results[@]}"
+    fi
+
+    # Set up the return string
+    return_str=$(printf '%s\n' "${results[@]}")
+
+    # Columnize the results if do_show_columns=true
+    if ${do_show_columns}; then
+        debug "columnizing output"
+
+        if ${do_show_filenames}; then
+            if ! ${do_show_linenumbers}; then
+                # If filenames are being shown but line numbers are not, replace the
+                # first colon with a FS character
+                debug "replacing first colon with FS character"
+                return_str=$(sed -E 's/:/\x1f/' <<< "${return_str}")
+            else
+                # If line numbers *are* being shown, then replace the second
+                # colon with a FS character
+                debug "replacing second colon with FS character"
+                return_str=$(sed -E 's/:/\x1f/2' <<< "${return_str}")
+            fi
+            debug "sample return_str[0]: ${return_str%%$'\n'*}"
+        fi
+        # If key names are being shown, replace the first equals sign with a FS character
+        if ${do_show_keys}; then
+            debug "replacing first equals sign with FS character"
+            return_str=$(sed -E 's/=/\x1f/' <<< "${return_str}")
+            debug "sample return_str[0]: ${return_str%%$'\n'*}"
+        fi
+
+        return_str=$(column -t -s $'\x1f' <<< "${return_str}")
+        debug "columnized output"
+        debug "sample return_str[0]: ${return_str%%$'\n'*}"
+    fi
+
+    # Print the results
+    echo "${return_str}"
+}
+
+as-config "${@}"
+
