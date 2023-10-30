@@ -1,0 +1,689 @@
+#!/bin/bash
+#
+# A utility for installing various utilities and scripts that I like
+
+## usage functions #############################################################
+################################################################################
+
+function help-epilogue() {
+    echo "installs nifty utilities and scripts that i like"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                             display usage
+    --help                         display this help message
+    -d/--dir <dir>                 the directory to install to, defaults to
+                                   '${DEFAULT_INSTALL_DIR}'
+    -c/--config-file <file>        specify a configuration file to use if
+                                   necessary. can be used multiple times
+    -l/--list                      list all available packages
+EOF
+}
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-d <dir>] [-c <file>] [-l] <package> [<package> ...]"
+    echo "       $(basename "${0}") --help # to see more details"
+}
+
+function parse-args() {
+    # Default values
+    DEFAULT_INSTALL_DIR="${HOME}/bin"
+    INSTALL_DIR=""
+    INSTALL_DIR_SPECIFIED=false
+    PACKAGES=()
+    CONFIG_FILES=() # if configurations are needed, add them to these files
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -d | --dir)
+                INSTALL_DIR="${2}"
+                INSTALL_DIR_SPECIFIED=true
+                shift 1
+                ;;
+            -c | --config-file)
+                CONFIG_FILES+=("${2}")
+                shift 1
+                ;;
+            -l | --list)
+                help-usage
+                echo
+                echo "Packages:"
+                list_install_commands | awk '{print "    " $0}'
+                exit 0
+                ;;
+            *)
+                PACKAGES+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+
+    # If no packages were specified, then print the usage and exit
+    if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+        install-util --list >&2
+        exit 1
+    fi
+
+    # If an install directory was specified, then require write access to it
+    if [[ -n "${INSTALL_DIR}" ]]; then
+        require --write "${INSTALL_DIR}"
+    else
+        INSTALL_DIR="${DEFAULT_INSTALL_DIR}"
+    fi
+
+    # Require write access to all configuration files
+    if [[ ${#CONFIG_FILES[@]} -gt 0 ]]; then
+        local require_args=()
+        for file in "${CONFIG_FILES[@]}"; do
+            require_args+=("--write" "${file}")
+        done
+        require "${require_args[@]}"
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function list_install_commands() {
+    # Read the env for all functions that start with 'install_'
+    declare -F | awk '
+        $3 ~ /^__install-util/ {
+            gsub(/^__install-util_/, "", $3)
+            print $3
+        }'
+}
+
+function get-latest-github-tag() {
+    local user="${1}"
+    local repo="${2}"
+
+    curl -s https://github.com/"${user}"/"${repo}"/tags \
+        | awk -F '"' '
+            /\.(zip|tar\.gz)/ {
+                print "https://github.com" $4
+                exit 0
+            }
+            END {
+                exit 1
+            }'
+}
+
+function get-latest-github-release-names() {
+    local user="${1}"
+    local repo="${2}"
+
+    curl -s https://github.com/"${user}"/"${repo}"/releases \
+        | grep -oP '<h2 class="sr-only"[^>]+>\K[^<]+'
+}
+
+function get-latest-github-release-assets() {
+    local user="${1}"
+    local repo="${2}"
+    local latest_release_version
+
+    latest_release_version=$(
+        get-latest-github-release-names "${user}" "${repo}" | head -1
+    )
+
+    curl -s "https://github.com/wtfutil/wtf/releases/expanded_assets/${latest_release_version}" \
+        | awk -F '"' '
+            /^\s+<a href=/ {
+                print "https://github.com" $2
+            }'
+}
+
+function require() {
+    # Default values
+    local required_user=""
+    local required_uid=""
+    local required_group=""
+    local required_gid=""
+    local required_os=""
+    local optional_dependencies=()
+    local required_dependencies=()
+    local should_exit=false
+    local error_messages=()
+    local warning_messages=()
+    local exit_code=0
+    local set_variables=()
+    local empty_variables=()
+    local read_filepaths=()
+    local write_filepaths=()
+    local do_quiet=false
+    local do_exit_on_failure=true
+    declare -A values # format: ['value1'="val1" 'value2'="val2"...]
+    declare -A variable_values # format: ['varname'="value'...]
+    declare -A one_of # format: ['download'="curl wget" 'extract'="unzip tar"...]
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -o | --optional)
+                optional_dependencies+=("${2}")
+                shift 2
+                ;;
+            -O | --one-of)
+                # syntax: --one-of name="dep1 dep2 dep3"
+                if ! [[ "${2}" =~ = ]]; then
+                    echo "error: --one-of requires an argument in the format: name=\"dep1 dep2 dep3\"" >&2
+                    exit 1
+                fi
+                local name="${2%%=*}"
+                local deps="${2#*=}"
+                one_of["${name}"]="${deps}"
+                shift 2
+                ;;
+            -R | --os)
+                required_os="${2}"
+                shift 2
+                ;;
+            --root)
+                required_user="root"
+                shift 1
+                ;;
+            -u | --user)
+                required_user="${2}"
+                shift 2
+                ;;
+            -U | --uid)
+                required_uid="${2}"
+                shift 2
+                ;;
+            -g | --group)
+                required_group="${2}"
+                shift 2
+                ;;
+            -G | --gid)
+                required_gid="${2}"
+                shift 2
+                ;;
+            -r | --read)
+                read_filepaths+=("${2}")
+                shift 2
+                ;;
+            -w | --write)
+                write_filepaths+=("${2}")
+                shift 2
+                ;;
+            -n | --is-set)
+                set_variables+=("${2}")
+                shift 2
+                ;;
+            -z | --is-empty)
+                empty_variables+=("${2}")
+                shift 2
+                ;;
+            -v | --value)
+                # syntax: --value name="value"
+                if ! [[ "${2}" =~ = ]]; then
+                    echo "error: --value requires an argument in the format: name=\"value\"" >&2
+                    exit 1
+                fi
+                local value1="${2%%=*}"
+                local value2="${2#*=}"
+                values["${value1}"]="${value2}"
+                shift 2
+                ;;
+            -V | --variable-value)
+                # syntax: --variable-value varname="value"
+                if ! [[ "${2}" =~ = ]]; then
+                    echo "error: --variable-value requires an argument in the format: varname=\"value\"" >&2
+                    exit 1
+                fi
+                local varname="${2%%=*}"
+                local value="${2#*=}"
+                variable_values["${varname}"]="${value}"
+                shift 2
+                ;;
+            -q | --quiet)
+                do_quiet=true
+                shift 1
+                ;;
+            --no-exit)
+                do_exit_on_failure=false
+                shift 1
+                ;;
+            *)
+                required_dependencies+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # If quiet mode is enabled, then redirect all output to /dev/null
+    ${do_quiet} && exec 9>&1 8>&2 1>/dev/null 2>&1
+
+    # Check the OS
+    if [[ -n "${required_os}" ]]; then
+        local current_os=$(grep -Po '(?<=^ID=).+' /etc/os-release)
+        if [[ "${current_os}" != "${required_os}" ]]; then
+            error_messages+=("must be run on ${required_os}")
+            exit_code=1
+        fi
+    fi
+
+    # Check for uid/user
+    if [[ -n "${required_uid}" ]]; then
+        # set the required user to the user name
+        required_user="$(id -u "${required_uid}" -n)"
+    fi
+    if [[ -n "${required_user}" ]]; then
+        if [[ "${required_user}" != "$(id -un)" ]]; then
+            error_messages+=("must be run as ${required_user}")
+            exit_code=1
+        fi
+    fi
+
+    # Check for gid/group
+    if [[ -n "${required_gid}" ]]; then
+        # set the required group to the group name
+        required_group="$(getent group "${required_gid}" | cut -d: -f1)"
+    fi
+    if [[ -n "${required_group}" ]]; then
+        if ! getent group "${required_group}" | grep -qE ":${USER}$"; then
+            error_messages+=("user must be in group '${required_group}'")
+            exit_code=1
+        fi
+    fi
+
+    # Check for read permissions
+    for filepath in "${read_filepaths[@]}"; do
+        if [[ ! -r "${filepath}" ]]; then
+            error_messages+=("must have read permissions for '${filepath}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for write permissions
+    for filepath in "${write_filepaths[@]}"; do
+        local check_filepath=true
+        # If the filepath does not exist, then check if its parent directory is
+        # writable
+        if [[ ! -e "${filepath}" ]]; then
+            local parent_dir
+            parent_dir="$(dirname "${filepath}")"
+
+            # If the parent directory also doesn't exist, then exit with an
+            # error
+            if [[ ! -e "${parent_dir}" ]]; then
+                error_messages+=("must have write permissions for '${filepath}', but parent directory '${parent_dir}' does not exist")
+                exit_code=1
+                check_filepath=false
+            else
+                filepath="${parent_dir}"
+            fi
+        fi
+        if ${check_filepath} && [[ ! -w "${filepath}" ]]; then
+            error_messages+=("must have write permissions for '${filepath}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for set variables
+    for var in "${set_variables[@]}"; do
+        if [[ -z "${!var}" ]]; then
+            error_messages+=("variable '${var}' must be set")
+            exit_code=1
+        fi
+    done
+
+    # Check for empty variables
+    for var in "${empty_variables[@]}"; do
+        if [[ -n "${!var}" ]]; then
+            error_messages+=("variable '${var}' must be empty")
+            exit_code=1
+        fi
+    done
+
+    # Check values
+    for key in "${!values[@]}"; do
+        if [[ "${key}" != "${values["${key}"]}" ]]; then
+            error_messages+=("value '${key}' is not '${values["${key}"]}'")
+            exit_code=1
+        fi
+    done
+
+    # Check variable values
+    for var in "${!variable_values[@]}"; do
+        if [[ "${!var}" != "${variable_values["${var}"]}" ]]; then
+            error_messages+=("variable '${var}' is set to '${!var}', not '${variable_values["${var}"]}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for required dependencies
+    for dep in "${required_dependencies[@]}"; do
+        if ! command -v "${dep}" &> /dev/null; then
+            error_messages+=("missing required dependency: '${dep}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for optional dependencies
+    for dep in "${optional_dependencies[@]}"; do
+        if ! command -v "${dep}" &> /dev/null; then
+            warning_messages+=("missing optional dependency: '${dep}'")
+        fi
+    done
+
+    # Check for one of a set of dependencies
+    for name in "${!one_of[@]}"; do
+        local found=false
+        local found_dep
+        for dep in ${one_of["${name}"]}; do
+            if command -v "${dep}" &> /dev/null; then
+                found=true
+                found_dep="${dep}"
+                break
+            fi
+        done
+        if ! ${found}; then
+            # echo "error: missing '${name}': ${one_of["${name}"]}" >&2
+            # _ex 1
+            error_messages+=("missing '${name}': ${one_of["${name}"]}")
+            exit_code=1
+        else
+            # Set the variable to the found dependency
+            read -r "${name}" <<< "${found_dep}"
+        fi
+    done
+
+    # Print any warning messages
+    for msg in "${warning_messages[@]}"; do
+        echo "warning: ${msg}" >&2
+    done
+
+    # Print any error messages and exit if necessary
+    if [[ ${exit_code} -ne 0 ]]; then
+        for msg in "${error_messages[@]}"; do
+            echo "error: ${msg}" >&2
+        done
+
+    fi
+
+    # Restore output if quiet mode was enabled
+    ${do_quiet} && exec 1>&9 2>&8 9>&- 8>&-
+
+    # If this function is being called from an interactive shell, then
+    # exit on failure, else return
+    if ${do_exit_on_failure} && [[ ! "${-}" =~ i && "${exit_code}" -ne 0 ]]; then
+        echo "exiting due to unmet dependencies" >&2
+        exit "${exit_code}"
+    fi
+    return "${exit_code}"
+}
+
+
+## install functions ###########################################################
+################################################################################
+
+function __install-util_micro() {
+    require --one-of downloader="curl wget" --write "${INSTALL_DIR}"
+
+    local micro_script=""
+
+    case "${downloader}" in
+        curl)
+            micro_script="$(curl -s https://getmic.ro)"
+            ;;
+        wget)
+            micro_script="$(wget -qO- https://getmic.ro)"
+            ;;
+    esac && (
+        echo "installing micro to '${INSTALL_DIR}'"
+        cd "${INSTALL_DIR}"
+        echo "${micro_script}" | bash
+    )
+}
+
+function __install-util_pyenv() {
+    require git
+
+    (
+        cd "${INSTALL_DIR}"
+        git clone https://github.com/yyuu/pyenv.git
+    )
+}
+
+function __install-util_python-dependencies-ubuntu() {
+    require --root --os ubuntu apt
+
+    apt update
+    apt install -y  \
+        build-essential \
+        libbz2-dev \
+        libc6-dev \
+        libffi-dev \
+        libgdbm-dev \
+        liblzma-dev \
+        libncurses5-dev \
+        libncursesw5-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libssl-dev \
+        openssl \
+        python3-dev \
+        python-pip \
+        python-setuptools \
+        python3-smbus \
+        tk-dev \
+        xz-utils \
+        zlib1g-dev
+}
+
+function __install-util_python-dependencies-rhel() {
+    require --root --os rhel yum
+
+    yum update
+    yum install -y \
+        tk-devel \
+        bzip2-devel \
+        db4-devel \
+        gdbm-devel \
+        libffi-devel \
+        libpcap-devel \
+        ncurses-devel \
+        openssl-devel \
+        readline-devel \
+        sqlite-devel \
+        xz-devel \
+        zlib-devel
+}
+
+function __install-util_pyenv-shared() {
+    require pyenv
+
+    CONFIGURE_OPTS="--enable-shared" PYTHON_CONFIGURE_OPTS="${CONFIGURE_OPTS}" pyenv install -v "${1}"
+}
+
+function __install-util_wtfutil() {
+    require --one-of downloader="curl wget" tar --write "${INSTALL_DIR}"
+
+    local wtfutil_script=""
+    local architecture="$(uname -m)"
+
+    # Setup the architecture
+    local bits
+    if [[ "${architecture}" == "x86_64" ]]; then
+        architecture="amd64"
+    elif [[ "${architecture}" =~ ^amd ]]; then
+        architecture="amd64"
+    elif [[ "${architecture}" =~ ^armv[0-9]+$ ]]; then
+        architecture="armv6"
+    elif [[ "${architecture}" =~ ^arm ]]; then
+        architecture="arm64"
+    else
+        echo "error: unsupported architecture: ${architecture}" >&2
+        return 1
+    fi
+
+    # Determine if mac or linux
+    local os
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        os="darwin"
+    elif [[ "$(uname -s)" == "Linux" ]]; then
+        os="linux"
+    else
+        echo "error: unsupported OS: $(uname -s)" >&2
+        return 1
+    fi
+
+    # Get the latest release for wtfutil
+    local latest_release
+    latest_release=$(get-latest-github-release-names wtfutil wtf | head -n 1)
+
+    # Put the url together
+    local url
+    url="https://github.com/wtfutil/wtf/releases/download/${latest_release}/${latest_release//v/wtf_}_${os}_${architecture}.tar.gz"
+
+    echo "downloading wtfutil from '${url}'"
+
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+
+    (
+        cd "${tmpdir}"
+        case "${downloader}" in
+            curl)
+                curl -L "${url}" | tar -xz
+                ;;
+            wget)
+                wget -O- "${url}" | tar -xz
+                ;;
+        esac
+        mv -v "${tmpdir}"/*/wtfutil "${INSTALL_DIR}"
+    )
+
+    rm -rf "${tmpdir}"
+}
+
+function __install-util_bash-basics() {
+    require --root apt
+
+    apt update
+    apt install -y \
+        tmux \
+        fbterm
+}
+
+function __install-util_code() {
+    require git
+
+    local install_dir
+
+    # If the installation directory wasn't specified, default to $HOME
+    if ! ${INSTALL_DIR_SPECIFIED}; then
+        install_dir="${HOME}"
+    else
+        install_dir="${INSTALL_DIR}"
+    fi
+
+    # Check if the repo is already cloned
+    if [[ -d "${install_dir}/code/.git" ]]; then
+        echo "code is already installed to '${install_dir}', updating"
+        git -C "${install_dir}/code" pull
+        return 0
+    fi
+    
+    (
+        cd "${install_dir}"
+        git clone git@github.com:shitchell/code.git
+    )
+}
+
+function __install-util_dotfiles() {
+    require git
+
+    local install_dir
+
+    # If the installation directory wasn't specified, default to
+    # $HOME/code/git/github.com/shitchell
+    if ! ${INSTALL_DIR_SPECIFIED}; then
+        install_dir="${HOME}/code/git/github.com/shitchell"
+        if ! [[ -d "${HOME}/code" ]]; then
+            echo "error: '${HOME}/code' is not cloned, install 'code' package" >&2
+            return 1
+        elif ! [[ -d "${install_dir}" ]]; then
+            mkdir -p "${install_dir}"
+        fi
+    fi
+
+    (
+        cd "${install_dir}"
+        if [[ -d "${install_dir}/dotfiles/.git" ]]; then
+            echo "dotfiles are already installed to '${INSTALL_DIR}', updating"
+        else
+            git clone git@github.com:shitchell/dotfiles.git
+        fi
+        cd ./dotfiles/
+        ./update.sh
+        ./make install
+    )
+}
+
+function __install-util_test() {
+    require --no-exit foo bar
+
+    echo "requirement status: ${?}"
+    echo "this is a test"
+}
+
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return 1
+
+    local package
+    local invalid_packages=()
+
+    # Validate that all packages are valid
+    for package in "${PACKAGES[@]}"; do
+        if ! list_install_commands | grep -qE "^${package}$"; then
+            invalid_packages+=("${package}")
+        fi
+    done
+    if [[ ${#invalid_packages[@]} -gt 0 ]]; then
+        echo "error: invalid packages: ${invalid_packages[@]}" >&2
+        "${0}" --list >&2
+        return 1
+    fi
+
+    # Install each package
+    for ((i=0; i<${#PACKAGES[@]}; i++)); do
+        package="${PACKAGES[${i}]}"
+        [[ ${i} -gt 0 ]] && echo
+
+        echo "installing ${package}"
+        __install-util_"${package}"
+        
+        if [[ ${?} -ne 0 ]]; then
+            echo "error: failed to install ${package}" >&2
+            return 1
+        fi
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
