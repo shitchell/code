@@ -190,6 +190,8 @@ def deltastr(
         units.append(("minutes", 60))
     if seconds:
         units.append(("seconds", 1))
+    else:
+        units.append(("seconds", 1))
     # then calculate each, using i so we can determine if we're on the last unit
     # and need to calculate using precision
     delta_items = []
@@ -208,7 +210,7 @@ def deltastr(
             num_units, total_seconds = divmod(total_seconds, unit_seconds)
             num_units = int(num_units)
 
-        if num_units <= 0 and not keep_null:
+        if num_units <= 0 and not keep_null and unit_name != "seconds":
             continue
 
         if num_units == 1:
