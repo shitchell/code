@@ -73,7 +73,7 @@ if command -v ip >/dev/null 2>&1; then
             mac = line_parts[2];
             # I have not fully vetted this, so make sure the mac address is
             # valid
-            if (mac ~ /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/) {
+            if (mac ~ /^[[:alnum:]][[:alnum:]]:[[:alnum:]][[:alnum:]]:[[:alnum:]][[:alnum:]]:[[:alnum:]][[:alnum:]]:[[:alnum:]][[:alnum:]]:[[:alnum:]][[:alnum:]]$/) {
                 debug("mac " mac " is valid");
             } else {
                 debug("mac " mac " is invalid");
