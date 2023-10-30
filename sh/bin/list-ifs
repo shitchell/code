@@ -10,10 +10,11 @@ if command -v ip >/dev/null 2>&1; then
             }
         }
         function handle_iface() {
-            if (iface) {
-                print iface "\t" ip "\t" ip6;
+            if (iface && (ip || ip6)) {
+                print iface "\t" mac "\t" ip "\t" ip6;
             }
             iface = "";
+            mac = "";
             ip = "";
             ip6 = "";
         }
@@ -37,6 +38,7 @@ if command -v ip >/dev/null 2>&1; then
         BEGIN {
             iface_is_up = 0;
             iface = "";
+            mac = "";
             ip = "";
             ip6 = "";
         }
@@ -55,15 +57,23 @@ if command -v ip >/dev/null 2>&1; then
                 iface_is_up = 0;
             }
         }
-        
-        iface_is_up && /^ .*inet / {
+
+        iface_is_up && /^[[:space:]]+link\/ether/ {
+            debug("found link: " $0);
+            split($0, line_parts, " ");
+            mac = line_parts[2];
+            debug("mac: " mac);
+            next;
+        }
+
+        iface_is_up && /^[[:space:]]+inet / {
             split($0, line_parts, " ");
             ip = line_parts[2];
             gsub(/\/.*/, "", ip);
             debug("found ip: " ip);
         }
-        
-        iface_is_up && /^ .*inet6 / {
+
+        iface_is_up && /^[[:space:]]+inet6 / {
             # ip6 = gensub(/.*inet6 ([^ ]+)\/.*/, "\\1", "g");
             split($0, line_parts, " ");
             ip6 = line_parts[2];
@@ -91,4 +101,4 @@ elif command -v ifconfig >/dev/null 2>&1; then
 else
     echo "error: no known network management utility found" >&2
     exit 1
-fi
+fi | column -s $'\t' -t -n
