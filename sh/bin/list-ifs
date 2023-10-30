@@ -67,11 +67,18 @@ if command -v ip >/dev/null 2>&1; then
             }
         }
 
-        iface_is_up && /^[[:space:]]+link\/ether/ {
+        iface_is_up && /^[[:space:]]+link\// {
             debug("found link: " $0);
             split($0, line_parts, " ");
             mac = line_parts[2];
-            debug("mac: " mac);
+            # I have not fully vetted this, so make sure the mac address is
+            # valid
+            if (mac ~ /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/) {
+                debug("mac " mac " is valid");
+            } else {
+                debug("mac " mac " is invalid");
+                mac = "";
+            }
             next;
         }
 
