@@ -79,6 +79,9 @@ function help-full() {
                                      output directory
     -P / --no-preserve-path          do not preserve the path of the file(s) in
                                      the output directory
+    -T / --update-timestamps         update the file(s) timestamps to match the
+                                     last commit time
+    --no-update-timestamps           do not update the file(s) timestamps
     -l / --follow-symlinks           for symlinks, copy the file the symlink
                                      points to
     -L / --no-follow-symlinks        for symlinks, copy the symlink itself
@@ -113,6 +116,7 @@ function parse-args() {
     DO_MD5=false
     DO_OVERWRITE=false
     DO_PRESERVE_SYMLINKS=true
+    DO_UPDATE_TIMESTAMPS=false
 
     # Loop over the arguments
     declare -ga FILEPATHS
@@ -155,6 +159,12 @@ function parse-args() {
                 ;;
             -P | --no-preserve-path)
                 DO_PRESERVE_PATH=false
+                ;;
+            -T | --update-timestamps)
+                DO_UPDATE_TIMESTAMPS=true
+                ;;
+            --no-update-timestamps)
+                DO_UPDATE_TIMESTAMPS=false
                 ;;
             -l | --follow-symlinks)
                 DO_PRESERVE_SYMLINKS=false
@@ -305,7 +315,7 @@ function resolve-symlink() {
 
     mode=$(
         git ls-tree "${ref}" "${filepath}" \
-            | awk '{print $1}'\
+            | awk '{print $1}'
     )
     debug "mode: ${mode}"
     if [[ "${mode}" == "120000" ]]; then
@@ -449,11 +459,13 @@ function main() {
                     | awk '{print $1 "T" $2 "Z"}'
         )
 
-        # Update the temporary file's last modified date and mode. The mode from
-        # git is a 6 digit number, e.g. 100644, where we only care about the
-        # last 3 digits. We will also ignore the mode for symlinks if we are
-        # preserving them.
-        touch -d "${last_modified}" "${tmp_filepath}"
+        if ${DO_UPDATE_TIMESTAMPS}; then
+            # Update the temporary file's last modified date and mode. The mode from
+            # git is a 6 digit number, e.g. 100644, where we only care about the
+            # last 3 digits. We will also ignore the mode for symlinks if we are
+            # preserving them.
+            touch -d "${last_modified}" "${tmp_filepath}"
+        fi
         if ! (${is_symlink} && ${DO_PRESERVE_SYMLINKS}); then
             chmod "${target_mode:3}" "${tmp_filepath}"
         fi
@@ -530,10 +542,11 @@ function main() {
                     "${C_SUCCESS}" "done" "${C_RESET}"
             fi
 
-            # Set the file modification time to the commit time
-            debug "setting '${save_path_full}' modification time to '${last_modified}'"
-            touch -hc -d "${last_modified}" "${save_path_full}"
-
+            if ${DO_UPDATE_TIMESTAMPS}; then
+                # Set the file modification time to the commit time
+                debug "setting '${save_path_full}' modification time to '${last_modified}'"
+                touch -hc -d "${last_modified}" "${save_path_full}"
+            fi
             file_copied=true
         fi
 
