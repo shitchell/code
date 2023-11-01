@@ -567,11 +567,13 @@ function __install-util_wtfutil() {
     local bits
     if [[ "${architecture}" == "x86_64" ]]; then
         architecture="amd64"
-    elif [[ "${architecture}" =~ ^amd ]]; then
+    elif [[ "${architecture}" =~ ^"amd" ]]; then
         architecture="amd64"
-    elif [[ "${architecture}" =~ ^armv[0-9]+$ ]]; then
+    elif [[ "${architecture}" =~ ^"armv"[0-9]+$ ]]; then
         architecture="armv6"
-    elif [[ "${architecture}" =~ ^arm ]]; then
+    elif [[ "${architecture}" =~ ^"arm" ]]; then
+        architecture="arm64"
+    elif [[ "${architecture}" =~ ^"aarch" ]]; then
         architecture="arm64"
     else
         echo "error: unsupported architecture: ${architecture}" >&2
