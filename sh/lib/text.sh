@@ -272,7 +272,7 @@ function awk-csv() {
 function uniqueify() {
     local delimiter=" "
     local columns=()
-    local file="/dev/stdin"
+    local file="-"
 
     # Parse arguments
     while [ $# -gt 0 ]; do
@@ -293,7 +293,7 @@ function uniqueify() {
     done
 
     # Use awk to uniqueify the lines
-    awk -v delimiter="${delimiter}" -v columns="${columns[*]}" '
+    awk -F "${delimiter}" -v delimiter="${delimiter}" -v columns="${columns[*]}" '
         BEGIN {
             split(columns, columns_array, " ")
             for (i in columns_array) {
@@ -303,6 +303,7 @@ function uniqueify() {
                 } else {
                     column_array[column] = 0
                 }
+                print "-- column: " column " | i: " i " | column_array[column]: " column_array[column] > "/dev/stderr";
             }
         }
         {
@@ -314,11 +315,13 @@ function uniqueify() {
                     key = key delimiter "\"" $i "\""
                 }
             }
+            print "-- key: " key > "/dev/stderr";
             if (!seen[key]++) {
                 print
             }
+            else { print "skipping: " $0 > "/dev/stderr" }
         }
-    ' "${file}"
+    ' < <(cat "${file}")
 }
 
 ## json ########################################################################

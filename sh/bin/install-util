@@ -63,7 +63,10 @@ function parse-args() {
                 help-usage
                 echo
                 echo "Packages:"
-                list_install_commands | awk '{print "    " $0}'
+                list-install-commands | awk '{print "    " $0}'
+                echo
+                echo "Meta Packages:"
+                list-meta-packages | awk '{print "    " $0}'
                 exit 0
                 ;;
             *)
@@ -100,13 +103,51 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
-function list_install_commands() {
+function list-install-commands() {
     # Read the env for all functions that start with 'install_'
     declare -F | awk '
         $3 ~ /^__install-util/ {
             gsub(/^__install-util_/, "", $3)
             print $3
         }'
+}
+
+function list-meta-packages() {
+    local meta_packages=()
+    local meta_package_name meta_package meta_subpackage
+
+    # Find all meta package variable names, then loop over them and print the
+    # name of each meta package + its subpackages
+    readarray -t meta_packages < <(
+        declare -p | awk -F '__|=' '
+            /^declare -a __install_meta__/ {
+                print $3
+            }'
+    )
+    for meta_package_name in "${meta_packages[@]}"; do
+        declare -n meta_package="__install_meta__${meta_package_name}"
+        echo -n "${meta_package_name}: "
+        for ((i=0; i<${#meta_package[@]}; i++)); do
+            meta_subpackage="${meta_package[${i}]}"
+            echo -n "${meta_subpackage}"
+            [[ ${i} -lt $((${#meta_package[@]} - 1)) ]] && echo -n ", "
+        done
+        echo
+    done
+}
+
+function package-exists() {
+    local package="${1}"
+    local package_exists=false
+
+    # Check if the package or meta package exists
+    if declare -F "__install-util_${package}" >/dev/null 2>&1; then
+        package_exists=true
+    elif declare -p "__install_meta__${package}" >/dev/null 2>&1; then
+        package_exists=true
+    fi
+
+    ${package_exists}
 }
 
 function get-latest-github-tag() {
@@ -255,8 +296,12 @@ function require() {
                 do_quiet=true
                 shift 1
                 ;;
-            --no-exit)
+            --continue-on-error)
                 do_exit_on_failure=false
+                shift 1
+                ;;
+            --exit-on-error)
+                do_exit_on_failure=true
                 shift 1
                 ;;
             *)
@@ -579,7 +624,13 @@ function __install-util_bash-basics() {
     apt update
     apt install -y \
         tmux \
-        fbterm
+        fbterm \
+        tree \
+        stow \
+        htop \
+        cmatrix \
+        elinks \
+        links2
 }
 
 function __install-util_code() {
@@ -638,11 +689,25 @@ function __install-util_dotfiles() {
 }
 
 function __install-util_test() {
-    require --no-exit foo bar
+    require --continue-on-error foo bar
 
     echo "requirement status: ${?}"
     echo "this is a test"
 }
+
+function __install-util_test2() {
+    require foo bar
+
+    echo "requirement status: ${?}"
+    echo "this is another test"
+}
+
+
+## meta packages ###############################################################
+################################################################################
+
+__install_meta__home=("code" "dotfiles")
+__install_meta__tests=("test" "test2")
 
 
 
@@ -652,30 +717,58 @@ function __install-util_test() {
 function main() {
     parse-args "${@}" || return 1
 
-    local package
+    local package meta_package meta_subpackage
+    local package_function package_metavar
+    local package_exit_code meta_subpackage_exit_code
     local invalid_packages=()
+    local failed_packages=()
+    local success_packages=()
+    local s
 
     # Validate that all packages are valid
     for package in "${PACKAGES[@]}"; do
-        if ! list_install_commands | grep -qE "^${package}$"; then
+        if ! package-exists "${package}"; then
             invalid_packages+=("${package}")
         fi
     done
     if [[ ${#invalid_packages[@]} -gt 0 ]]; then
-        echo "error: invalid packages: ${invalid_packages[@]}" >&2
+        s=$([[ ${#invalid_packages[@]} -gt 1 ]] && printf "s")
+        echo "error: invalid package${s}: ${invalid_packages[@]}" >&2
         "${0}" --list >&2
         return 1
     fi
 
     # Install each package
-    for ((i=0; i<${#PACKAGES[@]}; i++)); do
-        package="${PACKAGES[${i}]}"
-        [[ ${i} -gt 0 ]] && echo
+    for package in "${PACKAGES[@]}"; do
+        package_exit_code=0
+        package_function="__install-util_${package}"
+        package_metavar="__install_meta__${package}"
 
-        echo "installing ${package}"
-        __install-util_"${package}"
+        # Check if a function or meta variable exists for this package
+        if declare -f "${package_function}" &> /dev/null; then
+            echo "* installing package '${package}'"
+            "${package_function}" > >(sed 's/^/  /') 2> >(sed 's/^/  /' >&2)
+            package_exit_code=${?}
+        elif declare -p "${package_metavar}" &> /dev/null; then
+            # Setup package metavar as an array
+            declare -n meta_package="${package_metavar}"
+
+            # Install each meta subpackage
+            echo "* installing meta package '${package}' (${meta_package[@]})"
+            for meta_subpackage in "${meta_package[@]}"; do
+                "${0}" "${meta_subpackage}"
+
+                meta_subpackage_exit_code=${?}
+                if [[ ${meta_subpackage_exit_code} -ne 0 ]]; then
+                    package_exit_code=${meta_subpackage_exit_code}
+                fi
+            done > >(sed 's/^/  /') 2> >(sed 's/^/  /' >&2)
+        else
+            echo "error: no installation candidate for '${package}'" >&2
+            return 1
+        fi
         
-        if [[ ${?} -ne 0 ]]; then
+        if [[ ${package_exit_code} -ne 0 ]]; then
             echo "error: failed to install ${package}" >&2
             return 1
         fi
