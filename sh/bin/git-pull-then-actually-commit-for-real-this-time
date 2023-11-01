@@ -14,7 +14,7 @@ trap reset-back-to-head EXIT
 
 RESET_COUNT="${1:-1}"
 HEAD=""
-EXIT_CODE=""
+EXIT_CODE=0
 
 # ensure RESET_COUNT is a number
 if ! [[ "${RESET_COUNT}" =~ ^[0-9]+$ ]]; then
