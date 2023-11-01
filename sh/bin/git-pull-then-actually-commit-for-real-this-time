@@ -18,7 +18,7 @@ echo "${commits[@]}"
 # reset the head
 echo -n "* resetting HEAD to ${commits[$((RESET_COUNT - 1))]} ... "
 # git reset --hard HEAD~"${RESET_COUNT}"
-errors=$(git reset --hard "${commits[$((RESET_COUNT - 1))]}" 2>&1)
+errors=$(git reset --hard HEAD~${RESET_COUNT} 2>&1)
 if [[ ${?} -ne 0 ]]; then
     echo "error"
     echo "${errors}"
