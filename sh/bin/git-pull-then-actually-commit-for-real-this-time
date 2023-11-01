@@ -1,16 +1,48 @@
 #!/usr/bin/env bash
-# Redo the most recent commit by resetting head and re-commiting
+# Redo the most recent commit(s) by resetting head and re-commiting
 
 RESET_COUNT="${1:-1}"
 
-# get the hash for the last commit
-commit=$(git log -1 --pretty=%H)
+# ensure RESET_COUNT is a number
+if ! [[ "${RESET_COUNT}" =~ ^[0-9]+$ ]]; then
+    echo "error: arg must be an integer"
+    exit 1
+fi
+
+# get the hash for the last commit(s)
+s=$([[ "${RESET_COUNT}" -gt 1 ]] && echo "es")
+echo -n "* getting the last ${RESET_COUNT} commit hash${s} ... "
+readarray -t commits < <(git log -"${RESET_COUNT}" --pretty=%h --reverse)
+echo "done"
 
 # reset the head
-git reset --hard HEAD~"$RESET_COUNT"
+echo -n "* resetting HEAD to ${commits[$((RESET_COUNT - 1))]} ... "
+git reset --hard HEAD~"${RESET_COUNT}"
+echo "done"
 
 # pull the changes
-git pull
+echo -n "* pulling the changes ... "
+errors=$(git pull 2>&1)
+if [[ ${?} -ne 0 ]]; then
+    echo "error"
+    echo "${errors}"
+    exit 1
+fi
+echo "done"
 
 # recommit the changes
-git cherry-pick "${commit}"
+for ((i=0; i<${#commits[@]}; i++)); do
+    commit="${commits[${i}]}"
+    echo -n "* cherry-picking ${commit} ... "
+
+    errors=$(git cherry-pick "${commit}" 2>&1)
+    if [[ ${?} -ne 0 ]]; then
+        echo "error"
+        echo "${errors}"
+        echo
+        echo "error: failed to cherry-pick ${commit}"
+        echo "error: did not cherry-pick ${commits[@]:0:${i}}"
+        exit 1
+    fi
+    echo "done"
+done
