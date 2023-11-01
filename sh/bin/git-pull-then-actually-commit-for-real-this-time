@@ -17,7 +17,13 @@ echo "done"
 
 # reset the head
 echo -n "* resetting HEAD to ${commits[$((RESET_COUNT - 1))]} ... "
-git reset --hard HEAD~"${RESET_COUNT}"
+# git reset --hard HEAD~"${RESET_COUNT}"
+errors=$(git reset --hard "${commits[$((RESET_COUNT - 1))]}" 2>&1)
+if [[ ${?} -ne 0 ]]; then
+    echo "error"
+    echo "${errors}"
+    exit 1
+fi
 echo "done"
 
 # pull the changes
