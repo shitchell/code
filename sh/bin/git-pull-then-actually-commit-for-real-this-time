@@ -13,7 +13,7 @@ fi
 s=$([[ "${RESET_COUNT}" -gt 1 ]] && echo "es")
 echo -n "* getting the last ${RESET_COUNT} commit hash${s} ... "
 readarray -t commits < <(git log -"${RESET_COUNT}" --pretty=%h --reverse)
-echo "done"
+echo "${commits[@]}"
 
 # reset the head
 echo -n "* resetting HEAD to ${commits[$((RESET_COUNT - 1))]} ... "
