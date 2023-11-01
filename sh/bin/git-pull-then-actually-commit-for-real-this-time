@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
 # Redo the most recent commit(s) by resetting head and re-commiting
 
+## trap to reset back to HEAD if we exit early
+function reset-back-to-head() {
+    if [[ "${EXIT_CODE}" != "0" ]]; then
+        echo "error: exiting early"
+        echo "error: resetting back to HEAD"
+        git reset --hard HEAD
+        exit 1
+    fi
+}
+trap reset-back-to-head EXIT
+
 RESET_COUNT="${1:-1}"
+HEAD=""
+EXIT_CODE=""
 
 # ensure RESET_COUNT is a number
 if ! [[ "${RESET_COUNT}" =~ ^[0-9]+$ ]]; then
@@ -9,15 +22,32 @@ if ! [[ "${RESET_COUNT}" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
+# get the hash for HEAD
+echo -n "* getting current HEAD ... "
+HEAD=$(git log -1 --pretty=%h)
+echo "${HEAD}"
+
 # get the hash for the last commit(s)
 s=$([[ "${RESET_COUNT}" -gt 1 ]] && echo "es")
 echo -n "* getting the last ${RESET_COUNT} commit hash${s} ... "
 readarray -t commits < <(git log -"${RESET_COUNT}" --pretty=%h --reverse)
+if [[ ${#commits[@]} -ne ${RESET_COUNT} ]]; then
+    echo "error"
+    echo "error: failed to get the last ${RESET_COUNT} commit hash${s}"
+    EXIT_CODE=1
+    exit ${EXIT_CODE}
+fi
 echo "${commits[@]}"
 
 # get the hash for the commit we're resetting to
 echo -n "* getting commit hash for HEAD~${RESET_COUNT} ... "
 reset_commit=$(git log -1 --pretty=%h HEAD~"${RESET_COUNT}")
+if [[ -z "${reset_commit}" ]]; then
+    echo "error"
+    echo "error: failed to get commit hash for HEAD~${RESET_COUNT}"
+    EXIT_CODE=1
+    exit ${EXIT_CODE}
+fi
 echo "${reset_commit}"
 
 # reset the head
@@ -27,7 +57,8 @@ errors=$(git reset --hard ${reset_commit} 2>&1)
 if [[ ${?} -ne 0 ]]; then
     echo "error"
     echo "${errors}"
-    exit 1
+    EXIT_CODE=1
+    exit ${EXIT_CODE}
 fi
 echo "done"
 
@@ -37,7 +68,8 @@ errors=$(git pull 2>&1)
 if [[ ${?} -ne 0 ]]; then
     echo "error"
     echo "${errors}"
-    exit 1
+    EXIT_CODE=1
+    exit ${EXIT_CODE}
 fi
 echo "done"
 
@@ -53,7 +85,8 @@ for ((i=0; i<${#commits[@]}; i++)); do
         echo
         echo "error: failed to cherry-pick ${commit}"
         echo "error: did not cherry-pick ${commits[@]:0:${i}}"
-        exit 1
+        EXIT_CODE=1
+        exit ${EXIT_CODE}
     fi
     echo "done"
 done
