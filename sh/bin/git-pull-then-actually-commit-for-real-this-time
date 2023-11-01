@@ -15,10 +15,15 @@ echo -n "* getting the last ${RESET_COUNT} commit hash${s} ... "
 readarray -t commits < <(git log -"${RESET_COUNT}" --pretty=%h --reverse)
 echo "${commits[@]}"
 
+# get the hash for the commit we're resetting to
+echo -n "* getting commit hash for HEAD~${RESET_COUNT} ... "
+reset_commit=$(git log -1 --pretty=%h HEAD~"${RESET_COUNT}")
+echo "${reset_commit}"
+
 # reset the head
-echo -n "* resetting HEAD to ${commits[$((RESET_COUNT - 1))]} ... "
+echo -n "* resetting HEAD to ${reset_commit} ... "
 # git reset --hard HEAD~"${RESET_COUNT}"
-errors=$(git reset --hard HEAD~${RESET_COUNT} 2>&1)
+errors=$(git reset --hard ${reset_commit} 2>&1)
 if [[ ${?} -ne 0 ]]; then
     echo "error"
     echo "${errors}"
