@@ -92,7 +92,7 @@ function main() {
     # random results, we will run separate `find` commands one at a time for
     # each directory and then combine the results.
     local CANDIDATE_FILES=()
-    
+
     FILES=($(find "${@}" "${FIND_ARGS[@]}" | shuf | head -n "${NUM}"))
 
     # Print the files
