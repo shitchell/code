@@ -63,7 +63,7 @@ function parse-args() {
                 break
                 ;;
             -*)
-                echo-stderr "error: unknown option: ${1}"
+                echo "error: unknown option: ${1}" >&2
                 return 1
                 ;;
             *)
