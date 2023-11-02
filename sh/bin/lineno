@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+DATA=""
+FILEPATH="${1}"
+
+if [[ -z "${FILEPATH}" ]]; then
+    DATA=$(cat)
+else
+    DATA=$(cat "${FILEPATH}")
+fi
+
+# Get the line numbers
+LINE_COUNT=$(wc -l <<< "${DATA}")
+awk -v padding=${#LINE_COUNT} '{printf("%"padding"s. %s\n", NR, $0)}' <<< "${DATA}"
