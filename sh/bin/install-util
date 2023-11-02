@@ -475,6 +475,42 @@ function require() {
 }
 
 
+## helpful functions ###########################################################
+################################################################################
+
+# @description Run apt commands without starting any services
+# @usage apt-serviceless <apt command>
+# @attribution https://askubuntu.com/a/77530
+# TODO: the comments in the above attribution say this is a hack that might
+# TODO: break sometimes, so... look into that
+function apt-serviceless() {
+    local apt_command=(apt "${@}")
+    # Create a temporary directory to store symlinks to `true` for all service
+    # management commands. That way, when we run `apt`, if it attempts to start
+    # any services, it will instead run `true` and do nothing.
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    local service_commands=(
+        "initctl" "invoke-rc.d" "restart"
+        "service" "start" "stop" "systemctl"
+        "start-stop-daemon" "deb-systemd-helper"
+    )
+    local true_path=$(which true)
+
+    # Create symlinks
+    for cmd in "${service_commands[@]}"; do
+        ln -s "${true_path}" "${tmpdir}/${cmd}"
+    done
+
+    # Run the apt command
+    env "PATH=${tmpdir}:${PATH}" "${apt_command[@]}"
+    local exit_code=${?}
+
+    # Remove the temporary directory
+    rm -rf "${tmpdir}"
+}
+
+
 ## install functions ###########################################################
 ################################################################################
 
@@ -626,7 +662,6 @@ function __install-util_bash-basics() {
     apt update
     apt install -y \
         tmux \
-        fbterm \
         tree \
         stow \
         htop \
@@ -634,6 +669,18 @@ function __install-util_bash-basics() {
         elinks \
         links2 \
         speedtest-cli
+}
+
+function __install_util_console() {
+    require --root apt
+
+    # TODO: install this in such a way that GPM isn't enabled by default
+    apt update
+    apt install -y \
+        fbterm \
+        tmux \
+        fbi \
+        gpm
 }
 
 function __install-util_code() {
