@@ -74,7 +74,7 @@ function parse-args() {
                 DO_INCLUDE_SUBMODULES=false
                 ;;
             -*)
-                echo-stderr "error: unknown option: ${1}"
+                echo "error: unknown option: ${1}" >&2
                 ;;
             *)
                 DIRECTORY="${1}"
