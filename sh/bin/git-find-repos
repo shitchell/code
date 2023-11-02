@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+#
+# Searches for git repositories in the current directory
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename $0) [-hvq] [-m|--maxdepth <depth>] [-d|--directory <path>] subcommand [subcommand args...]"
+}
+
+function help-epilogue() {
+    echo "run git commands in all git repositories in the specified directory"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+    -h                          display usage
+    --help                      display this help message
+    -m/--maxdepth <n>           the maximum depth to search for git repositories
+                                (default: 2)
+    -d/--directory <path>       the directory to search for git repositories
+    -g/--include-git-dir        include the '.git/' directory in output
+    -G/--no-include-git-dir     do not include the '.git/' directory in output
+    -s/--include-submodules     include submodules in the output
+    -S/--no-include-submodules  do not include submodules in the output
+EOF
+}
+
+function parse-args() {
+    # Default values
+    MAXDEPTH=100
+    DIRECTORY=$(pwd)
+    DO_INCLUDE_GIT_DIR=false
+    DO_INCLUDE_SUBMODULES=false
+
+    # Loop over the arguments
+    declare -ga REFS
+    declare -ga FILEPATHS
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h | --help)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            -m | --maxdepth)
+                if [[ ! ${2} =~ ^[0-9]+$ ]]; then
+                    echo "error: maxdepth must be an integer" >&2
+                    exit 1
+                fi
+                # Set maxdepth to 1 greater than the specified value since we
+                # need to include the '.git' sub-directory in our search
+                MAXDEPTH=$((${2} + 1))
+                shift 1
+                ;;
+            -d | --directory)
+                DIRECTORY=${2}
+                shift 1
+                ;;
+            -g | --include-git-dir)
+                DO_INCLUDE_GIT_DIR=true
+                ;;
+            -G | --no-include-git-dir)
+                DO_INCLUDE_GIT_DIR=false
+                ;;
+            -s | --include-submodules)
+                DO_INCLUDE_SUBMODULES=true
+                ;;
+            -S | --no-include-submodules)
+                DO_INCLUDE_SUBMODULES=false
+                ;;
+            -*)
+                echo-stderr "error: unknown option: ${1}"
+                ;;
+            *)
+                DIRECTORY="${1}"
+                ;;
+        esac
+        shift 1
+    done
+    
+    if [[ ! -d "${DIRECTORY}" ]]; then
+        echo "error: directory does not exist: ${DIRECTORY}" >&2
+        return 1
+    fi
+    
+    if [[ ! -r "${DIRECTORY}" ]]; then
+        echo "error: cannot read directory: ${DIRECTORY}" >&2
+        return 1
+    fi
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+    
+    local find_args bare_repos
+    declare -A bare_repos
+
+    # Find all git repositories in the specified directory
+    # local git_repos=()
+    # while IFS= read -r repo; do
+        # git_repos+=("${repo}")
+    # done < <(find -L "${DIRECTORY}" -maxdepth ${MAXDEPTH} -type d -name '\.git' -printf '%h\n')
+    find_args=(
+        "-maxdepth" ${MAXDEPTH}
+        "-type" "d"
+        "-name" "\.git"
+    )
+    ! ${DO_INCLUDE_GIT_DIR} && find_args+=("-printf" "%h\n")
+    find -L "${DIRECTORY}" "${find_args[@]}"
+
+    # Find all bare git repositories in the specified directory
+    while IFS= read -r repo; do
+        # Make sure we haven't already found this repo
+        if [[ -z "${bare_repos[${repo}]}" ]]; then
+            # Light check to make sure this is the root of a git repo
+            if [[ -d "${repo}/objects" && -d "${repo}/hooks" ]]; then
+                # More thorough check to make sure this is a bare git repo
+                if git -C "${repo}" rev-parse --is-bare-repository >/dev/null 2>&1; then
+                    bare_repos["${repo}"]=true
+                    echo "${repo}"
+                fi
+            fi
+            # Track this repo
+            bare_repos["${repo}"]=false
+        fi
+    done < <(
+        find -L "${DIRECTORY}" \
+            -type f \
+            -name HEAD \
+            -not \( -path "*/.git/*" -prune \) \
+            -printf '%h\n'
+    )
+}
+
+## run #########################################################################
+################################################################################
+
+[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
