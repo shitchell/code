@@ -632,7 +632,8 @@ function __install-util_bash-basics() {
         htop \
         cmatrix \
         elinks \
-        links2
+        links2 \
+        speedtest-cli
 }
 
 function __install-util_code() {
