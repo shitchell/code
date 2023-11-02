@@ -6,11 +6,11 @@
 ################################################################################
 
 function help-usage() {
-    echo "usage: $(basename $0) [-hvq] [-m|--maxdepth <depth>] [-d|--directory <path>] subcommand [subcommand args...]"
+    echo "usage: $(basename $0) [-hvq] [-m|--maxdepth <depth>] [-d|--directory <path>] [-g|--include-git-dir] [-G|--no-include-git-dir] [-l|--follow-symlinks] [-L|--no-follow-symlinks] <directory>"
 }
 
 function help-epilogue() {
-    echo "run git commands in all git repositories in the specified directory"
+    echo "find git repositories"
 }
 
 function help-full() {
@@ -25,8 +25,12 @@ function help-full() {
     -d/--directory <path>       the directory to search for git repositories
     -g/--include-git-dir        include the '.git/' directory in output
     -G/--no-include-git-dir     do not include the '.git/' directory in output
-    -s/--include-submodules     include submodules in the output
-    -S/--no-include-submodules  do not include submodules in the output
+    *-s/--include-submodules     include submodules in the output
+    *-S/--no-include-submodules  do not include submodules in the output
+    -l/--follow-symlinks        follow symlinks
+    -L/--no-follow-symlinks     do not follow symlinks
+
+    * not implemented yet
 EOF
 }
 
@@ -36,10 +40,9 @@ function parse-args() {
     DIRECTORY=$(pwd)
     DO_INCLUDE_GIT_DIR=false
     DO_INCLUDE_SUBMODULES=false
+    DO_FOLLOW_SYMLINKS=false
 
     # Loop over the arguments
-    declare -ga REFS
-    declare -ga FILEPATHS
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
             -h | --help)
@@ -72,6 +75,12 @@ function parse-args() {
                 ;;
             -S | --no-include-submodules)
                 DO_INCLUDE_SUBMODULES=false
+                ;;
+            -l | --follow-symlinks)
+                DO_FOLLOW_SYMLINKS=true
+                ;;
+            -L | --no-follow-symlinks)
+                DO_FOLLOW_SYMLINKS=false
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
@@ -108,15 +117,31 @@ function main() {
     # while IFS= read -r repo; do
         # git_repos+=("${repo}")
     # done < <(find -L "${DIRECTORY}" -maxdepth ${MAXDEPTH} -type d -name '\.git' -printf '%h\n')
-    find_args=(
+    find_args=()
+    ${DO_FOLLOW_SYMLINKS} && find_args+=("-L")
+    find_args+=(
+        "${DIRECTORY}"
         "-maxdepth" ${MAXDEPTH}
         "-type" "d"
         "-name" "\.git"
     )
     ! ${DO_INCLUDE_GIT_DIR} && find_args+=("-printf" "%h\n")
-    find -L "${DIRECTORY}" "${find_args[@]}"
+    find "${find_args[@]}"
 
     # Find all bare git repositories in the specified directory
+    find_args=()
+    ${DO_FOLLOW_SYMLINKS} && find_args+=("-L")
+    find_args+=(
+        "${DIRECTORY}"
+        "-maxdepth" ${MAXDEPTH}
+        "-type" "f"
+        "-name" "HEAD"
+        "-not" "("
+            "-path" "*/.git/*"
+            "-prune"
+        ")"
+        "-printf" "%h\n"
+    )
     while IFS= read -r repo; do
         # Make sure we haven't already found this repo
         if [[ -z "${bare_repos[${repo}]}" ]]; then
@@ -131,13 +156,7 @@ function main() {
             # Track this repo
             bare_repos["${repo}"]=false
         fi
-    done < <(
-        find -L "${DIRECTORY}" \
-            -type f \
-            -name HEAD \
-            -not \( -path "*/.git/*" -prune \) \
-            -printf '%h\n'
-    )
+    done < <(find "${find_args[@]}")
 }
 
 ## run #########################################################################
