@@ -107,23 +107,9 @@ function main() {
 
     # Find all git repositories in the specified directory
     local git_repos=()
-    while IFS= read -r repo; do
-        git_repos+=("${repo}")
-    done < <(find -L "${DIRECTORY}" -maxdepth ${MAXDEPTH} -type d -name '\.git' -printf '%h\n')
-
-    # Find all bare git repositories in the specified directory
-    while IFS= read -r repo; do
-        # Make sure we haven't already found this repo
-        if ! is-in "${repo}" "${git_repos[@]}"; then
-            # Light check to make sure this is the root of a git repo
-            if [ -d "${repo}/objects" ] && [ -d "${repo}/hooks" ]; then
-                # More thorough check to make sure this is a bare git repo
-                if git -C "${repo}" rev-parse --is-bare-repository >/dev/null 2>&1; then
-                    git_repos+=("${repo}")
-                fi
-            fi
-        fi
-    done < <(find -L "${DIRECTORY}" -maxdepth ${MAXDEPTH} -type d -not \( -path "*/.git*" -prune \) -printf '%h\n')
+    readarray -t git_repos < <(
+        git find-repos --maxdepth ${MAXDEPTH} "${DIRECTORY}"
+    )
 
     if [ ${VERBOSITY} -ge 3 ]; then
         echo-comment "Found ${#git_repos[@]} git repositories in ${DIRECTORY}:"
