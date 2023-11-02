@@ -55,12 +55,16 @@ function parse-args() {
                 help-full
                 exit 0
                 ;;
-            --foo)
+            -f | --foo)
                 echo "oh my foo"
                 ;;
             --)
                 shift 1
                 break
+                ;;
+            -*)
+                echo-stderr "error: unknown option: ${1}"
+                return 1
                 ;;
             *)
                 FILEPATHS+=("${1}")
