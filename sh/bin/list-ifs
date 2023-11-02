@@ -9,8 +9,8 @@ if command -v column >/dev/null 2>&1; then
         column_cmd=("column" "-s" $'\t' "-t" "-n")
     fi
 fi
-if command -v ip >/dev/null 2>&1 && false; then
-    echo "using ip addr"
+if command -v ip >/dev/null 2>&1; then
+    [[ "${DEBUG}" =~ ^"1"|"true"$ ]] && echo "using ip addr"
     ip addr \
         | awk -v DEBUG="${DEBUG}" '
         function debug(msg) {
@@ -102,7 +102,7 @@ if command -v ip >/dev/null 2>&1 && false; then
             handle_iface();
         }'
 elif command -v ifconfig >/dev/null 2>&1; then
-    echo "using ifconfig -a"
+    [[ "${DEBUG}" =~ ^"1"|"true"$ ]] && echo "using ip addr"
     ifconfig -a \
         | grep -B1 inet \
         | sed -E '
