@@ -1,5 +1,5 @@
-# Print a debug message if DEBUG=1 or write it to a log file if
-# DEBUG_LOG=<filepath> is set
+# @description Print a debug message if DEBUG or DEBUG_LOG is set
+# @usage debug <msg> [<msg> ...]
 function debug() {
     local prefix timestamp
     if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
