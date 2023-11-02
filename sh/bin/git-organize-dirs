@@ -22,17 +22,20 @@ function help-full() {
     echo
     echo "Options:"
     cat << EOF
-    -h                       display usage
-    --help                   display this help message
-    -s/--source-dir <dir>    the directory to search for git repos
-                             (default: ./)
-    -t/--target-dir <dir>    organize the structured repos into this directory
-                             (default: source directory)
-    -d/--directory <dir>     set the source and target directories to <dir>
-    -x/--exclude <regexp>    exclude repos whose full filepath matches <regexp>
-    -n/--dry-run             only print updated paths, do not move any repos
-    -c/--copy                always copy repos to target instead of moving
-    -D/--no-delete           do not delete source repos after copying
+    -h                            display usage
+    --help                        display this help message
+    -s/--source-dir <dir>         the directory to search for git repos
+                                  (default: ./)
+    -t/--target-dir <dir>         organize the structured repos into this directory
+                                  (default: source directory)
+    -d/--directory <dir>          set the source and target directories to <dir>
+    -m/--maxdepth <depth>         the maximum depth to search for git repos
+                                  (default: 3)
+    -x/--exclude <regexp>         exclude repos whose full filepath matches <regexp>
+    -R/--exclude-remote <regexp>  exclude repos whose remote url matches <regexp>
+    -n/--dry-run                  only print updated paths, do not move any repos
+    -c/--copy                     always copy repos to target instead of moving
+    -D/--no-delete                do not delete source repos after copying
 EOF
 }
 
@@ -41,11 +44,13 @@ function parse-args() {
     FILEPATHS=()
     SOURCE_DIRECTORY="."
     TARGET_DIRECTORY=""
-    EXCLUDE_PATTERNS=()
+    MAX_DEPTH=3
+    EXCLUDE_PATH_PATTERNS=()
+    EXCLUDE_REMOTE_PATTERNS=()
     DO_DRY_RUN=false
     DO_DELETE=true
     DO_COPY=false
-    
+
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
@@ -57,9 +62,6 @@ function parse-args() {
             --help)
                 help-full
                 exit 0
-                ;;
-            --foo)
-                echo "oh my foo"
                 ;;
             -s | --source-dir)
                 SOURCE_DIRECTORY="${2}"
@@ -74,8 +76,20 @@ function parse-args() {
                 TARGET_DIRECTORY="${2}"
                 shift 1
                 ;;
+            -m | --maxdepth)
+                if ! [[ "${2}" =~ ^[0-9]+$ ]]; then
+                    echo "error: --maxdepth must be an integer" >&2
+                    exit 1
+                fi
+                MAX_DEPTH="${2}"
+                shift 1
+                ;;
             -x | --exclude)
-                EXCLUDE_PATTERNS+=("${2}")
+                EXCLUDE_PATH_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            -R | --exclude-remote)
+                EXCLUDE_REMOTE_PATTERNS+=("${2}")
                 shift 1
                 ;;
             -n | --dry-run)
@@ -102,7 +116,11 @@ function parse-args() {
         esac
         shift 1
     done
-    
+
+    # Remove any trailing slashes from the source and target directories
+    SOURCE_DIRECTORY="${SOURCE_DIRECTORY%/}"
+    TARGET_DIRECTORY="${TARGET_DIRECTORY%/}"
+
     # If -- was used, collect the remaining arguments
     while [[ ${#} -gt 0 ]]; do
         SOURCE_DIRECTORY="${1}"
@@ -120,11 +138,42 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
-# @description Do stuff
-# @usage do-stuff
-function do-stuff() {
-    echo -n "i'm doin the stuff"
-    [[ -n "${1}" ]] && echo " to ${1}" || echo
+# @description Print a debug message if DEBUG or DEBUG_LOG is set
+# @usage debug <msg> [<msg> ...]
+function debug() {
+    local prefix timestamp
+    if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        prefix="\033[36m[${timestamp}]\033[0m "
+        prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
+        [[ "${FUNCNAME[1]}" != "main" ]] && prefix+="\033[1m:${FUNCNAME[1]}()\033[0m"
+        prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
+        printf "%s\n" "${@}" \
+            | awk -v prefix="${prefix}" '{print prefix $0}' >> "${DEBUG_LOG:-/dev/stderr}"
+    fi
+}
+
+# @description Parse a URL encoded string into plain text
+# @usage urldecode <string>
+# @usage echo <string> | urldecode
+function urldecode() {
+    local string="${1}"
+    local LANG=C
+    local IFS=
+
+    if [[ -z "${string}" ]]; then
+        string="$(cat && echo x)"
+        string="${string%x}"
+    fi
+
+    if [[ -z "${string}" ]]; then
+        return 1
+    fi
+
+    # This is perhaps a risky gambit, but since all escape characters must be
+    # encoded, we can replace %NN with \xNN and pass the lot to printf -b, which
+    # will decode hex for us
+    printf '%b' "${string//%/\\x}"
 }
 
 # @description Parse git repo URL and return a directory path
@@ -133,11 +182,24 @@ function do-stuff() {
 # @exit 2 failed to parse host
 # @exit 3 unsupported host
 # @exit 4 host regex failed
+# @exit 5 exceeded recursion limit
 function remote-url-to-directory() {
+    debug "remote-url-to-directory: ${*}"
+
     local url="${1}"
+    local recurse="${2:-0}" # number of times we've recursed
+    local exit_code=0
+    local error_message="" error_message_tmp=""
     local directory
     local host org user project repo
     local is_https=false is_ssh=false
+    local ssh_config_host
+
+    # Limit recursive calls to 3
+    if [[ ${recurse} -ge 3 ]]; then
+        echo "error: exceeded recursion limit" >&2
+        return 5
+    fi
 
     # Ensure a url was given
     [[ -z "${url}" ]] && echo "error: no url given" >&2 && return 1
@@ -164,8 +226,11 @@ function remote-url-to-directory() {
         return 2
     fi
 
+    debug "host: ${host}, is_https: ${is_https}, is_ssh: ${is_ssh}"
+
     if [[ -z "${host}" ]]; then
         # Ignore for now
+        debug "unable to parse host from URL"
         echo "error: unable to parse host from URL" >&2
         return 2
     fi
@@ -181,38 +246,38 @@ function remote-url-to-directory() {
                     repo="${BASH_REMATCH[3]}"
                     directory="${host}/${org}/${project}/${repo}"
                 else
-                    # Ignore for now
-                    echo "error: unable to parse '${host}' URL" >&2
-                    return 4
+                    error_message="unable to parse '${host}' URL"
+                    exit_code=4
                 fi
             fi
             ;;
-        "ssh.dev.azure.com")
+        "ssh.dev.azure.com" | "vs-ssh.visualstudio.com")
             if ${is_ssh}; then
                 # Parse out the organization and project
                 if [[ "${url}" =~ ^[^@]+@[^:]+:v3/([^/]+)/([^/]+)/(.*) ]]; then
                     org="${BASH_REMATCH[1]}"
                     project="${BASH_REMATCH[2]}"
                     repo="${BASH_REMATCH[3]}"
-                    directory="${host#ssh.}/${org}/${project}/${repo}"
+                    directory="dev.azure.com/${org}/${project}/${repo}"
                 else
-                    # Ignore for now
-                    echo "error: unable to parse '${host}' URL" >&2
-                    return 4
+                    error_message="unable to parse '${host}' URL"
+                    exit_code=4
                 fi
             fi
             ;;
         "github.com")
             if ${is_https}; then
                 # Parse out the organization/user and project
-                if [[ "${url}" =~ ^https?://[^/]+/([^/]+)/([^/]+)\.git$ ]]; then
+                if [[
+                    "${url}" =~ ^https?://[^/]+/([^/]+)/([^/]+)\.git$
+                    || "${url}" =~ ^https?://[^/]+/([^/]+)/([^/]+)$
+                ]]; then
                     user="${BASH_REMATCH[1]}"
                     repo="${BASH_REMATCH[2]}"
                     directory="${host}/${user}/${repo}"
                 else
-                    # Ignore for now
-                    echo "error: unable to parse '${host}' URL" >&2
-                    return 4
+                    error_message="unable to parse '${host}' URL"
+                    exit_code=4
                 fi
             elif ${is_ssh}; then
                 # Parse out the organization/user and project
@@ -221,9 +286,8 @@ function remote-url-to-directory() {
                     repo="${BASH_REMATCH[2]}"
                     directory="${host}/${user}/${repo}"
                 else
-                    # Ignore for now
-                    echo "error: unable to parse '${host}' URL" >&2
-                    return 4
+                    error_message="unable to parse '${host}' URL"
+                    exit_code=4
                 fi
             fi
             ;;
@@ -235,9 +299,8 @@ function remote-url-to-directory() {
                     repo="${BASH_REMATCH[2]}"
                     directory="${host}/${user}/${repo}"
                 else
-                    # Ignore for now
-                    echo "error: unable to parse '${host}' URL" >&2
-                    return 4
+                    error_message="unable to parse '${host}' URL"
+                    exit_code=4
                 fi
             elif ${is_ssh}; then
                 # Parse out the organization/user and project
@@ -246,20 +309,78 @@ function remote-url-to-directory() {
                     repo="${BASH_REMATCH[2]}"
                     directory="${host}/${user}/${repo}"
                 else
-                    # Ignore for now
-                    echo "error: unable to parse '${host}' URL" >&2
-                    return 4
+                    error_message="unable to parse '${host}' URL"
+                    exit_code=4
                 fi
             fi
             ;;
         *)
-            echo "error: Unsupported host: ${host}" >&2
-            return 3
+            error_message="unsupported host: ${host}"
+            exit_code=3
             ;;
     esac
 
-    [[ -z "${directory}" ]] && return 1
-    echo "${directory}"
+    debug "status after host case: ${exit_code} -- '${error_message}'"
+
+    # URL decode the directory and do... something... with slashes if they exist
+    if [[ -n "${directory}" ]]; then
+        directory="${directory//%2F/-}"
+        directory="$(urldecode "${directory}")"
+    fi
+
+    if [[ ${exit_code} -eq 0 && -z "${directory}" ]]; then
+        # I honestly don't even know how we got here
+        debug "hit the weird case"
+        error_message="could not parse '${host}' URL"
+        exit_code=1
+    fi
+
+    if ${is_ssh} && [[ ${exit_code} -ne 1 && "${host}" != *"."* ]]; then
+        debug "attempting to parse host from SSH config"
+
+        # If we couldn't parse out the host and it's an SSH URL, then see if we
+        # can't find an entry in the SSH config for it
+        ssh_config_host=$(
+            ssh -G "${host}" 2>/dev/null | awk '/^hostname / {print $2}'
+        )
+        debug "ssh_config_host: ${ssh_config_host}"
+        if [[ -n "${ssh_config_host}" ]]; then
+            # Try again with the SSH config hostname. Note: this will not work
+            # if for some reason the alias appears in the URL twice, e.g.:
+            #   thingy@thingy:foo/bar.git
+            # where "thingy" is the username but also the alias for the host
+            error_message_tmp=$(
+                remote-url-to-directory "${url/"${host}"/"${ssh_config_host}"}" $((++recurse)) 2>&1
+            )
+            exit_code=${?}
+            debug "ssh re-run exit code: ${exit_code} -- '${error_message_tmp}'"
+            # If we hit the recursion limit, pass it up the chain
+            if [[ ${exit_code} -eq 5 ]]; then
+                return 5
+            fi
+        fi
+        if [[ ${exit_code} -ne 0 ]]; then
+            if [[ -n "${error_message}" ]]; then
+                # Append the error message
+                error_message+=$'\n'
+            fi
+            error_message+="${error_message_tmp}"
+        else
+            # Clear out the error message and set the directory
+            error_message=""
+            directory="${error_message_tmp}"
+        fi
+    fi
+
+    # Yay, the happy path!
+    if [[ ${exit_code} -eq 0 && -n "${directory}" ]]; then
+        debug "parsed directory: ${directory}"
+        echo "${directory}"
+    elif [[ -n "${error_message}" ]]; then
+        debug "oh noes, we got an error"
+        echo "error: ${error_message}" >&2
+    fi
+    return ${exit_code}
 }
 
 
@@ -270,45 +391,85 @@ function main() {
     parse-args "${@}" || return ${?}
 
     local error
-    local is_excluded
+    local is_excluded is_empty
     local repo_paths repo_path repo_fullpath
-    local repo_remote repo_url
+    local repo_remotes repo_remote r_r repo_url
     local parsed_dir target_dir target_fulldir target_dir_parent
     local repo_source_dev repo_target_dev
-    
-    # Find all repos in the source directory
-    readarray -t repo_paths < <(git find-repos "${SOURCE_DIRECTORY}")
-    
+
+    local failed_repos
+    declare -A failed_repos
+
+    # Find all repos in the source directoryls
+    readarray -t repo_paths < <(git find-repos --maxdepth "${MAX_DEPTH}" "${SOURCE_DIRECTORY}")
+
     # Organize them
     for repo_path in "${repo_paths[@]}"; do
         # Get the full path to the repo
         repo_fullpath=$(realpath "${repo_path}")
-        
+
         echo -n "${repo_path} => "
-        
+
         # Check if this path should be excluded
         is_excluded=false
-        for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+        for pattern in "${EXCLUDE_PATH_PATTERNS[@]}"; do
             if [[ "${repo_fullpath}" =~ ${pattern} ]]; then
-                echo "excluded by: ${pattern}"
+                echo "path excluded by: ${pattern}"
                 is_excluded=true
                 break
             fi
         done
-        ${is_excluded} && continue
-
-        # Get the repo infos
-        repo_remote=$(git -C "${repo_path}" remote)
-        repo_url=$(git -C "${repo_path}" config remote."${repo_remote}".url)
-        if [[ -z "${repo_url}" ]]; then
-            echo "error: repo does not have a url for '${repo_remote}': ${repo}"
+        if ${is_excluded}; then
+            failed_repos["${repo_path}"]="path excluded by '${pattern}'"
             continue
         fi
 
-        # Determine and move to the target directory
+        # Get the repo infos
+        readarray -t repo_remotes < <(git -C "${repo_path}" remote)
+        ## If there are multiple remotes, then the priority is:
+        ## 1. origin
+        ## 2. upstream
+        ## 3. first remote
+        repo_remote="${repo_remotes[0]}"
+        for r_r in "${repo_remotes[@]}"; do
+            if [[ "${r_r}" == "origin" ]]; then
+                repo_remote="origin"
+                break
+            elif [[ "${r_r}" == "upstream" ]]; then
+                repo_remote="upstream"
+            fi
+        done
+        if [[ -z "${repo_remote}" ]]; then
+            echo "error: repo does not have a remote (wut)"
+            failed_repos["${repo_path}"]="no remote"
+            continue
+        fi
+        repo_url=$(git -C "${repo_path}" config remote."${repo_remote}".url)
+        if [[ -z "${repo_url}" ]]; then
+            echo "error: repo does not have a url for '${repo_remote}'"
+            failed_repos["${repo_path}"]="no url"
+            continue
+        fi
+
+        # Check if the remote should be excluded
+        is_excluded=false
+        for pattern in "${EXCLUDE_REMOTE_PATTERNS[@]}"; do
+            if [[ "${repo_url}" =~ ${pattern} ]]; then
+                echo "remote excluded by: ${pattern}"
+                is_excluded=true
+                break
+            fi
+        done
+        if ${is_excluded}; then
+            failed_repos["${repo_path}"]="remote excluded by '${pattern}'"
+            continue
+        fi
+
+        # Determine the target directory and move the repo
         parsed_dir=$(remote-url-to-directory "${repo_url}" 2>&1)
         if [[ ${?} -ne 0 ]]; then
-            echo "error: ${parsed_dir#error: }" >&2
+            echo "error: ${parsed_dir#error: }"
+            failed_repos["${repo_path}"]="${parsed_dir#error: }"
             continue
         else
             target_dir="${TARGET_DIRECTORY}/${parsed_dir}"
@@ -316,26 +477,37 @@ function main() {
 
             # Check if the target directory is the same
             if [[ "${repo_fullpath}" == "${target_fulldir}" ]]; then
-                echo "unchanged, skipping" >&2
+                echo "unchanged, skipping"
                 continue
             fi
-            echo "${target_dir}"
-            
-            # If we're doing a dry run, stop here
-            ${DO_DRY_RUN} && continue
+            echo -n "${target_dir}"
+            ! ${DO_DRY_RUN} && echo
 
             {
                 # If the target directory already exists and is not empty, skip
-                # this repo
-                echo -n "* verifying target directory is empty ... "
+                # this repo.
+                # Note: if we're doing a dry run, then simply add an asterisk
+                # to the end of the line to indicate that we would have skipped
+                # this repo, then continue to the next repo.
+                ! ${DO_DRY_RUN} && echo -n "* verifying target directory is empty ... "
                 if [[
                     -d "${target_fulldir}" 
                     && -n "$(ls -A "${target_fulldir}")"
                 ]]; then
+                    if ${DO_DRY_RUN}; then
+                        # Just print an asterisk and continue
+                        echo -e "\b\b*"
+                        return 10 # continue
+                    fi
                     echo "error"
-                    echo "error: target directory already exists and is not empty, skipping" >&2
-                    continue
+                    echo "error: target directory already exists and is not empty, skipping"
+                    failed_repos["${repo_path}"]="target directory exists and is not empty"
+                    return 10 # continue
                 else
+                    if ${DO_DRY_RUN}; then
+                        echo
+                        return 10 # continue
+                    fi
                     echo "done"
                 fi
 
@@ -345,12 +517,13 @@ function main() {
                 error=$(command mkdir -vp "${target_dir_parent}" 2>&1 1>/dev/null)
                 if [[ ${?} -ne 0 ]]; then
                     echo "error"
-                    echo "error: could not create target directory" >&2
-                    echo "${error}" >&2
-                    continue
+                    echo "error: could not create target directory"
+                    echo "${error}"
+                    failed_repos["${repo_path}"]="could not create target directory"
+                    return 10 # continue
                 fi
                 echo "done"
-                
+
                 if ! ${DO_COPY}; then
                     # If the repo is on the same partition, then simply move it,
                     # else copy it then delete it
@@ -363,17 +536,18 @@ function main() {
                     )
                     if [[ -z "${repo_source_dev}" ]]; then
                         echo "error"
-                        echo "error: could not stat source partition" >&2
-                        continue
+                        echo "error: could not stat source partition"
+                        failed_repos["${repo_path}"]="could not stat source partition"
+                        return 10 # continue
                     fi
                     if [[ -z "${repo_target_dev}" ]]; then
                         echo "error"
-                        echo "error: could not stat target partition" >&2
-                        continue
+                        echo "error: could not stat target partition"
+                        failed_repos["${repo_path}"]="could not stat target partition"
+                        return 10 # continue
                     fi
                     echo "done"
-                fi
-                if ${DO_COPY} || [[ "${repo_source_dev}" != "${repo_target_dev}" ]]; then
+                elif ${DO_COPY} || [[ "${repo_source_dev}" != "${repo_target_dev}" ]]; then
                     # Devices differ, copy to target location then delete source
                     echo -n "* copying directory to target ... "
                     error=$(
@@ -383,8 +557,9 @@ function main() {
                         echo "done"
                     else
                         echo "error"
-                        echo "error: could not copy repo to target: ${error}" >&2
-                        continue
+                        echo "error: could not copy repo to target: ${error}"
+                        failed_repos["${repo_path}"]="could not copy repo to target"
+                        return 10 # continue
                     fi
 
                     if ${DO_DELETE}; then
@@ -394,8 +569,9 @@ function main() {
                             echo "done"
                         else
                             echo "error"
-                            echo "error: could not delete source repo: ${error}" >&2
-                            continue
+                            echo "error: could not delete source repo: ${error}"
+                            failed_repos["${repo_path}"]="could not delete source repo"
+                            return 10 # continue
                         fi
                     fi
                 elif [[ "${repo_source_dev}" == "${repo_target_dev}" ]]; then
@@ -408,13 +584,24 @@ function main() {
                         echo "done"
                     else
                         echo "error"
-                        echo "error: could not move repo to target: ${error}" >&2
-                        continue
+                        echo "error: could not move repo to target: ${error}"
+                        failed_repos["${repo_path}"]="could not move repo to target"
+                        return 10 # continue
                     fi
                 fi
-            } > >(awk '{print "  " $0}') 2> >(awk '{print "  " $0}' >&2)
+            } | awk '{print "  " $0}'
+            # } > >(${DO_DRY_RUN} && cat || awk '{print "  " $0}') 2> >(${DO_DRY_RUN} && cat || awk '{print "  " $0}' >&2)
         fi
     done
+
+    # Print any failed repos
+    if [[ ${#failed_repos[@]} -gt 0 ]]; then
+        printf "\nerror: failed to organize the following repos:\n"
+        for repo_path in "${!failed_repos[@]}"; do
+            echo -e "${repo_path}\t${failed_repos[${repo_path}]}"
+        done | column -t -s $'\t' | sed 's/^/  /'
+        return 1
+    fi
 }
 
 
