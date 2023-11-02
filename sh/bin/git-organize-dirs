@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+#
+# Organize a directory of git repos into a folder structure based on the repo
+# url host, organization, user, project, repo name, etc...
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    echo "organize git repos"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -s/--source-dir <dir>    the directory to search for git repos
+                             (default: ./)
+    -t/--target-dir <dir>    organize the structured repos into this directory
+                             (default: source directory)
+    -d/--directory <dir>     set the source and target directories to <dir>
+    -x/--exclude <regexp>    exclude repos whose full filepath matches <regexp>
+    -n/--dry-run             only print updated paths, do not move any repos
+    -c/--copy                always copy repos to target instead of moving
+    -D/--no-delete           do not delete source repos after copying
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATHS=()
+    SOURCE_DIRECTORY="."
+    TARGET_DIRECTORY=""
+    EXCLUDE_PATTERNS=()
+    DO_DRY_RUN=false
+    DO_DELETE=true
+    DO_COPY=false
+    
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            --foo)
+                echo "oh my foo"
+                ;;
+            -s | --source-dir)
+                SOURCE_DIRECTORY="${2}"
+                shift 1
+                ;;
+            -t | --target-dir)
+                TARGET_DIRECTORY="${2}"
+                shift 1
+                ;;
+            -d | --directory)
+                SOURCE_DIRECTORY="${2}"
+                TARGET_DIRECTORY="${2}"
+                shift 1
+                ;;
+            -x | --exclude)
+                EXCLUDE_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            -n | --dry-run)
+                DO_DRY_RUN=true
+                ;;
+            -c | --copy)
+                DO_COPY=true
+                ;;
+            -D | --no-delete)
+                DO_DELETE=false
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                SOURCE_DIRECTORY="${1}"
+                TARGET_DIRECTORY="${1}"
+                ;;
+        esac
+        shift 1
+    done
+    
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        SOURCE_DIRECTORY="${1}"
+        TARGET_DIRECTORY="${1}"
+        shift 1
+    done
+
+    # If TARGET_DIRECTORY is not set, set it to SOURCE_DIRECTORY
+    [[ -z "${TARGET_DIRECTORY}" ]] && TARGET_DIRECTORY="${SOURCE_DIRECTORY}"
+
+    return 0
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Do stuff
+# @usage do-stuff
+function do-stuff() {
+    echo -n "i'm doin the stuff"
+    [[ -n "${1}" ]] && echo " to ${1}" || echo
+}
+
+# @description Parse git repo URL and return a directory path
+# @usage remote-url-to-directory <url>
+# @exit 1 failed to parse URL
+# @exit 2 failed to parse host
+# @exit 3 unsupported host
+# @exit 4 host regex failed
+function remote-url-to-directory() {
+    local url="${1}"
+    local directory
+    local host org user project repo
+    local is_https=false is_ssh=false
+
+    # Ensure a url was given
+    [[ -z "${url}" ]] && echo "error: no url given" >&2 && return 1
+
+    # Parse out the host
+    host=""
+    is_https=false
+    is_ssh=false
+    if [[ "${url}" =~ ^https?://([^@]+@)?([^/:]+) ]]; then
+        # Treat the URL as an HTTP URL
+        host="${BASH_REMATCH[2]}"
+        is_https=true
+    elif [[ "${url}" =~ ^[^@]+@([^:]+) ]]; then
+        # Treat the URL as an SSH URL
+        host="${BASH_REMATCH[1]}"
+        is_ssh=true
+    elif [[ "${url}" =~ ^/ ]]; then
+        # Local filepath, ignore
+        echo "error: local filepaths not supported" >&2
+        return 3
+    else
+        # Ignore for now
+        echo "error: unable to parse host from URL" >&2
+        return 2
+    fi
+
+    if [[ -z "${host}" ]]; then
+        # Ignore for now
+        echo "error: unable to parse host from URL" >&2
+        return 2
+    fi
+
+    # Parse out the remaining fields based on the host
+    case "${host}" in
+        "dev.azure.com")
+            if ${is_https}; then
+                # Parse out the organization and project
+                if [[ "${url}" =~ ^https?://[^/]+/([^/]+)/([^/]+)/_git/(.*) ]]; then
+                    org="${BASH_REMATCH[1]}"
+                    project="${BASH_REMATCH[2]}"
+                    repo="${BASH_REMATCH[3]}"
+                    directory="${host}/${org}/${project}/${repo}"
+                else
+                    # Ignore for now
+                    echo "error: unable to parse '${host}' URL" >&2
+                    return 4
+                fi
+            fi
+            ;;
+        "ssh.dev.azure.com")
+            if ${is_ssh}; then
+                # Parse out the organization and project
+                if [[ "${url}" =~ ^[^@]+@[^:]+:v3/([^/]+)/([^/]+)/(.*) ]]; then
+                    org="${BASH_REMATCH[1]}"
+                    project="${BASH_REMATCH[2]}"
+                    repo="${BASH_REMATCH[3]}"
+                    directory="${host#ssh.}/${org}/${project}/${repo}"
+                else
+                    # Ignore for now
+                    echo "error: unable to parse '${host}' URL" >&2
+                    return 4
+                fi
+            fi
+            ;;
+        "github.com")
+            if ${is_https}; then
+                # Parse out the organization/user and project
+                if [[ "${url}" =~ ^https?://[^/]+/([^/]+)/([^/]+)\.git$ ]]; then
+                    user="${BASH_REMATCH[1]}"
+                    repo="${BASH_REMATCH[2]}"
+                    directory="${host}/${user}/${repo}"
+                else
+                    # Ignore for now
+                    echo "error: unable to parse '${host}' URL" >&2
+                    return 4
+                fi
+            elif ${is_ssh}; then
+                # Parse out the organization/user and project
+                if [[ "${url}" =~ ^[^@]+@[^:]+:([^/]+)/([^/]+)\.git$ ]]; then
+                    user="${BASH_REMATCH[1]}"
+                    repo="${BASH_REMATCH[2]}"
+                    directory="${host}/${user}/${repo}"
+                else
+                    # Ignore for now
+                    echo "error: unable to parse '${host}' URL" >&2
+                    return 4
+                fi
+            fi
+            ;;
+        "bitbucket.org")
+            if ${is_https}; then
+                # Parse out the organization/user and project
+                if [[ "${url}" =~ ^https?://[^/]+/([^/]+)/([^/]+)\.git$ ]]; then
+                    user="${BASH_REMATCH[1]}"
+                    repo="${BASH_REMATCH[2]}"
+                    directory="${host}/${user}/${repo}"
+                else
+                    # Ignore for now
+                    echo "error: unable to parse '${host}' URL" >&2
+                    return 4
+                fi
+            elif ${is_ssh}; then
+                # Parse out the organization/user and project
+                if [[ "${url}" =~ ^[^@]+@[^:]+:([^/]+)/([^/]+)\.git$ ]]; then
+                    user="${BASH_REMATCH[1]}"
+                    repo="${BASH_REMATCH[2]}"
+                    directory="${host}/${user}/${repo}"
+                else
+                    # Ignore for now
+                    echo "error: unable to parse '${host}' URL" >&2
+                    return 4
+                fi
+            fi
+            ;;
+        *)
+            echo "error: Unsupported host: ${host}" >&2
+            return 3
+            ;;
+    esac
+
+    [[ -z "${directory}" ]] && return 1
+    echo "${directory}"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    local error
+    local is_excluded
+    local repo_paths repo_path repo_fullpath
+    local repo_remote repo_url
+    local parsed_dir target_dir target_fulldir target_dir_parent
+    local repo_source_dev repo_target_dev
+    
+    # Find all repos in the source directory
+    readarray -t repo_paths < <(git find-repos "${SOURCE_DIRECTORY}")
+    
+    # Organize them
+    for repo_path in "${repo_paths[@]}"; do
+        # Get the full path to the repo
+        repo_fullpath=$(realpath "${repo_path}")
+        
+        echo -n "${repo_path} => "
+        
+        # Check if this path should be excluded
+        is_excluded=false
+        for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+            if [[ "${repo_fullpath}" =~ ${pattern} ]]; then
+                echo "excluded by: ${pattern}"
+                is_excluded=true
+                break
+            fi
+        done
+        ${is_excluded} && continue
+
+        # Get the repo infos
+        repo_remote=$(git -C "${repo_path}" remote)
+        repo_url=$(git -C "${repo_path}" config remote."${repo_remote}".url)
+        if [[ -z "${repo_url}" ]]; then
+            echo "error: repo does not have a url for '${repo_remote}': ${repo}"
+            continue
+        fi
+
+        # Determine and move to the target directory
+        parsed_dir=$(remote-url-to-directory "${repo_url}" 2>&1)
+        if [[ ${?} -ne 0 ]]; then
+            echo "error: ${parsed_dir#error: }" >&2
+            continue
+        else
+            target_dir="${TARGET_DIRECTORY}/${parsed_dir}"
+            target_fulldir=$(realpath -m "${target_dir}")
+
+            # Check if the target directory is the same
+            if [[ "${repo_fullpath}" == "${target_fulldir}" ]]; then
+                echo "unchanged, skipping" >&2
+                continue
+            fi
+            echo "${target_dir}"
+            
+            # If we're doing a dry run, stop here
+            ${DO_DRY_RUN} && continue
+
+            {
+                # If the target directory already exists and is not empty, skip
+                # this repo
+                echo -n "* verifying target directory is empty ... "
+                if [[
+                    -d "${target_fulldir}" 
+                    && -n "$(ls -A "${target_fulldir}")"
+                ]]; then
+                    echo "error"
+                    echo "error: target directory already exists and is not empty, skipping" >&2
+                    continue
+                else
+                    echo "done"
+                fi
+
+                # Make sure the target directory parent exists
+                target_dir_parent=$(command dirname "${target_fulldir}")
+                echo -n "* creating parent directory ... "
+                error=$(command mkdir -vp "${target_dir_parent}" 2>&1 1>/dev/null)
+                if [[ ${?} -ne 0 ]]; then
+                    echo "error"
+                    echo "error: could not create target directory" >&2
+                    echo "${error}" >&2
+                    continue
+                fi
+                echo "done"
+                
+                if ! ${DO_COPY}; then
+                    # If the repo is on the same partition, then simply move it,
+                    # else copy it then delete it
+                    echo -n "* comparing source and target partitions ... "
+                    repo_source_dev=$(
+                        command stat -c '%d %m' "${repo_fullpath}" 2>/dev/null
+                    )
+                    repo_target_dev=$(
+                        command stat -c '%d %m' "${target_dir_parent}" 2>/dev/null
+                    )
+                    if [[ -z "${repo_source_dev}" ]]; then
+                        echo "error"
+                        echo "error: could not stat source partition" >&2
+                        continue
+                    fi
+                    if [[ -z "${repo_target_dev}" ]]; then
+                        echo "error"
+                        echo "error: could not stat target partition" >&2
+                        continue
+                    fi
+                    echo "done"
+                fi
+                if ${DO_COPY} || [[ "${repo_source_dev}" != "${repo_target_dev}" ]]; then
+                    # Devices differ, copy to target location then delete source
+                    echo -n "* copying directory to target ... "
+                    error=$(
+                        command cp -a "${repo_path}" "${target_dir_parent}" 2>&1 >/dev/null
+                    )
+                    if [[ ${?} -eq 0 ]]; then
+                        echo "done"
+                    else
+                        echo "error"
+                        echo "error: could not copy repo to target: ${error}" >&2
+                        continue
+                    fi
+
+                    if ${DO_DELETE}; then
+                        echo -n "* deleting source repo ... "
+                        error=$(command rm -fr "${repo_path}" 2>&1 >/dev/null)
+                        if [[ ${?} -eq 0 ]]; then
+                            echo "done"
+                        else
+                            echo "error"
+                            echo "error: could not delete source repo: ${error}" >&2
+                            continue
+                        fi
+                    fi
+                elif [[ "${repo_source_dev}" == "${repo_target_dev}" ]]; then
+                    # Devices match, move to target location
+                    echo -n "* moving directory to target ... "
+                    error=$(
+                        command mv "${repo_path}" "${target_dir}" 2>&1 >/dev/null
+                    )
+                    if [[ ${?} -eq 0 ]]; then
+                        echo "done"
+                    else
+                        echo "error"
+                        echo "error: could not move repo to target: ${error}" >&2
+                        continue
+                    fi
+                fi
+            } > >(awk '{print "  " $0}') 2> >(awk '{print "  " $0}' >&2)
+        fi
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
