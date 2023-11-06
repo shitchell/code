@@ -3,10 +3,6 @@
 # Searches for git repositories in the current directory and runs the specified
 # git command in each.
 
-include-source 'echo.sh'
-include-source 'text.sh'
-include-source 'shell.sh'
-
 ## usage functions #############################################################
 ################################################################################
 
@@ -54,22 +50,13 @@ function parse-args() {
     declare -ga FILEPATHS
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
-            # -h)
-            #     help-usage
-            #     help-epilogue
-            #     exit 0
-            #     ;;
-            # --help)
-            #     help-full
-            #     exit 0
-            #     ;;
             -h)
                 help-usage
                 help-epilogue
                 exit 0
                 ;;
             -m|--maxdepth)
-                if ! is-int ${2}; then
+                if ! [[ "${2}" =~ ^[0-9]+$ ]] then
                     echo "error: maxdepth must be an integer" >&2
                     exit 1
                 fi
@@ -115,7 +102,7 @@ function parse-args() {
                 shift 1
                 ;;
             -*)
-                echo-stderr "error: unknown option: ${1}"
+                echo "error: unknown option: ${1}" >&2
                 exit 1
                 ;;
             *)
@@ -152,37 +139,31 @@ function main() {
         if [ ${VERBOSITY} -ge 2 ]; then
             echo-formatted "$" -g "git -C '${repo}' $(echo ${SUBCOMMAND[@]})"
         fi
-        local output
 
-        if [ ${VERBOSITY} -eq 0 ]; then
-            # Run the command, but still show errors
-            git -C "${repo}" "${SUBCOMMAND[@]}" >/dev/null
-        else
-            # Determine whether to enable color
-            # If config.ui is set, use that value
-            local color_arg
-            local color_ui=$(git -C "${repo}" config --get color.ui)
-            if [ -z "${color_ui}" ]; then
-                # If config.color.ui is not set, its auto is the default, and
-                # we will replicate that by checking whether stdout is a tty
-                if [ -t 1 ]; then
-                    color_arg="-c color.ui=always"
-                fi
+        # Determine whether to enable color
+        # If config.ui is set, use that value
+        local color_arg
+        local color_ui=$(git -C "${repo}" config --get color.ui)
+        if [ -z "${color_ui}" ]; then
+            # If config.color.ui is not set, its auto is the default, and
+            # we will replicate that by checking whether stdout is a tty
+            if [ -t 1 ]; then
+                color_arg="-c color.ui=always"
             fi
-
-            # Actually do the thing
-            if ${DO_SHOW_COMMAND}; then
-                echo -e "$ \e[0;32mgit -C$(printf ' %q' "${repo}")$(printf ' %q' "${SUBCOMMAND[@]}")\e[0m"
-            fi
-            local prefix=""
-            if ${DO_SHOW_NAME}; then
-                local name="${repo##*/}"
-                prefix="${name}: "
-            fi
-
-            git ${color_arg} -C "${repo}" "${SUBCOMMAND[@]}" 2>&1 \
-                | awk -v prefix="${prefix}" '{print prefix $0}'
         fi
+
+        # Actually do the thing
+        if ${DO_SHOW_COMMAND}; then
+            echo -e "$ \e[0;32mgit -C$(printf ' %q' "${repo}")$(printf ' %q' "${SUBCOMMAND[@]}")\e[0m"
+        fi
+        local prefix=""
+        if ${DO_SHOW_NAME}; then
+            local name="${repo##*/}"
+            prefix="${name}: "
+        fi
+
+        git ${color_arg} -C "${repo}" "${SUBCOMMAND[@]}" 2>&1 \
+            | awk -v prefix="${prefix}" '{print prefix $0}'
     done
 }
 
