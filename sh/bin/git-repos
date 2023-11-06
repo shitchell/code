@@ -23,14 +23,16 @@ function help-full() {
     help-epilogue
     echo
     cat << EOF
-    -h                     display usage
-    --help                 display this help message
-    -m/--maxdepth <n>      the maximum depth to search for git repositories
-                           (default: 2)
-    -d/--directory <path>  the directory to search for git repositories
-    -n/--name              print the name of the repository before the output
-    -v/--verbose           verbose output (can be specified multiple times)
-    -q/--quiet             don't print anything to stdout
+    -h                       display usage
+    --help                   display this help message
+    -m/--maxdepth <n>        the maximum depth to search for git repositories
+                             (default: 2)
+    -d/--directory <path>    the directory to search for git repositories
+    -l/--follow-symlinks     follow symlinks
+    -L/--no-follow-symlinks  do not follow symlinks
+    -n/--name                print the name of the repository before the output
+    -v/--verbose             verbose output (can be specified multiple times)
+    -q/--quiet               don't print anything to stdout
 EOF
 }
 
@@ -41,6 +43,7 @@ function parse-args() {
     SHOW_NAME=0
     VERBOSITY=1
     SUBCOMMAND=()
+    DO_FOLLOW_SYMLINKS=false
 
     # Loop over the arguments
     declare -ga REFS
@@ -75,6 +78,14 @@ function parse-args() {
                 DIRECTORY=${2}
                 shift 2
                 ;;
+            -l|--follow-symlinks)
+                DO_FOLLOW_SYMLINKS=true
+                shift 1
+                ;;
+            -L|--no-follow-symlinks)
+                DO_FOLLOW_SYMLINKS=false
+                shift 1
+                ;;
             -n|--name)
                 SHOW_NAME=1
                 shift
@@ -107,8 +118,10 @@ function main() {
 
     # Find all git repositories in the specified directory
     local git_repos=()
+    local find_args=("--maxdepth" "${MAXDEPTH}")
+    ${DO_FOLLOW_SYMLINKS} && find_args+=("-l") || find_args+=("-L")
     readarray -t git_repos < <(
-        git find-repos --maxdepth ${MAXDEPTH} "${DIRECTORY}"
+        git find-repos "${find_args[@]}" "${DIRECTORY}"
     )
 
     if [ ${VERBOSITY} -ge 3 ]; then
