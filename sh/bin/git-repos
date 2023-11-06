@@ -30,7 +30,10 @@ function help-full() {
     -d/--directory <path>    the directory to search for git repositories
     -l/--follow-symlinks     follow symlinks
     -L/--no-follow-symlinks  do not follow symlinks
-    -n/--name                print the name of the repository before the output
+    -c/--show-command        print the full git command before running
+    -C/--no-show-command     do not print the full git command
+    -n/--show-name           print each repo name before each line of its output
+    -N/--no-show-name        do not print each repo name before its output
     -v/--verbose             verbose output (can be specified multiple times)
     -q/--quiet               don't print anything to stdout
 EOF
@@ -40,9 +43,10 @@ function parse-args() {
     # Default values
     MAXDEPTH=2
     DIRECTORY=$(pwd)
-    SHOW_NAME=0
     VERBOSITY=1
     SUBCOMMAND=()
+    DO_SHOW_NAME=false
+    DO_SHOW_COMMAND=true
     DO_FOLLOW_SYMLINKS=false
 
     # Loop over the arguments
@@ -86,8 +90,20 @@ function parse-args() {
                 DO_FOLLOW_SYMLINKS=false
                 shift 1
                 ;;
-            -n|--name)
-                SHOW_NAME=1
+            -c|--show-command)
+                DO_SHOW_COMMAND=true
+                shift
+                ;;
+            -C|--no-show-command)
+                DO_SHOW_COMMAND=false
+                shift
+                ;;
+            -n|--show-name)
+                DO_SHOW_NAME=true
+                shift
+                ;;
+            -N|--no-show-name)
+                DO_SHOW_NAME=false
                 shift
                 ;;
             -v|--verbose)
@@ -155,18 +171,17 @@ function main() {
             fi
 
             # Actually do the thing
-            output=$(git ${color_arg} -C "${repo}" "${SUBCOMMAND[@]}")
-
-            # Prefix each line of output with the name of the repository
-            if [ ${SHOW_NAME} -eq 1 ]; then
-                local name=$(
-                    basename "${repo%/}" \
-                        | sed 's/\.bare//' \
-                        | tr ' ' '_'
-                )
-                output=$(echo "${output}" | awk -v name="${name}" '{print name ": " $0}')
+            if ${DO_SHOW_COMMAND}; then
+                echo -e "$ \e[0;32mgit -C$(printf ' %q' "${repo}")$(printf ' %q' "${SUBCOMMAND[@]}")\e[0m"
             fi
-            echo "${output}"
+            local prefix=""
+            if ${DO_SHOW_NAME}; then
+                local name="${repo##*/}"
+                prefix="${name}: "
+            fi
+
+            git ${color_arg} -C "${repo}" "${SUBCOMMAND[@]}" 2>&1 \
+                | awk -v prefix="${prefix}" '{print prefix $0}'
         fi
     done
 }
