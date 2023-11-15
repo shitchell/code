@@ -1,0 +1,1151 @@
+#!/usr/bin/env bash
+#
+# Save and retrieve bash history to and from a sqlite3 database
+
+## traps #######################################################################
+################################################################################
+
+# function trap-exit() {
+#     echo -e "\nbye bye"
+# }
+# trap trap-exit EXIT
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_DB_NOT_FOUND=2
+declare -ri E_DB_NOT_READABLE=3
+declare -ri E_INVALID_SQL=4
+declare -ri E_INVALID_ACTION=5
+declare -ri E_NO_COMMAND_NAME=6
+declare -ri E_RC_FILE_NOT_FOUND=7
+declare -ri E_RC_FILE_NOT_WRITABLE=8
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-f <file>] <action> [<action args>]"
+}
+
+function help-epilogue() {
+    echo "save and retrieve command history using sqlite3"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Actions:"
+    cat << EOF
+    store                    store a command in the database
+    list                     list database history
+    search                   search database history
+    delete                   delete database history
+    clear                    clear database history
+    install                  install the bash history hook
+    help                     display this help message
+EOF
+    echo
+    echo "Base Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -f/--file <file>         the file to use for the database
+EOF
+    echo
+    echo "For action specific options, run:"
+    echo "    $(basename "${0}") help <action>"
+}
+
+function parse-args() {
+    # Default values
+    DB_PATH="${HOME}/.bash_history.sqlite3"
+    ACTION=""
+    ACTION_ARGS=()
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -f | --file)
+                DB_PATH="${2}"
+                shift 1
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                ACTION="${1}"
+                shift 1
+                break
+                ;;
+        esac
+        shift 1
+    done
+
+    # Any remaining arguments will be passed to the action function
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h | --help)
+                # Show the action help... for now
+                # TODO: decide if we want to let each individual action
+                # TODO: manage its own help or handle it here
+                __action-help "${ACTION}"
+                exit 0
+                ;;
+            *)
+                ACTION_ARGS+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+
+    # Ensure an action was specified
+    if [[ -z "${ACTION}" ]]; then
+        echo "error: no action specified" >&2
+        help-full >&2
+        return ${E_INVALID_ACTION}
+    fi
+
+    return 0
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Verify the database exists, is readable, and has the expected
+#              schema
+# @usage db-verify [<db path>]
+function db-verify() {
+    local db_path="${1:-${DB_PATH}}"
+
+    [[ -f "${db_path}" ]] && sqlite3 "${db_path}" .schema 2>/dev/null <. \
+        | grep -Piq '^CREATE TABLE (IF NOT EXISTS )?commands'
+}
+
+# @description Setup the database
+# @usage db-setup [<db path>]
+function db-setup() {
+    local db_path="${1:-${DB_PATH}}"
+
+    # Ensure the database exists and is readable
+    touch "${db_path}" 2>/dev/null
+    if [[ ! -f "${db_path}" ]]; then
+        # If the database file doesn't exist after touching it, then we can't
+        # create it
+        echo "error: database does not exist and cannot be created: ${db_path}" >&2
+        return ${E_DB_NOT_FOUND}
+    elif [[ ! -r "${db_path}" ]]; then
+        # Try to make it readable
+        chmod +r "${db_path}" 2>/dev/null
+        if [[ ${?} -ne 0 ]]; then
+            echo "error: database is not readable: ${db_path}" >&2
+            return ${E_DB_NOT_READABLE}
+        fi
+    fi
+
+    # Create the commands table
+    sqlite3 "${db_path}" '
+        CREATE TABLE IF NOT EXISTS commands (
+            id INTEGER PRIMARY KEY,
+            cmd_id INTEGER UNIQUE,
+            line TEXT,
+            name TEXT NOT NULL,
+            args TEXT,
+            exit_code INTEGER,
+            duration INTEGER,
+            dir TEXT,
+            timestamp TEXT,
+            tty TEXT,
+            session TEXT
+        );
+    ' <.
+}
+
+# @description Insert values into the command table
+# @usage db-insert [-f <db path>] [-c <cmd>] [-a <arg>] [-d <dir>] [-t <date>] [-T <tty>] [-S <session>] [-- <args>]
+function db-insert() {
+    # Default values
+    local db_path="${DB_PATH}"
+    local cmd_id=""
+    local cmd_name=""
+    local cmd_args=()
+    local cmd_exit_code=""
+    local cmd_duration=""
+    local cmd_line=""
+    local cmd_args_str=""
+    local cmd_dir=""
+    local cmd_timestamp=""
+    local cmd_tty=""
+    local cmd_session=""
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -f | --file)
+                db_path="${2}"
+                shift 1
+                ;;
+            -i | --cmd-id)
+                cmd_id="${2}"
+                shift 1
+                ;;
+            -c | --command)
+                cmd_name="${2}"
+                shift 1
+                ;;
+            -a | --arg)
+                # A single argument (which can include whitespace) without
+                # quotes or escaping
+                cmd_args+=("${2}")
+                shift 1
+                ;;
+            -e | --exit-code)
+                cmd_exit_code="${2}"
+                shift 1
+                ;;
+            -E | --duration)
+                cmd_duration="${2}"
+                shift 1
+                ;;
+            -l | --line)
+                # The entire command line as it was typed
+                cmd_line="${2}"
+                shift 1
+                ;;
+            -d | --directory)
+                cmd_dir=$(realpath -m "${2}")
+                shift 1
+                ;;
+            -t | --timestamp)
+                cmd_timestamp="${2}"
+                shift 1
+                ;;
+            -T | --tty)
+                cmd_tty="${2}"
+                shift 1
+                ;;
+            -S | --session)
+                cmd_session="${2}"
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return 1
+                ;;
+        esac
+        shift 1
+    done
+
+    # If any arguments remain, they are the command arguments
+    if [[ ${#} -gt 0 ]]; then
+        cmd_args+=("${@}")
+    fi
+
+    # Format the arguments as a string, escaping any spaces within arguments
+    # cmd_args_str=$(printf "%q " "${cmd_args[@]}" | sed -E 's/ $//g')
+
+    # Format the arguments as a space separated string
+    cmd_args_str=$(
+        printf "%s" "${cmd_args[0]}"
+        [[ ${#cmd_args[@]} -gt 1 ]] && printf " %s" "${cmd_args[@]:1}"
+    )
+
+    # Ensure at least a command name was provided
+    if [[ -z "${cmd_name}" ]]; then
+        echo "error: no command name provided" >&2
+        return ${E_NO_COMMAND_NAME}
+    fi
+
+    # If the timestamp is empty, use the current date
+    if [[ -z "${cmd_timestamp}" ]]; then
+        cmd_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    fi
+
+    # If the directory is empty, use the current directory
+    if [[ -z "${cmd_dir}" ]]; then
+        cmd_dir=$(pwd)
+    fi
+
+    # If cmd_line is empty, set it to the command name and arguments
+    if [[ -z "${cmd_line}" ]]; then
+        cmd_line="${cmd_name} ${cmd_args_str}"
+    fi
+
+    # Store the command in the database
+    sqlite3 "${db_path}" << EOF
+        INSERT INTO commands (
+            cmd_id,
+            name,
+            args,
+            exit_code,
+            duration,
+            line,
+            dir,
+            timestamp,
+            tty,
+            session
+        )
+        VALUES (
+            '${BASH_SESSION_ID:0:4}${cmd_id}',
+            '${cmd_name}',
+            '${cmd_args_str//\'/\'\'}',
+            '${cmd_exit_code}',
+            '${cmd_duration}',
+            '${cmd_line//\'/\'\'}',
+            '${cmd_dir//\'/\'\'}',
+            '${cmd_timestamp}',
+            '${cmd_tty}',
+            '${cmd_session//\'/\'\'}'
+        );
+EOF
+    return ${?}
+}
+
+# @description Generate a random session identifier
+# @usage generate-session-id
+function generate-session-id() {
+    # Generate a random 45-bit number
+    echo $(((RANDOM<<15|RANDOM)<<15|RANDOM))
+}
+
+
+## action functions ############################################################
+################################################################################
+
+function __help-store() {
+    echo "usage: $(basename "${0}") store [-h] [-c <cmd>] [-a <arg>] [-d <dir>] [-t <date>] [-- <args>]"
+    echo
+    echo "Save a command to the database."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    --history-str <str>      a history string to parse (from fc -l)
+    -c/--command <cmd>       the command name
+    -a/--arg <arg>           a command argument (can be specified multiple times)
+    -d/--directory <dir>     the directory to associate with the command
+    -t/--timestamp <date>    the timestamps to associate with the command
+                             (default: current date)
+    -T/--tty <tty>           the tty to associate with the command
+                             (default: current tty)
+    -S/--session <session>   a session identifier to associate with the command
+                             (default: current session)
+EOF
+}
+
+function __action-store() {
+    debug "${@}"
+
+    # Default values
+    local cmd_id=""
+    local cmd_name=""
+    local cmd_line=""
+    local cmd_args=()
+    local cmd_exit_code=""
+    local cmd_duration=""
+    local cmd_dir=""
+    local cmd_timestamp=""
+    local cmd_tty=""
+    local cmd_session=""
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            --history-str)
+                # Parse the history string
+                local cmd_parts
+                local cmd_line="${2}"
+                echo 'cmd_line: '"${cmd_line}" > ~/.foo
+                local history_regex='^\s*([0-9]+)\s+(.*)'
+                if [[ "${cmd_line}" =~ ${history_regex} ]]; then
+                    cmd_line=$(sed -E 's/^\s*[0-9]+\s+//g' <<< "${cmd_line}")
+                    read -e -a cmd_parts <<< "${cmd_line}"
+                    cmd_id="${BASH_REMATCH[1]}"
+                    cmd_name="${cmd_parts[0]}"
+                    cmd_args=( "${cmd_parts[@]:1}" )
+                else
+                    echo "error: invalid history string: ${history_str}" >&2
+                    return ${E_INVALID_HISTORY_STRING}
+                fi
+                shift 1
+                ;;
+            -c | --command)
+                cmd_name="${2}"
+                shift 1
+                ;;
+            -a | --arg)
+                cmd_args+=("${2}")
+                shift 1
+                ;;
+            -e | --exit-code)
+                # Ensure the exit code is just numbers and spaces
+                local exit_code_regex='^[0-9 ]+$'
+                if [[ ! "${2}" =~ ${exit_code_regex} ]]; then
+                    echo "error: invalid exit code: ${2}" >&2
+                    return ${E_INVALID_EXIT_CODE}
+                fi
+                cmd_exit_code="${2}"
+                shift 1
+                ;;
+            -E | --duration)
+                # Ensure the duration is just numbers
+                if [[ ! "${2}" =~ ^[0-9]+$ ]]; then
+                    echo "error: invalid duration: ${2}" >&2
+                    return ${E_INVALID_DURATION}
+                fi
+                cmd_duration="${2}"
+                shift 1
+                ;;
+            -d | --directory)
+                cmd_dir="${2}"
+                shift 1
+                ;;
+            -t | --timestamp)
+                cmd_timestamp=$(date -d "${2}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+                if [[ -z "${cmd_timestamp}" ]]; then
+                    echo "error: invalid date: ${2}" >&2
+                    return ${E_INVALID_DATE}
+                fi
+                shift 1
+                ;;
+            -T | --tty)
+                cmd_tty="${2}"
+                shift 1
+                ;;
+            -S | --session)
+                cmd_session="${2}"
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return 1
+                ;;
+        esac
+        shift 1
+    done
+
+    # If any arguments remain, they are the command arguments
+    if [[ ${#} -gt 0 ]]; then
+        cmd_args+=("${@}")
+    fi
+
+    # Ensure at least a command name was provided
+    if [[ -z "${cmd_name}" ]]; then
+        echo "error: no command name provided" >&2
+        return ${E_NO_COMMAND_NAME}
+    fi
+
+    # Set some default values if they weren't provided
+    [[ -z "${cmd_timestamp}" ]] && cmd_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    [[ -z "${cmd_dir}" ]] && cmd_dir=$(pwd)
+    [[ -z "${cmd_tty}" ]] && cmd_tty=$(tty)
+    [[ -z "${cmd_session}" ]] && cmd_session="${BASH_SESSION_ID}"
+
+    # Store the command in the database
+    db-insert -f "${DB_PATH}" \
+        -i "${cmd_id}" \
+        -c "${cmd_name}" \
+        -e "${cmd_exit_code}" \
+        -E "${cmd_duration}" \
+        -l "${cmd_line}" \
+        -d "${cmd_dir}" \
+        -t "${cmd_timestamp}" \
+        -T "${cmd_tty}" \
+        -S "${cmd_session}" \
+        -- "${cmd_args[@]}"
+    return ${?}
+}
+
+function __help-log() {
+    echo "usage: $(basename "${0}") log [-h] [-c <cmd>] [-a <arg>] [-d <dir>] [--since <date>] [--until <date>] [-T <tty>] [-S <session>] [-n <num>] [--order-by <field>] [-q <query>] [-v] [<command>]"
+    echo
+    echo "Search the database for commands."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -i/--id <id>             the command id(s)
+    -c/--command <cmd>       the command name
+    -a/--arg <arg>           a command argument (can be specified multiple times)
+    -d/--directory <dir>     the directory to associate with the command
+    --since <date>           the timestamps to associate with the command
+    --until <date>           the timestamps to associate with the command
+    --format <format>        the format string to use for the results
+    --date-format <format>   the format string to use for dates
+    -T/--tty <tty>           the tty to associate with the command
+    -S/--session <session>   a session identifier to associate with the command
+    -n/--num <num>           the maximum number of results to return
+    --order-by <field>       the field to order the results by
+    -q/--query <query>       the query string to use
+    -v/--verbose             show the query string
+EOF
+    echo
+    echo "Format Options:"
+    cat << EOF
+    %I                       the command index (1-based)
+    %i                       the command id
+    %l                       the command line
+    %c                       the command name
+    %a                       the command arguments
+    %d                       the directory associated with the command
+    %h                       the directory, with the home directory replaced with ~
+    %t                       the timestamp associated with the command
+    %T                       the tty associated with the command
+    %S                       the session associated with the command
+    %e                       the exit code of the command
+    %D                       the duration of the command
+    %%                       a literal percent sign
+EOF
+}
+
+function __action-log() {
+    # Default options. Note: Most of these are searched for using LIKE, so they
+    # should be formatted as SQL LIKE patterns.
+    # TODO: Instead of using LIKE, use `awk` to perform a search on the output
+    local cmd_ids=()
+    local cmd_name=""
+    local cmd_args=""
+    local cmd_dir=""
+    local cmd_tty=""
+    local cmd_session=""
+    local since_timestamp=""
+    local until_timestamp=""
+    local query_str=""
+    local limit=""
+    local format="${SQLITE_HISTORY_FORMAT}"
+    local date_format="%Y-%m-%d %H:%M:%S"
+    local order_by="id ASC"
+    local sqlite_args=()
+    local do_show_query=false
+    local do_delete=false
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -i | --id)
+                cmd_ids+=(${2})
+                shift 1
+                ;;
+            -c | --command)
+                cmd_name="${2}"
+                shift 1
+                ;;
+            -a | --args)
+                cmd_args="${2}"
+                shift 1
+                ;;
+            -d | --directory)
+                cmd_dir="${2}"
+                shift 1
+                ;;
+            --since | --after)
+                since_timestamp=$(date -d "${2}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+                if [[ -z "${since_timestamp}" ]]; then
+                    echo "error: invalid date: ${2}" >&2
+                    return ${E_INVALID_DATE}
+                fi
+                shift 1
+                ;;
+            --until | --before)
+                until_timestamp=$(date -d "${2}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)
+                if [[ -z "${until_timestamp}" ]]; then
+                    echo "error: invalid date: ${2}" >&2
+                    return ${E_INVALID_DATE}
+                fi
+                shift 1
+                ;;
+            --format)
+                format="${2}"
+                shift 1
+                ;;
+            --date-format)
+                date_format="${2}"
+                shift 1
+                ;;
+            -T | --tty)
+                cmd_tty="${2}"
+                shift 1
+                ;;
+            -S | --session)
+                cmd_session="${2}"
+                shift 1
+                ;;
+            -n | --num)
+                # Validate the limit is a number
+                if [[ ! "${2}" =~ ^[0-9]+$ ]]; then
+                    echo "error: limit must be a positive integer: ${2}" >&2
+                    return ${E_INVALID_LIMIT}
+                fi
+                limit="${2}"
+                shift 1
+                ;;
+            -o | --order-by)
+                order_by="${2}"
+                shift 1
+                ;;
+            -q | --query)
+                query_str="${2}"
+                shift 1
+                ;;
+            -v | --verbose)
+                do_show_query=true
+                ;;
+            --delete)
+                do_delete=true
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                cmd_name="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # If a query string was not specified, build one
+    if [[ -z "${query_str}" ]]; then
+        local where_clause=""
+        local order_by_clause="ORDER BY ${order_by}"
+        local limit_clause=""
+
+        # If command ids were specified, add them to the query
+        if [[ ${#cmd_ids[@]} -gt 0 ]]; then
+            local cmd_ids_str=$(
+                printf "${cmd_ids[0]}"
+                [[ ${#cmd_ids[@]} -gt 1 ]] && printf ", %s" "${cmd_ids[@]:1}"
+            )
+            where_clause+="id IN (${cmd_ids_str})"
+        fi
+
+        # If a command name was specified, add it to the query
+        if [[ -n "${cmd_name}" ]]; then
+            where_clause="name LIKE '%${cmd_name//\'/\'\'}%'"
+        fi
+
+        # If command arguments were specified, add them to the query
+        if [[ -n "${cmd_args}" ]]; then
+            [[ -n "${where_clause}" ]] && where_clause+=" AND "
+            where_clause+="args LIKE '%${cmd_args//\'/\'\'}%'"
+        fi
+
+        # If a directory was specified, add it to the query
+        if [[ -n "${cmd_dir}" ]]; then
+            [[ -n "${where_clause}" ]] && where_clause+=" AND "
+            # If the path is absolute, search for an exact match
+            if [[ "${cmd_dir}" =~ ^/ ]]; then
+                cmd_dir=$(realpath -m "${cmd_dir}")
+                where_clause+="dir = '${cmd_dir//\'/\'\'}'"
+            else
+                where_clause+="dir LIKE '%${cmd_dir//\'/\'\'}%'"
+            fi
+        fi
+
+        # If a since timestamp was specified, add it to the query
+        if [[ -n "${since_timestamp}" ]]; then
+            [[ -n "${where_clause}" ]] && where_clause+=" AND "
+            where_clause+="timestamp >= '${since_timestamp//\'/\'\'}'"
+        fi
+
+        # If an until timestamp was specified, add it to the query
+        if [[ -n "${until_timestamp}" ]]; then
+            [[ -n "${where_clause}" ]] && where_clause+=" AND "
+            where_clause+="timestamp <= '${until_timestamp//\'/\'\'}'"
+        fi
+
+        # If a tty was specified, add it to the query
+        if [[ -n "${cmd_tty}" ]]; then
+            [[ -n "${where_clause}" ]] && where_clause+=" AND "
+            where_clause+="tty LIKE '%${cmd_tty//\'/\'\'}%'"
+        fi
+
+        # If a session was specified, add it to the query
+        if [[ -n "${cmd_session}" ]]; then
+            [[ -n "${where_clause}" ]] && where_clause+=" AND "
+            where_clause+="session = '${cmd_session//\'/\'\'}'"
+        fi
+
+        # Validate the where clause is not empty
+        if [[ -z "${where_clause}" ]]; then
+            # Just show everything
+            where_clause="id > 0"
+        fi
+
+        # If a limit was specified, add it to the query
+        if [[ -n "${limit}" ]]; then
+            limit_clause="LIMIT ${limit}"
+            limit_clause+=" OFFSET ((SELECT COUNT(*) FROM commands WHERE ${where_clause}) - ${limit})"
+        fi
+
+        # Build the query string
+        if ${do_delete}; then
+            query_str="DELETE FROM commands"
+        else
+            query_str='
+                SELECT id,
+                       cmd_id,
+                       line,
+                       name,
+                       args,
+                       exit_code,
+                       duration,
+                       dir,
+                       strftime("'"${date_format//\'/\'\'}"'", timestamp) AS timestamp,
+                       tty,
+                       session
+                FROM commands'
+        fi
+            
+        query_str+=" WHERE ${where_clause}"
+        ! ${do_delete} && query_str+=" ${order_by_clause}"
+        [[ -n "${limit_clause}" ]] && ! ${do_delete} && query_str+=" ${limit_clause}"
+    fi
+
+    # Run the query
+    ${do_show_query} && echo "${query_str}" | xargs
+    local sqlite_args=()
+    if [[ -n "${format}" ]]; then
+        sqlite_args+=(-cmd '.mode tcl' -separator $'\x1f' -noheader)
+    else
+        sqlite_args+=(-header)
+    fi
+    sqlite3 "${sqlite_args[@]}" "${DB_PATH}" "${query_str}" <. | if [[ -z "${format}" ]]; then
+        # If no formatting options given, then just print the results
+        cat
+    else
+        awk -v FS=$'\x1f' -v format="${format}" -v home="${HOME}" '
+        function format_line(line) {
+            split(str, parts, "\x1f")
+
+            # Special vars
+            homified_dir = parts[8]
+            gsub(home, "~", homified_dir)
+
+            # Replace the format strings with the values
+            output = format
+            # %% = %
+            gsub(/%%/, "%", output)
+            # $1 = id
+            gsub(/%I/, parts[1], output)
+            # $2 = cmd_id
+            gsub(/%i/, parts[2], output)
+            # $3 = line
+            gsub(/%l/, parts[3], output)
+            # $4 = name
+            gsub(/%c/, parts[4], output)
+            # $5 = args
+            gsub(/%a/, parts[5], output)
+            # $6 = exit_code
+            gsub(/%e/, parts[6], output)
+            # $7 = duration
+            gsub(/%D/, parts[7], output)
+            # $8 = dir
+            gsub(/%d/, parts[8], output)
+            gsub(/%h/, homified_dir, output)
+            # $9 = timestamp
+            gsub(/%t/, parts[9], output)
+            # $10 = tty
+            gsub(/%T/, parts[10], output)
+            # $11 = session
+            gsub(/%S/, parts[11], output)
+
+            return output
+        }
+        {
+            if (NR > 1) {
+                # Print the formatted line
+                print format_line(str)
+            }
+            str = $0
+        }
+        END {
+            # On the last line, remove any trailing newlines and print the
+            # formatted line
+            gsub(/(\n)+$/, "", format)
+            print format_line(str)
+        }'
+    fi
+}
+
+function __help-delete() {
+    echo "usage: $(basename "${0}") delete [-h] [-c <cmd>] [-a <arg>] [-d <dir>] [--since <date>] [--until <date>] [-T <tty>] [-S <session>] [-n <num>] [--order-by <field>] [-q <query>] [-v]"
+    echo
+    echo "Delete commands from the database."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -c/--command <cmd>       the command name
+    -a/--arg <arg>           a command argument (can be specified multiple times)
+    -d/--directory <dir>     the directory to associate with the command
+    --since <date>           the timestamps to associate with the command
+    --until <date>           the timestamps to associate with the command
+    -T/--tty <tty>           the tty to associate with the command
+    -S/--session <session>   a session identifier to associate with the command
+    -q/--query <query>       the query string to use
+    -v/--verbose             show the query string
+EOF
+}
+
+function __action-delete() {
+    __action-search --delete "${@}"
+}
+
+function __help-clear() {
+    echo "usage: $(basename "${0}") clear"
+    echo
+    echo "Clear the command history."
+}
+
+function __action-clear() {
+    sqlite3 "${DB_PATH}" 'DELETE FROM commands;' <.
+    return ${?}
+}
+
+function __help-install() {
+    echo "usage: $(basename "${0}") install [-h] [-f <file>] [-n] [-s]"
+    echo
+    echo "Install the bash history hook."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -f/--file <file>         the config file to source the hook in
+    -n/--no-install          just show the lines to add to the rc file
+    -s/--skip-preexec        skip installing bash-preexec
+EOF
+}
+
+function __action-install() {
+    # Default options
+    local show_rc_lines=false
+    local config_file="${HOME}/.bashrc"
+    local hook_script="${HOME}/.bash_history.sqliterc"
+    local do_skip_preexec=false
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -f | --file)
+                config_file="${2}"
+                shift 1
+                ;;
+            -n | --no-install)
+                show_rc_lines=true
+                ;;
+            -s | --skip-preexec)
+                do_skip_preexec=true
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return 1
+                ;;
+        esac
+        shift 1
+    done
+
+    # Set up the hook script
+    local rc_lines=$(cat << EOF
+# Requires bash-preexec for calculating the durations of commands
+[[ -f "\${HOME}/.bash-preexec.sh" ]] && source "\${HOME}/.bash-preexec.sh"
+
+# Set up the prehook if bash-preexec is installed
+if [[ -n "\${bash_preexec_imported:-}" ]]; then
+    __bash_sqlite_history_prehook() {
+        __LAST_CMD_START_TIME=\$(date +%s%N)
+        __SQLITE_HISTORY_DIR="\${PWD}"
+    }
+    preexec_functions+=(__bash_sqlite_history_prehook)
+else
+    echo "bash-preexec not installed, command durations will not be stored" >&2
+fi
+
+# Set up the posthook
+__bash_sqlite_history_posthook() {
+    # Get the exit code of the last command and any pipes
+    local exit_code="\${PIPESTATUS[@]}"
+    local last_cmd=\$(HISTTIMEFORMAT= history 1)
+
+    # Use \$SH_OLDPWD to determine if this is the first run, and if so,
+    # don't store the command
+    [[ -z "\${SH_OLDPWD}" ]] && SH_OLDPWD="\${PWD}" && return 0
+
+    # Set up the args to pass to sqlite-history
+    local sqlite_history_args=(
+        --history-str "\${last_cmd}"
+        --directory "\${SH_OLDPWD}"
+        --exit-code "\${exit_code}"
+    )
+
+    if [[ -n "\${bash_preexec_imported:-}" ]]; then
+        # Get the last command and calculate the duration
+        local last_cmd_end_time=\$(date +%s%N)
+        local last_cmd_duration=\$(((last_cmd_end_time - __LAST_CMD_START_TIME) / 1000000))
+        sqlite_history_args+=(--duration "\${last_cmd_duration}")
+        unset __LAST_CMD_START_TIME
+    fi
+
+    # Store the command
+    sqlite-history store "\${sqlite_history_args[@]}" >~/sqlite-history.log 2>&1
+
+    # Set the new PWD
+    SH_OLDPWD="\${PWD}"
+}
+
+# Set up the hook
+if ! [[ "\${PROMPT_COMMAND}" =~ __bash_sqlite_history_posthook ]]; then
+    export PROMPT_COMMAND="__bash_sqlite_history_posthook; \${PROMPT_COMMAND}"
+fi
+
+# Create a function for modifying the current session identifier
+function set-bash-session-id() {
+    local old_session_id="\${BASH_SESSION_ID}"
+    local new_session_id="\${1}"
+
+    [[ -z "\${new_session_id}" ]] && echo "error: no session id specified" >&2 && return 1
+
+    # Update the session id in the database
+    local db_path="\${DB_PATH:-\${HOME}/.bash_history.sqlite3}"
+    sqlite3 "\${db_path}" "
+        UPDATE commands
+        SET session = '\${new_session_id}'
+        WHERE session = '\${old_session_id}';
+    " <.
+    sqlite3 "\${db_path}" "
+        UPDATE commands
+        SET cmd_id = REPLACE(cmd_id, '\${old_session_id:0:4}', '\${new_session_id:0:4}')
+        WHERE session = '\${new_session_id}';
+    " <.
+
+    # Set the new session id
+    export BASH_SESSION_ID="\${new_session_id}"
+}
+
+# Set a session identifier
+export BASH_SESSION_ID=\$(((RANDOM<<15|RANDOM)<<15|RANDOM))
+EOF
+    )
+    if ${show_rc_lines}; then
+        echo "${rc_lines}"
+        return 0
+    fi
+
+    # Check if bash-preexec is installed
+    local preexec_installed=false
+    echo -n "* checking for bash-preexec ... "
+    if [[ -n "${preexec_functions}" ]] &>/dev/null; then
+        echo -e "\033[0;31mnot installed\033[0m"
+    else
+        echo -e "\033[0;32minstalled\033[0m"
+        preexec_installed=true
+    fi
+
+    # Write the rc lines to the hook script
+    echo -n "* updating hook script '${hook_script}' ... "
+    printf "%s\n" "${rc_lines}" >"${hook_script}" 2>/dev/null
+    if [[ ${?} -ne 0 ]]; then
+        echo -e "\033[0;31mfailed\033[0m"
+        echo "error: failed to write to hook script: ${hook_script}" >&2
+        return ${E_RC_FILE_NOT_WRITABLE}
+    fi
+    echo -e "\033[0;32mdone\033[0m"
+
+    # Ensure the rc file is sourced in the rc install file
+    echo -n "* adding hook script to config file '${config_file}' ... "
+    local source_str="[[ -f \"${hook_script}\" ]] && . \"${hook_script}\""
+    if ! grep -qF "${source_str}" "${config_file}" &>/dev/null; then
+        echo >> "${config_file}"
+        echo "# Enable SQLite database history" >> "${config_file}"
+        echo "${source_str}" >>"${config_file}" 2>/dev/null
+        if [[ ${?} -ne 0 ]]; then
+            echo -e "\033[0;31mfailed\033[0m"
+            echo "error: failed to write to config file: ${config_file}" >&2
+            return ${E_RC_FILE_NOT_WRITABLE}
+        else
+            echo -e "\033[0;32mdone\033[0m"
+        fi
+    else
+        # The hook script is already sourced in the config file
+        echo -e "\033[0;33malready added, skipping\033[0m"
+    fi
+
+    # If bash-preexec is not installed, prompt the user now to install it
+    if ! ${preexec_installed} && ! ${do_skip_preexec}; then
+        local response=""
+        local preexec_url="https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh"
+        echo
+        echo "bash-preexec (https://github.com/rcaloras/bash-preexec) is required"
+        echo "for calculating command durations."
+        while [[ "${response,,}" != "y" && "${response,,}" != "n" ]]; do
+            read -p "Would you like to install it now? [y/N] " response
+        done
+
+        # If the user wants to install it, do so
+        if [[ "${response,,}" == "y" ]]; then
+            echo -n "* installing bash-preexec ... "
+            if ! curl -sSfL "${preexec_url}" -o "${HOME}/.bash-preexec.sh" 2>/dev/null; then
+                echo -e "\033[0;31mfailed\033[0m"
+                echo "error: failed to download bash-preexec" >&2
+                return ${E_ERROR}
+            else
+                echo -e "\033[0;32mdone\033[0m"
+            fi
+        else
+            echo
+            echo "You can install it manually from:" >&2
+            echo "${preexec_url}" >&2
+        fi
+    fi
+    
+    echo
+    echo -e "Run \`\033[0;32msource '${hook_script}'\033[0m\` to enable the history hook for this session."
+}
+
+# Just show the help
+function __help-help() {
+    echo "usage: $(basename "${0}") help [<action>]"
+    echo
+    echo "Display help for the specified action or for $(basename "${0}") if no"
+    echo "action is specified."
+}
+
+function __action-help() {
+    local action="${1}"
+
+    # If an action was specified, show the help for that action
+    if [[ -n "${action}" ]]; then
+        local help_function="__help-${action}"
+        # Verify the help function exists
+        if type -t "${help_function}" &>/dev/null; then
+            # Call the help function and exit
+            "${help_function}"
+        else
+            echo "error: no help found for action: ${action}" >&2
+            return ${E_INVALID_ACTION}
+        fi
+    else
+        # Otherwise, show the full help
+        help-full
+    fi
+}
+
+function __help-_test() {
+    echo "usage: $(basename "${0}") _test [-h]"
+    echo
+    echo "Do stuff."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                       display usage
+    --help                   display this help message
+    -m/--message <msg>       the message to print
+EOF
+}
+
+function __action-_test() {
+    # Default values
+    local message="hello world"
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -m | --message)
+                message="${2}"
+                shift 1
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return 1
+                ;;
+        esac
+        shift 1
+    done
+
+    echo "${message}"
+}
+
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    local exit_code=${E_SUCCESS}
+
+    # Verify and setup the database if necessary
+    db-verify "${DB_PATH}" || db-setup
+
+    # Find the action function
+    local action_func="__action-${ACTION}"
+
+    # Verify the action function exists
+    if type -t "${action_func}" &>/dev/null; then
+        # Call the action function
+        "${action_func}" "${ACTION_ARGS[@]}"
+        exit_code=${?}
+    else
+        echo "error: no such action function found: ${ACTION}" >&2
+        exit_code=${E_INVALID_ACTION}
+    fi
+
+    return ${exit_code}
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
