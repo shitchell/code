@@ -440,7 +440,9 @@ function __action-store() {
                         cmd_args=()
                     else
                         # Otherwise, parse the command name and arguments
-                        eval "cmd_parts=(${cmd_line})"
+                        readarray -t cmd_parts < <(
+                            xargs -n1 printf "%s\n" <<< "${cmd_line}"
+                        )
                         cmd_name="${cmd_parts[0]}"
                         cmd_args=( "${cmd_parts[@]:1}" )
                     fi
@@ -881,8 +883,8 @@ function __action-log() {
                     gsub(/'"'"'/, "\\'"'"'", arg_string)
 
                     # Surround the argument with single quotes if it contains
-                    # a space
-                    if (arg_string ~ " ") {
+                    # any whitespace or single quotes
+                    if (arg_string ~ /(\\[rntf]|'"'"'| )/) {
                         # Surround the string in single quotes
                         arg_string = "'"'"'" arg_string "'"'"'"
                     }
