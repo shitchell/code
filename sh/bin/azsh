@@ -1069,6 +1069,15 @@ function _subcommand_pr-create() {
             | python -m json.tool
 }
 
+# @description Generate a link to a pull request given its id
+# @usage pr-link <pr id>
+function _subcommand_pr-link() {
+    local pr_id="${1}"
+
+    # Parse the arguments
+    echo "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_git/${REPO_ENC}/pullrequest/${pr_id}"
+}
+
 # @description Approve a pull request
 # @usage pr-approve <pr id>
 function _subcommand_pr-approve() {
