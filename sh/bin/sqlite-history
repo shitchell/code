@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
 # Save and retrieve bash history to and from a sqlite3 database
+#
+# TODO: - Add support for colors in the log output
 
 ## traps #######################################################################
 ################################################################################
@@ -11,10 +13,30 @@
 # trap trap-exit EXIT
 
 
-## imports #####################################################################
+## colors ######################################################################
 ################################################################################
 
-include-source 'debug.sh'
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED='\e[31m'
+    C_GREEN='\e[32m'
+    C_YELLOW='\e[33m'
+    C_BLUE='\e[34m'
+    C_MAGENTA='\e[35m'
+    C_CYAN='\e[36m'
+    C_WHITE='\e[37m'
+    S_RESET='\e[0m'
+    S_BOLD='\e[1m'
+    S_DIM='\e[2m'
+    S_UNDERLINE='\e[4m'
+    S_BLINK='\e[5m'
+    S_INVERT='\e[7m'
+    S_HIDDEN='\e[8m'
+}
 
 
 ## exit codes ##################################################################
@@ -48,20 +70,20 @@ function help-full() {
     echo
     echo "Actions:"
     cat << EOF
-    store                    store a command in the database
-    list                     list database history
-    search                   search database history
-    delete                   delete database history
-    clear                    clear database history
-    install                  install the bash history hook
-    help                     display this help message
+    store                     store a command in the database
+    log                       list and query database history
+    delete                    delete database history
+    clear                     clear database history
+    install                   install the bash history hook
+    help                      display this help message
 EOF
     echo
     echo "Base Options:"
     cat << EOF
-    -h                       display usage
-    --help                   display this help message
-    -f/--file <file>         the file to use for the database
+    -h                        display usage
+    --help                    display this help message
+    -f/--file <file>          the file to use for the database
+    -c/--color <on|auto|off>  whether to use color output
 EOF
     echo
     echo "For action specific options, run:"
@@ -71,6 +93,7 @@ EOF
 function parse-args() {
     # Default values
     DB_PATH="${HOME}/.bash_history.sqlite3"
+    DO_COLOR="auto" # auto, on, true, off, false
     ACTION=""
     ACTION_ARGS=()
 
@@ -88,6 +111,10 @@ function parse-args() {
                 ;;
             -f | --file)
                 DB_PATH="${2}"
+                shift 1
+                ;;
+            -c | --color)
+                DO_COLOR="${2}"
                 shift 1
                 ;;
             -*)
@@ -126,6 +153,23 @@ function parse-args() {
         help-full >&2
         return ${E_INVALID_ACTION}
     fi
+
+    # Set DO_COLORS to true or false
+    case "${DO_COLOR}" in
+        on | true)
+            DO_COLOR=true
+            ;;
+        off | false)
+            DO_COLOR=false
+            ;;
+        auto)
+            DO_COLOR=${__IN_TERMINAL}
+            ;;
+        *)
+            echo "error: invalid color option: ${DO_COLOR}" >&2
+            return 1
+            ;;
+    esac
 
     return 0
 }
@@ -277,7 +321,7 @@ function db-insert() {
     # Format the arguments as a space separated string
     cmd_args_str=$(
         printf "%s" "${cmd_args[0]}"
-        [[ ${#cmd_args[@]} -gt 1 ]] && printf " %s" "${cmd_args[@]:1}"
+        [[ ${#cmd_args[@]} -gt 1 ]] && printf " \x1f %s" "${cmd_args[@]:1}"
     )
 
     # Ensure at least a command name was provided
@@ -365,8 +409,6 @@ EOF
 }
 
 function __action-store() {
-    debug "${@}"
-
     # Default values
     local cmd_id=""
     local cmd_name=""
@@ -389,11 +431,19 @@ function __action-store() {
                 echo 'cmd_line: '"${cmd_line}" > ~/.foo
                 local history_regex='^\s*([0-9]+)\s+(.*)'
                 if [[ "${cmd_line}" =~ ${history_regex} ]]; then
-                    cmd_line=$(sed -E 's/^\s*[0-9]+\s+//g' <<< "${cmd_line}")
-                    read -e -a cmd_parts <<< "${cmd_line}"
+                    cmd_line=$(sed -E '1 s/^\s*[0-9]+\s+//g' <<< "${cmd_line}")
                     cmd_id="${BASH_REMATCH[1]}"
-                    cmd_name="${cmd_parts[0]}"
-                    cmd_args=( "${cmd_parts[@]:1}" )
+                    # If the line is assigning a variable, then just store
+                    # the line as the command
+                    if [[ "${cmd_line}" =~ ^([a-zA-Z0-9_]+)= ]]; then
+                        cmd_name="<assignment>"
+                        cmd_args=()
+                    else
+                        # Otherwise, parse the command name and arguments
+                        eval "cmd_parts=(${cmd_line})"
+                        cmd_name="${cmd_parts[0]}"
+                        cmd_args=( "${cmd_parts[@]:1}" )
+                    fi
                 else
                     echo "error: invalid history string: ${history_str}" >&2
                     return ${E_INVALID_HISTORY_STRING}
@@ -746,7 +796,7 @@ function __action-log() {
     ${do_show_query} && echo "${query_str}" | xargs
     local sqlite_args=()
     if [[ -n "${format}" ]]; then
-        sqlite_args+=(-cmd '.mode tcl' -separator $'\x1f' -noheader)
+        sqlite_args+=(-cmd '.mode tcl' -separator $'\x1e' -noheader)
     else
         sqlite_args+=(-header)
     fi
@@ -754,43 +804,153 @@ function __action-log() {
         # If no formatting options given, then just print the results
         cat
     else
-        awk -v FS=$'\x1f' -v format="${format}" -v home="${HOME}" '
-        function format_line(line) {
-            split(str, parts, "\x1f")
+        awk -v FS=$'\x1e' -v format="${format}" -v home="${HOME}" '
+        function format_line(string) {
+            split(string, parts, "\x1e")
 
             # Special vars
             homified_dir = parts[8]
             gsub(home, "~", homified_dir)
 
-            # Replace the format strings with the values
-            output = format
-            # %% = %
-            gsub(/%%/, "%", output)
-            # $1 = id
-            gsub(/%I/, parts[1], output)
-            # $2 = cmd_id
-            gsub(/%i/, parts[2], output)
-            # $3 = line
-            gsub(/%l/, parts[3], output)
-            # $4 = name
-            gsub(/%c/, parts[4], output)
-            # $5 = args
-            gsub(/%a/, parts[5], output)
-            # $6 = exit_code
-            gsub(/%e/, parts[6], output)
-            # $7 = duration
-            gsub(/%D/, parts[7], output)
-            # $8 = dir
-            gsub(/%d/, parts[8], output)
-            gsub(/%h/, homified_dir, output)
-            # $9 = timestamp
-            gsub(/%t/, parts[9], output)
-            # $10 = tty
-            gsub(/%T/, parts[10], output)
-            # $11 = session
-            gsub(/%S/, parts[11], output)
-
+            # Loop over the format string character by character
+            output = ""
+            for (i = 1; i <= length(format); i++) {
+                # Get the current character
+                char = substr(format, i, 1)
+                # If the character is a percent sign, then the next character
+                # is the field specifier
+                if (char == "%") {
+                    # Get the next character
+                    i++
+                    char = substr(format, i, 1)
+                    # If the character is a valid specifier, then add its value
+                    # to the output
+                    if (char == "%") {
+                        output = output "%"
+                    } else if (char == "I") {
+                        output = output unescape_tcl(parts[1])
+                    } else if (char == "i") {
+                        output = output unescape_tcl(parts[2])
+                    } else if (char == "l") {
+                        output = output unescape_tcl(parts[3])
+                    } else if (char == "c") {
+                        cmd_part = unescape_tcl(parts[4])
+                        if (cmd_part == "<assignment>") {
+                            output = output unescape_tcl(parts[3])
+                        } else {
+                            output = output cmd_part
+                        }
+                    } else if (char == "a") {
+                        # Remove the leading and trailing double quotes
+                        quotes_part = substr(parts[5], 2, length(parts[5]) - 2)
+                        output = output unescape_tcl(escape_args(quotes_part))
+                    } else if (char == "d") {
+                        output = output unescape_tcl(parts[8])
+                    } else if (char == "h") {
+                        output = output unescape_tcl(homified_dir)
+                    } else if (char == "t") {
+                        output = output unescape_tcl(parts[9])
+                    } else if (char == "T") {
+                        output = output unescape_tcl(parts[10])
+                    } else if (char == "S") {
+                        output = output unescape_tcl(parts[11])
+                    } else if (char == "e") {
+                        output = output unescape_tcl(parts[6])
+                    } else if (char == "D") {
+                        output = output unescape_tcl(parts[7])
+                    } else {
+                        # If the character is not a valid field specifier, then
+                        # just add it to the output string
+                        output = output "%" char
+                    }
+                } else {
+                    output = output char
+                }
+            }
             return output
+        }
+        function escape_args(args_string) {
+            output_args_string = ""
+            if (args_string) {
+                # Split the string on the FS character
+                split(args_string, args_string_parts, " \\\\037 ")
+                for (k in args_string_parts) {
+                    arg_string = args_string_parts[k]
+
+                    # Escape single quotes
+                    gsub(/'"'"'/, "\\'"'"'", arg_string)
+
+                    # Surround the argument with single quotes if it contains
+                    # a space
+                    if (arg_string ~ " ") {
+                        # Surround the string in single quotes
+                        arg_string = "'"'"'" arg_string "'"'"'"
+                    }
+
+                    if (k == 1) {
+                        output_args_string = arg_string
+                    } else {
+                        output_args_string = output_args_string " " arg_string
+                    }
+                }
+            }
+
+            return output_args_string
+        }
+        function unescape_tcl(tcl_string) {
+            tcl_output = ""
+            tcl_string_length = length(tcl_string)
+
+            for (j = 1; j <= tcl_string_length; j++) {
+                # Get the current character
+                char = substr(tcl_string, j, 1)
+
+                # Skip leading/trailing double quotes
+                if (j == 1 && char == "\"") {
+                    continue
+                } else if (j == tcl_string_length && char == "\"") {
+                    continue
+                }
+
+                # If the character is a backslash, then the next character is
+                # the escaped character
+                if (char == "\\") {
+                    # Get the next character
+                    j++
+                    char = substr(tcl_string, j, 1)
+                    # If the character is a valid escape character, then add
+                    # its value to the output
+                    if (char == "a") {
+                        tcl_output = tcl_output "\a"
+                    } else if (char == "b") {
+                        tcl_output = tcl_output "\b"
+                    } else if (char == "f") {
+                        tcl_output = tcl_output "\f"
+                    } else if (char == "n") {
+                        tcl_output = tcl_output "\n"
+                    } else if (char == "r") {
+                        tcl_output = tcl_output "\r"
+                    } else if (char == "t") {
+                        tcl_output = tcl_output "\t"
+                    } else if (char == "v") {
+                        tcl_output = tcl_output "\v"
+                    } else if (char == "\"") {
+                        tcl_output = tcl_output "\""
+                    } else if (char == "'"'"'") {
+                        tcl_output = tcl_output "'"'"'"
+                    } else if (char == "\\") {
+                        tcl_output = tcl_output "\\"
+                    } else {
+                        # If the character is not a valid escape character, then
+                        # just add it to the output string
+                        tcl_output = tcl_output "\\" char
+                    }
+                } else {
+                    tcl_output = tcl_output char
+                }
+            }
+
+            return tcl_output
         }
         {
             if (NR > 1) {
@@ -830,7 +990,7 @@ EOF
 }
 
 function __action-delete() {
-    __action-search --delete "${@}"
+    __action-log --delete "${@}"
 }
 
 function __help-clear() {
@@ -1127,6 +1287,11 @@ function main() {
 
     # Verify and setup the database if necessary
     db-verify "${DB_PATH}" || db-setup
+
+    # Set up colors if requested
+    if ${DO_COLORS}; then
+        setup-colors
+    fi
 
     # Find the action function
     local action_func="__action-${ACTION}"
