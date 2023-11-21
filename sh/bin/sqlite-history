@@ -1065,6 +1065,7 @@ if [[ -n "\${bash_preexec_imported:-}" ]]; then
         __SQLITE_HISTORY_DIR="\${PWD}"
     }
     preexec_functions+=(__bash_sqlite_history_prehook)
+    export bash_preexec_imported
 else
     echo "bash-preexec not installed, command durations will not be stored" >&2
 fi
@@ -1142,11 +1143,11 @@ EOF
     # Check if bash-preexec is installed
     local preexec_installed=false
     echo -n "* checking for bash-preexec ... "
-    if [[ -n "${preexec_functions}" ]] &>/dev/null; then
-        echo -e "\033[0;31mnot installed\033[0m"
-    else
+    if [[ -n "${bash_preexec_imported}" ]]; then
         echo -e "\033[0;32minstalled\033[0m"
         preexec_installed=true
+    else
+        echo -e "\033[0;31mnot installed\033[0m"
     fi
 
     # Write the rc lines to the hook script
