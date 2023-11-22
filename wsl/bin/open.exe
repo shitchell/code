@@ -6,9 +6,12 @@
 paths=("${@}")
 
 for path in "${paths[@]}"; do
-    win_path=$(wslpath -am "${path}")
+    win_path=$(
+        wslpath -am "${path}" \
+            | sed -E 's/(wsl)\.localhost/\1$/'
+    )
     if [ -n "${DEBUG}" ]; then
-        echo "cmd.exe /c start $(printf "%q" "${win_path}")" >&2
+        echo cmd.exe /C start "${win_path//\//\\}" >&2
     fi
-    cmd.exe /c start "${win_path}"
+    cmd.exe /C start "${win_path//\//\\}"
 done
