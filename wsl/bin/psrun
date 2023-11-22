@@ -2,6 +2,12 @@
 #
 # Convert a WSL path to a Windows path and run it via powershell
 
-PATH=$(wslpath -w "$1")
+export WSL_SCRIPT=$(
+    wslpath -w "${1}" | sed -E 's/^\\\\wsl\.localhost/\\\\wsl$/'
+)
+export WSL_CWD="${PWD}"
+export WSL_CWD_WIN=$(
+    wslpath -am "${PWD}" | sed -E 's/^\\\\wsl\.localhost/\\\\wsl$/'
+)
 shift
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -File "$PATH" "$@"
+WSLENV="${WSLENV}:WSL_CWD:WSL_CWD_WIN:WSL_SCRIPT/p" /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -File "${WSL_SCRIPT}" "${@}"
