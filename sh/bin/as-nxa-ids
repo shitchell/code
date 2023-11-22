@@ -44,7 +44,8 @@ EOF
     {name}      the service name
     {fullname}  the full service name (including project, package, etc)
     {id}        the service ID
-    {path}      the service filepath
+    {filepath}  the service filepath
+    {filename}  the service filename
     {project}   the service project name
     {input}     the input string
     \t          a tab character
@@ -60,7 +61,7 @@ function parse-args() {
     # Default values
     NXA_DIR=""
     SERVICE_PREFIX=""
-    OUTPUT_FORMAT="{fullname} {path}"
+    OUTPUT_FORMAT="{fullname} {filepath}"
     INTERPRET_AS="auto" # auto, name, id
     DO_ERRORS=true
     DO_BLANK_LINES=true
@@ -347,12 +348,13 @@ function service-id-to-name() {
 
     # Format the output
     awk -v name="${service_name}" -v fullname="${service_name_full}" \
-        -v id="${service_id}" -v path="${service_file}" -v input="${input_str}" \
-        -v project="${project}" -v format="${format}" '{
+        -v id="${service_id}" -v filepath="${service_file}" -v filename="${service_file##*/}" \
+        -v input="${input_str}" -v project="${project}" -v format="${format}" '{
         gsub(/{name}/, name);
         gsub(/{fullname}/, fullname);
         gsub(/{id}/, id);
-        gsub(/{path}/, path);
+        gsub(/{filepath}/, filepath);
+        gsub(/{filename}/, filename);
         gsub(/{input}/, input);
         gsub(/{project}/, project);
         gsub(/\\n/, "\n");
