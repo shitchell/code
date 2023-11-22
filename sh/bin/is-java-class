@@ -54,7 +54,7 @@ function parse-args() {
 
     # Create an array to hold positional arguments
     declare -ga FILEPATHS
-    while [ ${#} -gt 0 ]; do
+    while [[ ${#} -gt 0 ]]; do
         case "${1}" in
             -h)
                 help-usage
@@ -99,8 +99,12 @@ function parse-args() {
                 EXIT_FAST=1
                 shift
                 ;;
+            -)
+                FILEPATHS+=("-")
+                shift
+                ;;
             -*)
-                echo-stderr "error: unknown option '${1}'"
+                echo "error: unknown option '${1}'"
                 exit 1
                 ;;
             *)
@@ -111,13 +115,10 @@ function parse-args() {
     done
 
     # If no files were specified, print the usage and exit
-    if [ ${#FILEPATHS[@]} -eq 0 ]; then
+    if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
         help-usage
         exit 1
     fi
-
-    # Set positional args in the global array $@
-    set -- "${FILEPATHS[@]}"
 }
 
 
@@ -139,8 +140,14 @@ function _is_java_class() {
     local filename=$(basename "${filepath%.*}")
     local extension
 
+    # Use /dev/stdin if "-" was passed
+    [[ "${filepath}" == "-" ]] && filepath="/dev/stdin"
+
     # Determine the extension
-    if [[ "${filepath}" =~ \. ]]; then
+    if [[ "${filepath}" == "/dev/stdin" ]]; then
+        extension="java"
+        echo "${filepath}: warning: skipping extension and filename validations" >&2
+    elif [[ "${filepath}" =~ \. ]]; then
         extension="${filepath##*.}"
     else
         echo "${filepath}: error: no extension" >&2
@@ -148,42 +155,44 @@ function _is_java_class() {
     fi
 
     # Make sure a filepath was given
-    if [ -z "${filepath}" ]; then
+    if [[ -z "${filepath}" ]]; then
         echo "error: no filepath specified" >&2
         return 2
     fi
 
-    # Check if it's a directory
-    if [ -d "${filepath}" ]; then
-        echo "${filepath}: error: is a directory" >&2
-        return 4
-    fi
+    # Perform some file / filename checks if not reading from stdin
+    if [[ "${filepath}" != "/dev/stdin" ]]; then
+        # Check if the filepath is a directory
+        if [[ -d "${filepath}" ]]; then
+            echo "${filepath}: error: is a directory" >&2
+            return 4
+        fi
 
-    # Check if it's a symlink
-    if [ -L "${filepath}" ]; then
-        echo "${filepath}: error: is a symlink" >&2
-        return 5
-    fi
+        # Check if it's a symlink
+        if [[ -L "${filepath}" ]]; then
+            echo "${filepath}: error: is a symlink" >&2
+            return 5
+        fi
 
-    # If not reading from stdin...
-    if [ "${filepath}" != "-" ]; then
-        # ...check that the extension is "java", "class", "jar", or "groovy"
-        if [ "${extension}" != "java" ] \
-        && [ "${extension}" != "class" ] \
-        && [ "${extension}" != "jar" ] \
-        && [ "${extension}" != "groovy" ]; then
+        # Check that the extension is "java", "class", "jar", or "groovy"
+        if [[
+            "${extension}" != "java"
+            && "${extension}" != "class"
+            && "${extension}" != "jar"
+            && "${extension}" != "groovy"
+        ]]; then
             echo "${filepath}: error: invalid extension '.${extension}'" >&2
             return 7
         fi
 
         # ...and that the file exists
-        if [ ! -f "${filepath}" ]; then
-            echo-stderr "${filepath}: error: file '${filepath}' does not exist" >&2
+        if [[ ! -f "${filepath}" ]]; then
+            echo "${filepath}: error: file '${filepath}' does not exist" >&2
             return 3
         fi
 
         # If the extension is "jar" or "class", do a `file` check
-        if [ "${extension}" == "jar" ] || [ "${extension}" == "class" ]; then
+        if [[ "${extension}" == "jar" || "${extension}" == "class" ]]; then
             file_info=$(file "${filepath}")
             if [[ "${file_info}" =~ "Java class data" ]]; then
                 echo "${filepath}: compiled java class"
@@ -196,36 +205,50 @@ function _is_java_class() {
                 return 1
             fi
         fi
+    fi
 
-        # Then read the file
-        data=$(cat "${filepath}")
-        if [ $? -ne 0 ]; then
-            echo-stderr "${filepath}: error: failed to read file '${filepath}'" >&2
-            return 1
+    # Then read the file
+    data=$(cat "${filepath}" 2>&1 | tr -d '\0')
+    if [[ $? -ne 0 ]]; then
+        echo "${filepath}: error: failed to read file '${filepath}'" >&2
+        if [[ -n "${data}" ]]; then
+            echo "${data}" >&2
         fi
-    else
-        # Read from stdin
-        data=$(cat)
+        return 1
     fi
 
     # Make sure there's data
-    if [ -z "${data}" ]; then
-        echo-stderr "${filepath}: error: no file content to check" >&2
+    if [[ -z "${data}" ]]; then
+        echo "${filepath}: error: no file content to check" >&2
         return 1
     fi
 
     # Grep for the class declaration
     class_name=$(
         echo "${data}" \
-            | grep -zoP '\n?class\s+\K([^\s]+)(?=\s+{)' 2>/dev/null \
-            | tr -d '\0' # bash don't like no null bytes in variable assignments
+            | grep -zoP '\n?(public\s+)?class\s+\K([^\s]+)(?=\s+{)' 2>/dev/null \
+            | tr -d '\0'
     )
 
     # Finally, check that the class name matches the filename
-    if [ "${filename}" = "${class_name}" ]; then
-        echo "${filepath}: java class"
-        return 0
+    if [[ "${filepath}" == "/dev/stdin" ]]; then
+        if [[ -n "${class_name}" ]]; then
+            echo "/dev/stdin: java class"
+            return 0
+        else
+            echo "/dev/stdin: error: file is not a java class" >&2
+            return 1
+        fi
+    elif [[ -n "${class_name}" ]]; then
+        if [[ "${class_name}" == "${filename}" ]]; then
+            echo "${filepath}: java class"
+            return 0
+        else
+            echo "${filepath}: error: class name '${class_name}' does not match filename '${filename}'" >&2
+            return 1
+        fi
     else
+        echo "${filepath}: error: file is not a java class" >&2
         return 1
     fi
 }
