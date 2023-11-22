@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Git-ish paging: use the default pager if the input exceeds the terminal
+# height, otherwise just print the input to stdout
+
+function autopage() {
+    local filepath="${1:-/dev/stdin}"
+    local term_height=$(tput lines)
+    local buffer="" line=""
+    local line_count=0
+
+    # Fille the buffer until all input has been read or the number of lines in
+    # the buffer exceeds the terminal height
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        buffer="${buffer}${line}"$'\n'
+        let line_count++
+        if [[ ${line_count} -gt ${term_height} ]]; then
+            break
+        fi
+    done < "${filepath}"
+
+    # If the number of lines in the buffer exceeds the terminal height, use the
+    # default pager to display the buffer, otherwise just print the buffer to
+    # stdout
+    if [[ ${line_count} -gt ${term_height} ]]; then
+        (
+            printf '%s' "${buffer}"
+            cat <"${filepath}"
+        ) | ${PAGER:-less}
+    else
+        printf '%s' "${buffer}"
+    fi
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && autopage "${@}"
