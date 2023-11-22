@@ -6,7 +6,7 @@ function reset-back-to-head() {
     if [[ "${EXIT_CODE}" != "0" ]]; then
         echo "error: exiting early"
         echo "error: resetting back to HEAD"
-        git reset --hard HEAD
+        git reset HEAD
         exit 1
     fi
 }
