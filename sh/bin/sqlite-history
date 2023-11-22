@@ -51,6 +51,7 @@ declare -ri E_INVALID_ACTION=5
 declare -ri E_NO_COMMAND_NAME=6
 declare -ri E_RC_FILE_NOT_FOUND=7
 declare -ri E_RC_FILE_NOT_WRITABLE=8
+declare -ri E_INVALID_OPTION=9
 
 
 ## usage functions #############################################################
@@ -119,7 +120,7 @@ function parse-args() {
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
             *)
                 ACTION="${1}"
@@ -167,7 +168,7 @@ function parse-args() {
             ;;
         *)
             echo "error: invalid color option: ${DO_COLOR}" >&2
-            return 1
+            return ${E_INVALID_OPTION}
             ;;
     esac
 
@@ -300,11 +301,11 @@ function db-insert() {
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
             *)
                 echo "error: unexpected argument: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
         esac
         shift 1
@@ -428,7 +429,6 @@ function __action-store() {
                 # Parse the history string
                 local cmd_parts
                 local cmd_line="${2}"
-                echo 'cmd_line: '"${cmd_line}" > ~/.foo
                 local history_regex='^\s*([0-9]+)\s+(.*)'
                 if [[ "${cmd_line}" =~ ${history_regex} ]]; then
                     cmd_line=$(sed -E '1 s/^\s*[0-9]+\s+//g' <<< "${cmd_line}")
@@ -505,11 +505,11 @@ function __action-store() {
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
             *)
                 echo "error: unexpected argument: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
         esac
         shift 1
@@ -567,6 +567,7 @@ function __help-log() {
     -T/--tty <tty>           the tty to associate with the command
     -S/--session <session>   a session identifier to associate with the command
     -n/--num <num>           the maximum number of results to return
+    -<num>                   the maximum number of results to return
     --order-by <field>       the field to order the results by
     -q/--query <query>       the query string to use
     -v/--verbose             show the query string
@@ -685,9 +686,19 @@ function __action-log() {
             --delete)
                 do_delete=true
                 ;;
+            -[0-9]*)
+                # If the argument starts with a dash and is a number, then it's
+                # the limit
+                limit="${1:1}"
+                # Validate the limit is a number
+                if [[ ! "${limit}" =~ ^[0-9]+$ ]]; then
+                    echo "error: unknown option: ${1}" >&2
+                    return ${E_INVALID_OPTION}
+                fi
+                ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
             *)
                 cmd_name="${1}"
@@ -1043,11 +1054,11 @@ function __action-install() {
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
             *)
                 echo "error: unexpected argument: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
         esac
         shift 1
@@ -1264,11 +1275,11 @@ function __action-_test() {
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
             *)
                 echo "error: unexpected argument: ${1}" >&2
-                return 1
+                return ${E_INVALID_OPTION}
                 ;;
         esac
         shift 1
