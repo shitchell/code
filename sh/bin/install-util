@@ -107,7 +107,7 @@ function list-install-commands() {
     # Read the env for all functions that start with 'install_'
     declare -F | awk '
         $3 ~ /^__install-util/ {
-            gsub(/^__install-util_/, "", $3)
+            gsub(/^__install-util__/, "", $3)
             print $3
         }'
 }
@@ -141,7 +141,7 @@ function package-exists() {
     local package_exists=false
 
     # Check if the package or meta package exists
-    if declare -F "__install-util_${package}" >/dev/null 2>&1; then
+    if declare -F "__install-util__${package}" >/dev/null 2>&1; then
         package_exists=true
     elif declare -p "__install_meta__${package}" >/dev/null 2>&1; then
         package_exists=true
@@ -514,7 +514,7 @@ function apt-serviceless() {
 ## install functions ###########################################################
 ################################################################################
 
-function __install-util_micro() {
+function __install-util__micro() {
     require --one-of downloader="curl wget" --write "${INSTALL_DIR}"
 
     local micro_script=""
@@ -533,16 +533,16 @@ function __install-util_micro() {
     )
 }
 
-function __install-util_pyenv() {
+function __install-util__pyenv() {
     require git
 
     (
         cd "${INSTALL_DIR}"
-        git clone https://github.com/yyuu/pyenv.git
+        git clone https://github.com/yyuu/pyenv.git ./.pyenv
     )
 }
 
-function __install-util_python-dependencies-ubuntu() {
+function __install-util__python-dependencies-ubuntu() {
     require --root --os ubuntu apt
 
     apt update
@@ -568,7 +568,7 @@ function __install-util_python-dependencies-ubuntu() {
         zlib1g-dev
 }
 
-function __install-util_python-dependencies-rhel() {
+function __install-util__python-dependencies-rhel() {
     require --root --os rhel yum
 
     yum update
@@ -587,13 +587,13 @@ function __install-util_python-dependencies-rhel() {
         zlib-devel
 }
 
-function __install-util_pyenv-shared() {
+function __install-util__pyenv-shared() {
     require pyenv
 
     CONFIGURE_OPTS="--enable-shared" PYTHON_CONFIGURE_OPTS="${CONFIGURE_OPTS}" pyenv install -v "${1}"
 }
 
-function __install-util_wtfutil() {
+function __install-util__wtfutil() {
     require --one-of downloader="curl wget" tar --write "${INSTALL_DIR}"
 
     local wtfutil_script=""
@@ -656,22 +656,50 @@ function __install-util_wtfutil() {
     rm -rf "${tmpdir}"
 }
 
-function __install-util_bash-basics() {
+function __install-util__bash-basics() {
     require --root apt
 
     apt update
     apt install -y \
-        tmux \
+        tmux cmatrix vlock \
         tree \
         stow \
         htop \
         cmatrix \
         elinks \
         links2 \
-        speedtest-cli
+        speedtest-cli \
+        mailutils \
+        pass
 }
 
-function __install_util_console() {
+function __install-util__security() {
+    require --root apt
+
+    apt update
+    apt install -y \
+        nmap \
+        wireshark \
+        mitmproxy \
+        macchanger \
+        testdisk \
+        photorec \
+        ssss \
+        libgfshare-bin \
+        steghide
+}
+
+function __install-util__sounds() {
+    require --root apt
+
+    apt update
+    apt install -y \
+        gnustep-gui-common \
+        sound-icons \
+        gnome-audio
+}
+
+function __install-util__console() {
     require --root apt
 
     # TODO: install this in such a way that GPM isn't enabled by default
@@ -683,7 +711,29 @@ function __install_util_console() {
         gpm
 }
 
-function __install-util_code() {
+function __install-util__cursor_blink_off() {
+    require --root systemd
+
+    # Turn off the cursor blink
+    echo 0 > /sys/class/graphics/fbcon/cursor_blink
+
+    # Make it permanent
+    echo "w /sys/class/graphics/fbcon/cursor_blink - - - - 0" \
+        > /etc/tmpfiles.d/01-cursor_blink.conf
+}
+
+function __install-util__cursor_blink_on() {
+    require --root systemd
+
+    # Turn on the cursor blink
+    echo 1 > /sys/class/graphics/fbcon/cursor_blink
+
+    # Make it permanent
+    echo "w /sys/class/graphics/fbcon/cursor_blink - - - - 1" \
+        > /etc/tmpfiles.d/01-cursor_blink.conf
+}
+
+function __install-util__code() {
     require git
 
     local install_dir
@@ -704,23 +754,23 @@ function __install-util_code() {
     
     (
         cd "${install_dir}"
-        git clone git@github.com:shitchell/code.git
+        git clone git@github.com:shitchell/code.git ./code
     )
 }
 
-function __install-util_dotfiles() {
+function __install-util__dotfiles() {
     require git
 
-    local install_dir
+    local install_dir git_basedir
 
     # If the installation directory wasn't specified, default to
     # $HOME/code/git/github.com/shitchell
     if ! ${INSTALL_DIR_SPECIFIED}; then
-        install_dir="${HOME}/code/git/github.com/shitchell"
-        if ! [[ -d "${HOME}/code" ]]; then
-            echo "error: '${HOME}/code' is not cloned, install 'code' package" >&2
-            return 1
-        elif ! [[ -d "${install_dir}" ]]; then
+        git_basedir=$(
+            git config --get git.gitDirectory || echo "${HOME}"/code/git
+        )
+        install_dir="${git_basedir}/github.com/shitchell"
+        if ! [[ -d "${install_dir}" ]]; then
             mkdir -p "${install_dir}"
         fi
     fi
@@ -730,7 +780,7 @@ function __install-util_dotfiles() {
         if [[ -d "${install_dir}/dotfiles/.git" ]]; then
             echo "dotfiles are already installed to '${INSTALL_DIR}', updating"
         else
-            git clone git@github.com:shitchell/dotfiles.git
+            git clone git@github.com:shitchell/dotfiles.git ./dotfiles
         fi
         cd ./dotfiles/
         ./update.sh
@@ -738,14 +788,14 @@ function __install-util_dotfiles() {
     )
 }
 
-function __install-util_test() {
+function __install-util__test() {
     require --continue-on-error foo bar
 
     echo "requirement status: ${?}"
     echo "this is a test"
 }
 
-function __install-util_test2() {
+function __install-util__test2() {
     require foo bar
 
     echo "requirement status: ${?}"
@@ -791,7 +841,7 @@ function main() {
     # Install each package
     for package in "${PACKAGES[@]}"; do
         package_exit_code=0
-        package_function="__install-util_${package}"
+        package_function="__install-util__${package}"
         package_metavar="__install_meta__${package}"
 
         # Check if a function or meta variable exists for this package
