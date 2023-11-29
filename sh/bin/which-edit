@@ -1,0 +1,40 @@
+#!/bin/bash
+#
+# Search for filenames on the $PATH and 
+
+function which-edit() {
+    local paths=()
+    local cmd_found
+    local cmd cmd_path cmd_paths
+
+    if [ -z "${EDITOR}" ]; then
+        echo "no \$EDITOR defined" 1>&2
+        return 1
+    fi
+
+    for cmd in "${@}"; do
+        cmd_found=false
+        readarray -t cmd_paths < <(which -a "${cmd}")
+
+        for cmd_path in "${cmd_paths[@]}"; do
+            if [[ -f "${cmd_path}" ]]; then
+                paths+=("${cmd_path}")
+                echo "${cmd}: ${cmd_path}"
+                cmd_found=true
+                break
+            fi
+        done
+
+        if ! ${cmd_found}; then
+            echo "${cmd}: command not found" 1>&2
+        fi
+    done
+
+    if [ "${#paths[@]}" -gt 0 ]; then
+        ${EDITOR} "${paths[@]}"
+    else
+        return 1
+    fi
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && which-edit "${@}"
