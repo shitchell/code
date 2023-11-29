@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#
+# Cat, but using ~/.lessfilter if enabled
+
+less "${@}" | cat
