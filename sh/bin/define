@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# Define a word using only the first dictionary that returns a result and
+# excluding the thesaurus
+
+function _define() {
+	word="${1}"
+
+	# Check if dict is installed
+	if ! command -v dict >/dev/null 2>&1; then
+		echo "error: dict is not installed" >&2
+		return 1
+	fi
+
+	dbs=( wn vera jargon foldocworld02 english gcide )
+	for db in ${dbs[@]}; do
+		definition="$(dict -d "${db}" "${word}" 2>/dev/null)"
+		if [ -n "${definition}" ]; then
+			# echo "FOUND DEF"
+			# a definition was found, so print it and exit
+			echo "${definition}"
+			return 0
+		fi
+	done
+	echo "No definition found for '${word}'" >&2
+	return 1
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && _define "${@}"
