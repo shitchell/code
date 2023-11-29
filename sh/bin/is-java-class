@@ -149,9 +149,6 @@ function _is_java_class() {
         echo "${filepath}: warning: skipping extension and filename validations" >&2
     elif [[ "${filepath}" =~ \. ]]; then
         extension="${filepath##*.}"
-    else
-        echo "${filepath}: error: no extension" >&2
-        return 5
     fi
 
     # Make sure a filepath was given
@@ -170,8 +167,28 @@ function _is_java_class() {
 
         # Check if it's a symlink
         if [[ -L "${filepath}" ]]; then
-            echo "${filepath}: error: is a symlink" >&2
-            return 5
+            # If we're not following symlinks, exit with an error
+            if [[ ${FOLLOW_SYMLINKS} -eq 0 ]]; then
+                echo "${filepath}: error: is a symlink" >&2
+                return 5
+            fi
+
+            # Otherwise, get the real path
+            filepath=$(readlink -f "${filepath}")
+            if [[ $? -ne 0 ]]; then
+                echo "${filepath}: error: failed to read symlink '${filepath}'" >&2
+                return 5
+            fi
+
+            # And call this function again
+            _is_java_class "${filepath}"
+            return ${?}
+        fi
+
+        # Check for an extension
+        if [[ -z "${extension}" ]]; then
+            echo "${filepath}: error: no extension" >&2
+            return 6
         fi
 
         # Check that the extension is "java", "class", "jar", or "groovy"
