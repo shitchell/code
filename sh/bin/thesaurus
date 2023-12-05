@@ -139,15 +139,19 @@ function main() {
     debug "${html}"
     json=$(
         echo "${html}" \
-          | grep -oP 'INITIAL_STATE =\K[^<]*' \
-          | sed 's/.$//;s/^.//;s/undefined/null/g'
+          | grep -oP '<script>window\.__staticRouterHydrationData = JSON\.parse\(\K[^<]*'
     )
+    json="${json::-2}" # remove the trailing ");"
     if [[ -z "${json}" ]]; then
         echo-stderr "could not find JSON in response"
         return 1
     fi
     debug "parsed json:"
     debug "${json}"
+    # The JSON is stored as a string literal, so we'll eval it
+    # (yay security! (what can i say, i'm not too concerned hackers are going to
+    # inject shell code into the JSON string literal on thesaurus.com))
+    eval "json=${json}"
     json_formatted=$(echo "${json}" | python -m json.tool 2>/dev/null)
     if [[ -z "${json_formatted}" ]]; then
         echo-stderr "failed to parse JSON"
@@ -186,7 +190,7 @@ function main() {
                 return s;
             }
             BEGIN {
-                inSearchData = 0;
+                inDefinitionData = 0;
                 inCategory = 0;
                 inSynonyms = 0;
                 inAntonyms = 0;
@@ -228,28 +232,32 @@ function main() {
             }
 
             {
-                # Determine if we are in the search data
-                if ($0 ~ /"searchData":/) {
-                    inSearchData = 1;
-                    debug("BEGINNING OF SEARCH DATA");
-                } else if (inSearchData && $0 ~ /^            \]/) {
-                    inSearchData = 0;
-                    debug("END OF SEARCH DATA");
+                # Get the term thesaurus.com interpreted the search term as
+                if (!term && $0 ~ /"displayForm":/) {
+                    gsub(/.*"displayForm": "/, "", $0);
+                    gsub(/".*/, "", $0);
+                    term = $0;
+                    debug("FOUND TERM: " term);
+                    print C_searchTerm urlunquote($0) C_reset;
+                }
+
+                # Determine if we are in the definition data
+                if (!inDefinitionData && $0 ~ /"definitionData":/) {
+                    inDefinitionData = 1;
+                    debug("BEGINNING OF DEFINITION DATA");
+                } else if (inDefinitionData && $0 ~ /^                        }/) {
+                    inDefinitionData = 0;
+                    debug("END OF DEFINITION DATA");
                     exit 0;
-                } else if (!inSearchData) {
+                } else if (!inDefinitionData) {
                     next;
                 }
                 
                 # Print the search term, category definitions, parts of speech,
                 # and synonyms
-                if ($0 ~ /"searchTerm":/) {
-                    ### Print the search term
-                    gsub(/.*"searchTerm": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    print C_searchTerm urlunquote($0) C_reset;
-                } else if ($0 ~ /^                {/) {
+                if ($0 ~ /^                                {/) {
                     inCategory = 1;
-                    debug("BEGINNING OF CATEGORY");
+                    debug("BEGINNING OF CATEGORY -- " categoryDefinition);
                 } else if ($0 ~ /"synonyms":/) {
                     inSynonyms = 1;
                     debug("BEGINNING OF SYNONYMS");
@@ -272,7 +280,7 @@ function main() {
                     # Track whether we have printed the first antonym
                     firstCategoryTermPrinted = 0;
                     debug("BEGINNING OF ANTONYMS");
-                } else if ($0 ~ /                    ]/ || $0 ~ /"antonyms": \[\]/) {
+                } else if ($0 ~ /^                                    \]/ || $0 ~ /"antonyms": \[\]/) {
                     inAntonyms = 0;
                     inSynonyms = 0;
                     if (! ($0 ~ /"antonyms": \[\]/)) {
@@ -301,7 +309,7 @@ function main() {
                         categoryIsInformal = 1;
                     }
                     debug("FOUND CATEGORY IS INFORMAL: " categoryIsInformal);
-                } else if ($0 ~ /^                        {/) {
+                } else if ($0 ~ /^                                        {/) {
                     inTerm = 1;
                     debug("BEGINNING OF TERM");
                 } else if (inTerm && $0 ~ /"term":/) {
@@ -323,7 +331,7 @@ function main() {
                         termIsInformal = "";
                     }
                     debug("FOUND TERM IS INFORMAL: " termIsInformal);
-                } else if (inTerm && $0 ~ /^                        }/) {
+                } else if (inTerm && $0 ~ /^                                        }/) {
                     ### Print the term
                     debug("PRINTING TERM: " term " (" termSimilarity ", " termIsInformal ")");
                     term_str = "";
