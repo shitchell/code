@@ -16,6 +16,7 @@ include-source 'echo.sh'
 include-source 'text.sh'
 include-source 'debug.sh'
 
+
 ## usage functions #############################################################
 ################################################################################
 
@@ -121,6 +122,19 @@ function parse-args() {
 }
 
 
+## helpful functions ###########################################################
+################################################################################
+
+# @description Use python to pretty print JSON
+# @usage json-format <string>
+# @usage echo <string> | json-format
+function json-format() {
+    local data="${*}"
+    [[ "${data}" == "-" ]] && data=$(cat)
+    printf "%s" "${data}" | python -c 'import json, sys; print(json.dumps(json.loads(sys.stdin.buffer.read().decode("latin-1")), indent=4))'
+}
+
+
 ## main ########################################################################
 ################################################################################
 
@@ -141,7 +155,15 @@ function main() {
         echo "${html}" \
           | grep -oP '<script>window\.__staticRouterHydrationData = JSON\.parse\(\K[^<]*'
     )
-    json="${json::-2}" # remove the trailing ");"
+    [[ "${DEBUG}" == true ]] && echo "${html}" > /tmp/thesaurus.html
+    [[ "${DEBUG}" == true ]] && echo "${json}" > /tmp/thesaurus.json
+    # If the JSON ends with ");", then parse it
+    if [[ "${json: -2}" == ");" ]]; then
+        json="${json::-2}"
+    else
+        echo-stderr "JSON regex appears to be invalid, ending is '${json: -2}'"
+        return 1
+    fi
     if [[ -z "${json}" ]]; then
         echo-stderr "could not find JSON in response"
         return 1
@@ -151,8 +173,11 @@ function main() {
     # The JSON is stored as a string literal, so we'll eval it
     # (yay security! (what can i say, i'm not too concerned hackers are going to
     # inject shell code into the JSON string literal on thesaurus.com))
-    eval "json=${json}"
-    json_formatted=$(echo "${json}" | python -m json.tool 2>/dev/null)
+    if ! eval "json=${json}" 2>/dev/null; then
+        echo-stderr "unable to evaluate JSON string literal"
+    fi
+    [[ "${DEBUG}" == true ]] && echo "${json}" > /tmp/thesaurus.json
+    json_formatted=$(echo "${json}" | json-format - 2>/dev/null)
     if [[ -z "${json_formatted}" ]]; then
         echo-stderr "failed to parse JSON"
         return 1
