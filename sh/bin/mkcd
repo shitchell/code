@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-#
-# cd to a directory, creating it if it doesn't exist
-
-[[ -z "${1}" ]] && echo "usage: mkcd <directory>" >&2 && return 1
-mkdir -p "${1}" && cd "${1}""
