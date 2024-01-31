@@ -11,9 +11,17 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-# if no branches are specified, pull all branches that exist both locally and on
-# the remote
-if [ -z "$1" ]; then
+# set up colors
+function setup-colors() {
+    C_GREEN='\e[32m'
+    S_RESET='\e[0m'
+    S_BOLD='\e[1m'
+}
+[[ -t 1 ]] && setup-colors
+
+# if no branches are specified, pull all non-worktree branches that exist both
+# locally and on the remote
+if [[ -z "${1}" ]]; then
 	readarray -t branches < <(
 		comm -12 \
 			<(git branch | sed 's|* |  |' | sort) \
@@ -26,12 +34,76 @@ fi
 # we have to use a different command for the current branch
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 
+# fetch all changes from the remote
+echo -e "${S_BOLD}* fetching changes from ${remote}${S_RESET}"
+git fetch -v --progress "${remote}"
+
+echo -e "${S_BOLD}* pulling ${#branches[@]} branches from ${remote}${S_RESET}"
 for branch in "${branches[@]}"; do
 	if [ "${branch}" = "${current_branch}" ]; then
-		echo -e "\e[32mgit pull\e[0m"
+		echo -e "${C_GREEN}git pull${S_RESET}"
 		git pull
 	else
-		echo -e "\e[32mgit fetch ${remote} ${branch}:${branch}\e[0m"
+        # determine the remote 
+		echo -e "${C_GREEN}git fetch ${remote} ${branch}:${branch}${S_RESET}"
 		git fetch -v --progress "${remote}" "${branch}:${branch}"
 	fi
 done
+
+# check if there are any worktrees
+readarray -t _worktrees < <(
+    # Create an array in the format:
+    #   branch1\30worktree1
+    #   branch2\30worktree2
+    #   ...
+    git worktree list --porcelain \
+        | awk '
+            /^worktree/ {
+                gsub(/^worktree /, "", $0)
+                w=$0
+            }
+            /^branch/ {
+                gsub(/^branch refs\/heads\//, "", $0)
+                b=$0
+                print b "\30" w
+            }
+        '
+)
+
+# if there are any arguments, filter only the worktrees that match the given
+# branches
+declare -a worktrees
+if [[ -z "${1}" ]]; then
+    for worktree in "${_worktrees[@]}"; do
+        worktree_path="${worktree##*$'\30'}"
+        # verify that the worktree path exists and is tracking a remote branch
+        if [[ -d "${worktree_path}" ]]; then
+            remote_branch=$(
+                git -C "${worktree_path}" rev-parse --abbrev-ref --symbolic-full-name @{u} 2> /dev/null
+            )
+            if [[ -n "${remote_branch}" ]]; then
+                worktrees+=( "${worktree_path}" )
+            fi
+        fi
+    done
+else
+    for branch in "${@}"; do
+        for worktree in "${_worktrees[@]}"; do
+            worktree_branch="${worktree%%$'\30'*}"
+            worktree_path="${worktree##*$'\30'}"
+            if [[ "${worktree_branch}" == "${branch}" ]]; then
+                worktrees+=( "${worktree_path}" )
+            fi
+        done
+    done
+fi
+
+# if there are any worktrees, pull them
+if [[ ${#worktrees[@]} -gt 0 ]]; then
+    echo -e "${S_BOLD}* pulling ${#worktrees[@]} worktrees from ${remote}${S_RESET}"
+    for worktree in "${worktrees[@]}"; do
+        worktree_rel="$(realpath --relative-to="${PWD}" "${worktree}")"
+        echo -e "${C_GREEN}git -C ${worktree_rel} pull${S_RESET}"
+        git -C "${worktree}" pull
+    done
+fi
