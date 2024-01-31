@@ -3,6 +3,7 @@
 import argparse
 import json
 import keyring
+import os
 import re
 import textwrap
 
@@ -12,7 +13,7 @@ from trinoor.jira import JIRA
 from typing import Iterable
 from jira import resources
 
-email: str = "maurice.moss@trinoor.com"
+email: str = os.environ.get("JIRA_EMAIL", "maurice.moss@trinoor.com")
 keyinfo: str = ("system", "jira-mmoss")
 
 
@@ -24,10 +25,14 @@ def login() -> JIRA:
     store_password: bool = False
 
     # Get the password
-    password = keyring.get_password(*keyinfo)
+    password = os.environ.get("JIRA_PAT", keyring.get_password(*keyinfo))
     if not password:
-        password = getpass("Password: ")
-        store_password = True
+        # Check to see if an environment variable is set
+        password = os.environ.get("JIRA_PAT")
+        if not password:
+            # Prompt for the password
+            password = getpass("Password: ")
+            store_password = True
 
     while attempts and not logged_in:
         try:
