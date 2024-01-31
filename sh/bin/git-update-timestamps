@@ -70,17 +70,18 @@ function main() {
     for file in "${FILEPATHS[@]}"; do
         timestamp=$(
             git log \
-                "${GIT_LOG_OPTS[@]}" \
                 -n 1 \
                 --date=format:%Y%m%d%H%M.%S \
                 --pretty=format:%cd \
                 --date-order \
+                "${GIT_LOG_OPTS[@]}" \
                 -- "${file}"
         )
         if [ -z "${timestamp}" ]; then
             echo "ERROR: skipping '${file}' -- no git log found" >&2
             continue
         fi
+        echo "${timestamp}  ${file}"
         touch -m -t "${timestamp}" "${file}"
     done
 }
