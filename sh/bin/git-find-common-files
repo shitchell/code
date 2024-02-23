@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# Find common files between a set of git commits
+
+COMMITS=( "${@}" )
+
+if [[ ${#COMMITS[@]} -lt 2 ]]; then
+    echo "usage: $(basename "${0}") <commit> [<commit> ...]"
+    exit 1
+fi
+
+COMMON_FILES=()
+
+# Start by populating COMMON_FILES with the files from the first commit
+readarray -t COMMON_FILES < <(
+    git log -1 --pretty=format: --name-only --no-renames "${COMMITS[0]}" 2>/dev/null
+)
+# Loop over each subsequent commit, comparing its files to the common files
+for ((i=1; i<${#COMMITS[@]}; i++)); do
+    # Get the files for the current commit
+    readarray -t FILES < <(
+        git log -1 --pretty=format: --name-only --no-renames "${COMMITS[i]}" 2>/dev/null
+    )
+
+    # Loop over the common files and remove any that aren't in the current commit
+    readarray -t COMMON_FILES < <(
+        comm -12 \
+            <(printf "%s\n" "${COMMON_FILES[@]}" | sort) \
+            <(printf "%s\n" "${FILES[@]}" | sort)
+    )
+done
+
+# Print the common files
+for FILE in "${COMMON_FILES[@]}"; do
+    echo "${FILE}"
+done

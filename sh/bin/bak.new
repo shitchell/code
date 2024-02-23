@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+#
+# Creates a backup of the specified files or directories.
+#
+# TODO: Implement everything in the help text since right now... it's just lies
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED='\e[31m'
+    C_GREEN='\e[32m'
+    C_YELLOW='\e[33m'
+    C_BLUE='\e[34m'
+    C_MAGENTA='\e[35m'
+    C_CYAN='\e[36m'
+    C_WHITE='\e[37m'
+    S_RESET='\e[0m'
+    S_BOLD='\e[1m'
+    S_DIM='\e[2m'
+    S_UNDERLINE='\e[4m'
+    S_BLINK='\e[5m'
+    S_INVERT='\e[7m'
+    S_HIDDEN='\e[8m'
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-hd] filepath1 [filepath2 ...]"
+}
+
+function help-epilogue() {
+    echo "create backups of the specified files or directories"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Backup names are created according to the specified format. By default"
+    echo "this is '<filename>.bak[.<n>]', where <n> is an integer that is"
+    echo "incremented until a filename is found that does not exist."
+    echo
+    echo "By default, backups are created in the same directory as the original."
+    echo "This can be changed with the -d/--directory option, which specifies"
+    echo "a directory where all backups will be created."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                     display usage
+    --help                 display this help message
+    -d/--directory <path>  create backups in <path>
+    -f/--format <format>   use <format> to create backup names
+    -n/--dry-run           print the backup names that would be created, but
+                           don't actually create them
+EOF
+    echo
+    echo "Format:"
+    cat << EOF
+    The format string is a string that can contain the following variables:
+        %{f}              the filename without the extension
+        %{F}              the filename with the extension
+        %{e}              the extension, including the leading dot
+        %{E}              the extension, without the leading dot
+        %{d}              the current date in YYYYMMDDHHMMSS format
+        %{d:<strftime>}   the current date formatted with <strftime>
+        %{n}              the number of the backup (empty if 0)
+        %{n:<str>}        the number of the backup, with <str> appended (empty
+                          if 0). e.g.: %{n:.} => 1., %{n:_} => 1_
+        %{<str>:n}        the number of the backup, with <str> prepended (empty
+                          if 0). e.g.: %{.:n} => .1, %{_:n} => _1
+        %{2n}             the number of the backup, zero-padded to 2 digits (00
+                          if 0)
+    The default format is '%{F}.bak%{.:n}'.
+    
+    Examples:
+        Filename       Format                    n       Backup Name
+        foo.txt        %{F}.bak%{.:n}            0       foo.txt.bak
+        foo.txt        %{F}.bak%{.:n}            1       foo.txt.bak.1
+        foo.txt        %{f}.bak%{.:n}            0       foo.bak
+        foo.txt        %{F}_%{d:%Y%m%d-%H%M%S}   0       foo.txt_20201231235959
+        foo.txt        %{F}_%{d:%Y%m%d-%H%M%S}   1       foo.txt_20201231235959
+        foo.txt        %{F}-%{2n:-}backup        0       foo.txt-00-backup
+        foo.txt        %{F}-%{2n:-}backup        1       foo.txt-01-backup
+EOF
+}
+
+function parse-args() {
+    # Default values
+    BACKUP_DIR=""
+    FORMAT="%{F}.bak%{.:n}"
+    DO_DRY_RUN=false
+    FILEPATHS=()
+    
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -d | --directory)
+                # Remove any trailing slashes from the directory name
+                [[ "${2}" =~ (.*)"/"+$ ]] \
+                    && BACKUP_DIR="${BASH_REMATCH[1]}" \
+                    || BACKUP_DIR="${2}"
+                shift 1
+                ;;
+            -f | --format)
+                FORMAT="${2}"
+                shift 1
+                ;;
+            -n | --dry-run)
+                DO_DRY_RUN=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+    
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        FILEPATHS+=("${1}")
+        shift 1
+    done
+    
+    return 0
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Create a new file with an incremented number appended
+# @usage create <filename> [fd]
+function create-incremental-file() { # fd base [suffix [max]]]
+    local filepath="${1}"
+    local fd="${2:-3}"
+
+    [[ -z "${filepath}" ]] && echo "error: filepath not provided" && return 1
+    # local fd="$1" base="$2" suffix="${3-}" max="${4-}"
+
+    # Parse out the filename, extension, and directory
+    local filename extension directory
+    [[ "${filepath}" =~ "/" ]] && filename="${filepath##*/}" || filename="${filepath}"
+    [[ "${filename}" =~ "." ]] && extension=".${filename##*.}" && filename="${filename%.*}"
+    [[ "${filepath}" =~ "/" ]] && directory="${filepath%/*}" || directory="."
+
+    local n= file
+    local - # ash-style local scoping of options in 4.4+
+    set -o noclobber
+    until
+        file="${directory}/${filename}${extension}${n:+.${n}}"
+        eval 'command exec '"${fd}"'> "'${file//\"/\\\"}'"' 2> /dev/null
+    do
+        ((n++))
+        ((max > 0 && n > max)) && return 1
+    done
+    echo "${file}"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    local filepath filepath_bak filename directory i dir_symbol
+
+    for filepath in "${FILEPATHS[@]}"; do
+        # remove any trailing slashes from directory names
+        filepath="${filepath/%\//}"
+
+        # parse out the filename and directory
+        if [[ "${filepath}" =~ "/" ]]; then
+            filename="${filepath##*/}"
+            directory="${filepath%/*}"
+        else
+            filename="${filepath}"
+            directory="."
+        fi
+
+        # if a backup dir was specified, use that, else use the original dir
+        [[ -n "${BACKUP_DIR}" ]] && directory="${BACKUP_DIR}"
+        filepath_bak="${directory}/${filename}.bak"
+
+        if [[ -e "${filepath_bak}" ]]; then
+            i=1
+            while [[ -e "${filepath_bak}.${i}" ]]; do
+                let i++
+            done
+            filepath_bak="${filepath_bak}.${i}"
+        fi
+        [[ -d "${filepath}" ]] && dir_symbol="/" || dir_symbol=""
+        echo -n "${filepath}${dir_symbol} => "
+        cp -r --preserve=all "${filepath}${dir_symbol}" "${filepath_bak}${dir_symbol}"
+        echo "${filepath_bak}${dir_symbol}"
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
