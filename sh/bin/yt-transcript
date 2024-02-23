@@ -214,10 +214,10 @@ function get-transcript() {
         debug "lang_b64.B: ${B}"
         local C=$(echo "${B}" | sed 's/%/%%/')
         debug "lang_b64.C: ${C}"
-        local lang_b64=$''"${C}"
+        local lang_b64=$'\x12\x0e'"${C}"
         debug "lang_b64: ${lang_b64}"
     fi
-    local params=$(printf '\n\x0b%s\x12\x0e%s' "${video_id}" "${lang_b64}" | base64)
+    local params=$(printf '\n\x0b%s%s' "${video_id}" "${lang_b64}" | base64)
     debug "video_id: ${video_id}"
     debug "lang: ${lang}"
     debug "params: ${params}"

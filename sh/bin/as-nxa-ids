@@ -33,7 +33,7 @@ function help-full() {
     -N/--service-names             interpret arguments as service names
     -I/--service-ids               interpret arguments as service IDs
     -A/--auto                      interpret arguments as service names, IDs, or paths (default)
-    -f/--format <format>           the output format, defaults to '{fullname} {path}'
+    -f/--format <format>           the output format, defaults to '{fullname} {filepath}'
     -e/-E/--(no-)print-errors      whether to print errors for missing services
     -b/-B/--(no-)blank-lines       whether to print blank lines for missing services
 EOF
@@ -60,6 +60,7 @@ function help-usage() {
 function parse-args() {
     # Default values
     NXA_DIR=""
+    NXA_ACCOUNTS_DIR=""
     SERVICE_PREFIX=""
     OUTPUT_FORMAT="{fullname} {filepath}"
     INTERPRET_AS="auto" # auto, name, id
@@ -152,6 +153,11 @@ function parse-args() {
         exit 1
     fi
 
+    # Determine the accounts directory
+    NXA_ACCOUNTS_DIR=$(find-accounts-dir "${NXA_DIR}")
+    ## Set the accounts directory relative to the current directory
+    NXA_ACCOUNTS_DIR=$(realpath --relative-to="${PWD}" "${NXA_ACCOUNTS_DIR}")
+
     # Check that there are services
     if [[ ${#SERVICES[@]} -eq 0 ]]; then
         help-usage
@@ -159,10 +165,11 @@ function parse-args() {
         exit 1
     fi
 
-    debug "NXA_DIR: ${NXA_DIR}"
-    debug "DO_ERRORS: ${DO_ERRORS}"
-    debug "DO_BLANK_LINES: ${DO_BLANK_LINES}"
-    debug "SERVICES: ${SERVICES[*]}"
+    debug "NXA_DIR:           ${NXA_DIR}"
+    debug "NXA_ACCOUNTS_DIR:  ${NXA_ACCOUNTS_DIR}"
+    debug "DO_ERRORS:         ${DO_ERRORS}"
+    debug "DO_BLANK_LINES:    ${DO_BLANK_LINES}"
+    debug "SERVICES:          ${SERVICES[*]}"
 }
 
 
@@ -186,10 +193,41 @@ function debug() {
     fi
 }
 
+# @description Find the accounts directory in the NxA directory
+# @usage find-accounts-dir [<nxa-dir>]
+function find-accounts-dir() {
+    local nxa_dir="${1:-${NXA_DIR:-.}}"
+    local accounts_dir
+
+    [[ -z "${nxa_dir}" ]] && return 1
+    nxa_dir=$(realpath "${nxa_dir}")
+
+    account_dir=$(
+        find "${nxa_dir}" \
+            -maxdepth 5 \
+            -type d \
+            -name 'accounts' \
+            -path '*/SREData/MetaDataMgr/FileMgr/accounts' \
+            -print \
+            -quit
+    )
+
+    if [[ -z "${account_dir}" ]]; then
+        echo "error: could not find accounts directory in: ${nxa_dir}" >&2
+        return 1
+    fi
+
+    # Return the accounts dir relative to the current directory
+    # echo "${account_dir}"
+    realpath --relative-to="${PWD}" "${account_dir}"
+}
+
 # @description Determine if a string is a service ID
 # @usage is-service-id <string>
 function is-service-id() {
-    local string="${1:--}"
+    local string="${1}"
+
+    [[ -z "${string}" ]] && return 1
     [[ "${string}" == "-" ]] && string=$(cat)
     if [[ -n "${SERVICE_PREFIX}" ]]; then
         [[ "${string}" =~ ^${SERVICE_ID_REGEX}$ ]]
@@ -212,12 +250,13 @@ function contains-service-id() {
 # @description Parse a service ID out of a filepath or filename
 # @usage parse-service-id <string>
 function parse-service-id() {
-    local string="${1:--}"
+    local string="${1}"
 
+    [[ -z "${string}" ]] && return 1
     [[ "${string}" == "-" ]] && string=$(cat)
 
     # Get just the filename if this is a filepath
-    local string=$(basename "${string}")
+    local string="${string##*/}"
 
     # Grab just the ID, which should match the regex '[A-Z0-9]{8}'
     local service_id=$(echo "${string}" | grep -oE "${SERVICE_ID_REGEX}")
@@ -252,6 +291,78 @@ function find-service-files() {
     printf '%s\n' "${service_files[@]}"
 }
 
+# @description Given a service file, return its full name
+# @usage service-file-to-name <service-file>
+function service-file-to-name() {
+    local service_file="${1:--}"
+    local service_file_real=""
+    local service_full_name=""
+
+    [[ "${service_file}" == "-" ]] && service_file=$(cat)
+    
+    # If the service file ends with "*_dfn.xml", then use its ctc file
+    if [[ "${service_file}" =~ "_dfn.xml"$ ]]; then
+        debug "converting dfn to ctc:"
+        service_file=$(sed 's/_dfn.xml$/_ctc.xml/' <<< "${service_file}")
+        debug " => ${service_file}"
+    fi
+
+    # Get the service name
+    local service_name
+    if [[ "${service_file}" =~ "/rdcs/" ]]; then
+        # We need to remove all newlines and get the the name key from the
+        # HSDataContainerType element
+        debug "parsing service name from rdcs file"
+        service_name=$(
+            awk '
+                /<HSDataContainerType / { f = 1; }
+                f && /name="/ {
+                    gsub(/.*name="/, "")
+                    gsub(/".*/, "")
+                    print
+                    exit
+                }
+            ' < "${service_file}"
+        )
+    elif [[ "${service_file}" =~ "_ctc.xml"$ ]]; then
+        # We need the contractName attribute from the HSContract element
+        debug "parsing service name from ctc file"
+        service_name=$(
+            awk '
+                /<HSContract / { f = 1; }
+                f && /contractName="/ {
+                    gsub(/.*contractName="/, "")
+                    gsub(/".*/, "")
+                    print
+                    exit
+                }
+            ' < "${service_file}"
+        )
+    fi
+    debug "service_name: ${service_name}"
+    if [[ -z "${service_name}" ]]; then
+        echo "error: no service name found for file: ${service_file}" >&2
+        return 1
+    fi
+
+    # Form the full name from the file path
+    ## Get the real path
+    service_file_real=$(realpath "${service_file}")
+    ## Remove everything up to the 'accounts' directory
+    service_full_name="${service_file_real##*/MetaDataMgr/FileMgr/accounts/}"
+    ## Remove the file name
+    service_full_name="${service_full_name%/*}"
+    ## Append the service name
+    service_full_name="${service_full_name}.${service_name}"
+    ## Remove the "/packages" directory
+    service_full_name="${service_full_name/packages\//}"
+    ## Replace all '/' with '.'
+    service_full_name="${service_full_name//\//.}"
+    debug "service_full_name: ${service_full_name}"
+
+    echo "${service_full_name}"
+}
+
 # @description Convert a service ID to a service name
 # @usage service-id-to-name <service-id>
 function service-id-to-name() {
@@ -260,6 +371,7 @@ function service-id-to-name() {
 
     [[ "${input_str}" == "-" ]] && input_str=$(cat)
     local service_id="${input_str}"
+    debug "service_id: ${service_id}"
 
     # Ensure the service ID is valid
     if ! is-service-id "${service_id}"; then
@@ -367,8 +479,8 @@ function service-id-to-name() {
 }
 
 # @description Convert a service name to a filepath
-# @usage service-name-to-filepath <service-name>
-function service-name-to-filepath() {
+# @usage service-fullname-to-filepath <service-fullname>
+function service-fullname-to-filepath() {
     local input_str="${1:--}"
     local format="${2:-${OUTPUT_FORMAT}}"
 
@@ -385,7 +497,11 @@ function service-name-to-filepath() {
     debug "service_name: ${service_name}"
 
     # Locate the full project path in the NXA directory
-    local project_dir=$(find "${NXA_DIR}" -maxdepth 5 -name "${project}" -type d -print -quit)
+    local project_dir="${NXA_ACCOUNTS_DIR}/${project}"
+    if ! [[ -d "${project_dir}" ]]; then
+        echo "error: could not find project directory: ${project_dir}" >&2
+        return 1
+    fi
     debug "project_dir: ${project_dir}"
 
     # Convert the service name to a path with "packages/" inserted after the project name and removing the service name
@@ -423,7 +539,7 @@ function service-name-to-filepath() {
         gsub(/{name}/, name);
         gsub(/{fullname}/, fullname);
         gsub(/{id}/, id);
-        gsub(/{path}/, path);
+        gsub(/{filepath}/, path);
         gsub(/{input}/, input);
         gsub(/{project}/, project);
         gsub(/\\n/, "\n");
@@ -433,6 +549,91 @@ function service-name-to-filepath() {
         gsub(/\\/, "");
         print $0;
     }' <<< "${format}"
+}
+
+# @description Find all services across all projects with the given name
+# @usage service-name-to-filepaths <service-name>
+function service-name-to-filepaths() {
+    local input_str="${1:--}"
+    local format="${2:-${OUTPUT_FORMAT}}"
+    local filepaths
+    local project
+    local accounts_dir glob_pattern
+    local search_dir="${NXA_ACCOUNTS_DIR}"
+    local find_args=() find_paths=""
+    local service_id
+    local service_ids=()
+    local service_name
+
+    [[ "${input_str}" == "-" ]] && input_str=$(cat)
+    service_name="${input_str}"
+    debug "service_name: ${service_name}"
+
+    # If the name includes a "." or a "*", then replace any "." with "/" and
+    # use the result as a glob pattern to determine the search directories
+    if [[ "${service_name}" == *"*"* || "${service_name}" == *"."* ]]; then
+        # Create a pathy glob pattern from the service name
+        glob_pattern=$(printf '%q' "${service_name}")
+        glob_pattern="${glob_pattern//\\\*/*}"
+        glob_pattern="${glob_pattern//\./\/}"
+        # If the last section of the pattern is a single word (the service name)
+        # then remove it
+        if [[ "${glob_pattern}" =~ "/"([-_A-Za-z0-9]+)$ ]]; then
+            service_name="${BASH_REMATCH[1]}"
+            glob_pattern="${glob_pattern%/*}"
+        else
+            service_name=".*"
+        fi
+        # If the glob pattern includes the project name, then place "packages/"
+        # after the project name and add the project to the search directory
+        if [[ "${glob_pattern}" =~ ^([-_A-Za-z0-9]+)"/" ]]; then
+            # TODO: we probably ought to switch this to appending just a star
+            # TODO: since we don't necessarily know if the desired service is
+            # TODO: an rdcs file which won't be in the packages directory
+            project="${BASH_REMATCH[1]}"
+            glob_pattern=$(
+                sed -E 's|^([-_A-Za-z0-9]+)|\1/packages|' <<< "${glob_pattern}"
+            )
+            search_dir="${NXA_ACCOUNTS_DIR}/${project}"
+        fi
+        debug "glob_pattern: ${glob_pattern}"
+        # Add the glob pattern to the find args
+        find_args+=(-not -path "*/${glob_pattern}/*" -o -type f -print)
+    else
+        find_args+=(-type f)
+    fi
+    debug "search_dir: ${search_dir}"
+    debug "find_args: ${find_args[*]}"
+    debug "service_name: ${service_name}"
+
+    readarray -t filepaths < <(
+        shopt -s globstar
+        find "${search_dir}" "${find_args[@]}" \
+            | xargs -n 200 grep --color=never -loRE "contractName=\"${service_name}\""
+        # grep --color=never -loRE \
+        #     "contractName=\"${service_name}\"" \
+        #     "${NXA_ACCOUNTS_DIR}/"**/**.xml
+    )
+    debug "filepaths: ${filepaths[*]}"
+    if [[ -z "${filepaths}" ]]; then
+        debug "filepath empty for service: ${service_name_full}, returning 1"
+        echo "error: could not find service name: ${service_name_full}" >&2
+        return 1
+    fi
+
+    # Get a unique list of service IDs
+    readarray -t service_ids < <(
+        for filepath in "${filepaths[@]}"; do
+            parse-service-id "${filepath}"
+        done | sort -u
+    )
+    debug "service_ids: ${service_ids[*]}"
+
+    # Get the service IDs and print the results
+    for service_id in "${service_ids[@]}"; do
+        debug "service_id: ${service_id}"
+        service-id-to-name "${service_id}"
+    done
 }
 
 
@@ -451,6 +652,7 @@ function main() {
 
     local output
     local err_code
+    local exit_code=0
     for service in "${SERVICES[@]}"; do
         local service_type
 
@@ -458,6 +660,10 @@ function main() {
         if [[ "${INTERPRET_AS}" == "auto" ]]; then
             if contains-service-id "${service}"; then
                 service_type="id"
+            elif [[ "${service}" == *"*"* ]]; then
+                service_type="name"
+            elif [[ "${service}" == *"."* ]]; then
+                service_type="fullname"
             else
                 service_type="name"
             fi
@@ -469,9 +675,13 @@ function main() {
             debug "service-id-to-name '${service}'"
             output=$(service-id-to-name "${service}" 2>"${error_file}")
             err_code=${?}
+        elif [[ "${service_type}" == "fullname" ]]; then
+            debug "service-fullname-to-filepath '${service}'"
+            output=$(service-fullname-to-filepath "${service}" 2>"${error_file}")
+            err_code=${?}
         elif [[ "${service_type}" == "name" ]]; then
-            debug "service-name-to-filepath '${service}'"
-            output=$(service-name-to-filepath "${service}" 2>"${error_file}")
+            debug "service-name-to-filepaths '${service}'"
+            output=$(service-name-to-filepaths "${service}" 2>"${error_file}")
             err_code=${?}
         else
             output="error: invalid service type: ${service_type}"
@@ -481,6 +691,7 @@ function main() {
         if [[ ${err_code} -eq 0 ]]; then
             echo "${output}"
         else
+            exit_code=1
             if ${DO_ERRORS}; then
                 echo "${output}" >&2
             elif ${DO_BLANK_LINES}; then
@@ -488,6 +699,8 @@ function main() {
             fi
         fi
     done
+    
+    return ${exit_code}
 }
 
 

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+# Get files from either args or stdin
+if [[ ${#} -gt 0 ]]; then
+    FILEPATHS=("${@}")
+else
+    readarray -t FILEPATHS < <(cat)
+fi
+
+echo "# File Types"
+file "${FILEPATHS[@]}" \
+    | grep -oP ':\s+\K[^:]+$' \
+    | sort \
+    | uniq -c
+
+echo
+
+echo "# File Extensions"
+printf "%s\n" "${FILEPATHS[@]}" \
+    | sed 's|.*/||; /\./!d; s|.*\.|\.|' \
+    | sort \
+    | uniq -c

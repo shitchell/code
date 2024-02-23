@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 #
+# Show the NxA version for an NxA server
+
+#!/usr/bin/env bash
+#
 # This script does some stuff
 
 
@@ -94,32 +98,31 @@ function help-full() {
     echo "Options:"
     cat << EOF
     -h                    display usage
-    --config-file <file>  use the specified configuration file
     --help                display this help message
     -c/--color <when>     when to use color ("auto", "always", "never")
-    -s/--silent           suppress all output
-    {{TODO: INSERT OPTIONS HERE}}
+    -H/--host <host>      the host to connect to
+    -P/--port <port>      the port to connect to
+    --(no-)test-ports     if a port is not specified, test common ports
+    -s/--ssl              use SSL
+    -S/--no-ssl           do not use SSL
+    -t/--timeout <secs>   the timeout for the request
 EOF
 }
 
 function parse-args() {
-    # Parse the arguments first for a config file to load default values from
-    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
-    for ((i=0; i<${#}; i++)); do
-        case "${!i}" in
-            -c | --config-file)
-                let i++
-                CONFIG_FILE="${!i}"
-                ;;
-        esac
-    done
-    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
-
     # Default values
     # {{TODO: INSERT DEFAULT VALUES HERE}}
-    FILEPATHS=()
-    DO_COLOR=false
-    DO_SILENT=false
+    HOST=""
+    PORT=""
+    TIMEOUT=0
+    DO_SSL=true
+    TEST_PORTS=(
+        "https" 443
+        "https" 8443
+        "http" 80
+        "http" 8080
+    )
+    DO_TEST_PORTS=false
     local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
 
     # Loop over the arguments
@@ -134,39 +137,51 @@ function parse-args() {
                 help-full
                 exit ${E_SUCCESS}
                 ;;
-            --config-file)
-                shift 1
-                ;;
             -c | --color)
                 color_when="${2}"
                 shift 1
                 ;;
-            -s | --silent)
-                DO_SILENT=true
-                ;;
-            --)
+            -H | --host)
+                HOST="${2}"
                 shift 1
-                break
+                ;;
+            -P | --port)
+                PORT="${2}"
+                shift 1
+                ;;
+            --test-ports)
+                DO_TEST_PORTS=true
+                ;;
+            --no-test-ports)
+                DO_TEST_PORTS=false
+                ;;
+            -s | --ssl | --https)
+                DO_SSL=true
+                ;;
+            -S | --no-ssl | --http)
+                DO_SSL=false
+                ;;
+            -t | --timeout)
+                TIMEOUT="${2}"
+                shift 1
                 ;;
             -*)
                 echo "error: unknown option: ${1}" >&2
                 return ${E_ERROR}
                 ;;
             *)
-                FILEPATHS+=("${1}")
+                if [[ -z "${HOST}" ]]; then
+                    HOST="${1}"
+                elif [[ -z "${PORT}" ]]; then
+                    PORT="${1}"
+                else
+                    echo "error: too many arguments" >&2
+                    help-usage >&2
+                fi
                 ;;
         esac
         shift 1
     done
-
-    # If -- was used, collect the remaining arguments
-    while [[ ${#} -gt 0 ]]; do
-        FILEPATHS+=("${1}")
-        shift 1
-    done
-
-    # If in silent mode, silence the output
-    ${DO_SILENT} && silence-output
 
     # Set up colors
     if ! ${DO_SILENT}; then
@@ -192,7 +207,56 @@ function parse-args() {
         ${DO_COLOR} && setup-colors || unset-colors
     fi
 
-    # {{TODO: INSERT OPTION VALIDATIONS HERE}}
+    # If no host was specified, use localhost
+    if [[ -z "${HOST}" ]]; then
+        HOST="localhost"
+    fi
+
+    # Check if the host includes a protocol and/or port
+    # if [[ "${HOST}" == *":"* ]]; then
+    if [[ "${HOST}" =~ ^("http"s?)(://)?([^:/]+)(:([0-9]+))? ]]; then
+        local protocol host port
+        protocol="${BASH_REMATCH[1]}"
+        host="${BASH_REMATCH[3]}"
+        port="${BASH_REMATCH[5]}"
+
+        # Set the protocol
+        case "${protocol}" in
+            "http")
+                DO_SSL=false
+                ;;
+            "https")
+                DO_SSL=true
+                ;;
+        esac
+
+        # Set the host
+        HOST="${host}"
+
+        # Set the port
+        [[ -n "${port}" ]] && PORT="${port}"
+    fi
+
+    # If no port was specified, use the default
+    if [[ -z "${PORT}" ]]; then
+        if ${DO_SSL}; then
+            PORT=443
+        else
+            PORT=80
+        fi
+    fi
+
+    # Validate the timeout
+    if ! [[ "${TIMEOUT}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid timeout: ${TIMEOUT}" >&2
+        return ${E_ERROR}
+    fi
+
+    # Validate the port
+    if ! [[ "${PORT}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid port: ${PORT}" >&2
+        return ${E_ERROR}
+    fi
 
     return ${E_SUCCESS}
 }
@@ -201,11 +265,20 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
-# @description Do stuff
-# @usage do-stuff
-function do-stuff() {
-    echo -n "i'm doin the stuff"
-    [[ -n "${1}" ]] && echo -e " to ${C_CYAN}${1}${S_RESET}" || echo
+# @description Prettify JSON using available tools
+# @usage prettify-json <json>
+function prettify-json() {
+    local json="${1:-$(</dev/stdin)}"
+
+    if command -v jq &>/dev/null; then
+        echo "${json}" | jq .
+    elif command -v python &>/dev/null; then
+        echo "${json}" | python -m json.tool
+    elif command -v perl &>/dev/null; then
+        echo "${json}" | perl -MJSON -0777 -ne 'print to_json(from_json($_), {pretty=>1})'
+    else
+        return 1
+    fi
 }
 
 
@@ -215,9 +288,39 @@ function do-stuff() {
 function main() {
     parse-args "${@}" || return ${?}
 
-    for filepath in "${FILEPATHS[@]}"; do
-        do-stuff "${filepath}"
-    done
+    debug-vars "HOST" "PORT" "DO_SSL" "DO_COLOR"
+
+    local exit_code=0
+    local curl_args=()
+    local protocol url response
+
+    # Set the protocol
+    ${DO_SSL} && protocol="https" || protocol="http"
+
+    # Set the URL
+    url="${protocol}://${HOST}:${PORT}/as/ui/services/about/appinfo"
+
+    # Set up the curl arguments
+    curl_args+=("-S" "--no-progress-meter" "-k" "-m" "${TIMEOUT}")
+
+    # Make the request and capture the response
+    response=$(curl "${curl_args[@]}" "${url}" 2>&1)
+    exit_code=${?}
+
+    # If the request failed, print the error and exit
+    if [[ ${exit_code} -ne 0 ]]; then
+        echo "error: ${response}" >&2
+        return ${exit_code}
+    fi
+
+    # If the response is empty, print an error and exit
+    if [[ -z "${response}" ]]; then
+        echo "error: no response from server" >&2
+        return 1
+    fi
+
+    # Print the response
+    prettify-json "${response}" || echo "${response}"
 }
 
 

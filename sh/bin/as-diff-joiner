@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+FILES=( "${@}" )
+
+cat "${FILES[@]}" \
+    | awk '{
+        # Remove the leading timestamp
+        gsub(/^[^ ]+ /, "", $0);
+
+        # Remove ANSI color codes
+        gsub(/\x1b\[[0-9;]*m/, "", $0);
+
+        # Only deal with lines that start with "File matches", "File differs",
+        # "Only in", or "diff"
+        if ($0 ~ /^diff/) {
+            # Grab the directory for this report
+            dir = gensub(/^diff "{repo}\/([^"]+)".*$/, "\\1", "g", $0);
+        } else if ($0 ~ /^(File matches|File differs|Only in)/) {
+            # ex:
+            # File Matches: foo/bar.xml
+
+            # Grab the matchiness
+            matchiness = gensub(/^([^:]+): .*/, "\\1", "g", $0);
+            # Grab the filename
+            filename = gensub(/^[^:]+: (.*)$/, "\\1", "g", $0);
+
+            # Print the line with the directory prepended to the filename
+            print matchiness ": " dir "/" filename;
+        }
+    }'

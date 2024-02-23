@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Tag a commit or PR with a version number
+# This script does some stuff with subcommands
 
 
 ## imports #####################################################################
@@ -50,20 +50,27 @@ trap trap-exit EXIT
 # @description Set up color variables
 # @usage setup-colors
 function setup-colors() {
-    C_RED='\e[31m'
-    C_GREEN='\e[32m'
-    C_YELLOW='\e[33m'
-    C_BLUE='\e[34m'
-    C_MAGENTA='\e[35m'
-    C_CYAN='\e[36m'
-    C_WHITE='\e[37m'
-    S_RESET='\e[0m'
-    S_BOLD='\e[1m'
-    S_DIM='\e[2m'
-    S_UNDERLINE='\e[4m'
-    S_BLINK='\e[5m'
-    S_INVERT='\e[7m'
-    S_HIDDEN='\e[8m'
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+}
+
+# @description Unset color variables
+# @usage unset-colors
+function unset-colors() {
+    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
+          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
 }
 
 
@@ -94,6 +101,7 @@ EOF
     cat << EOF
     -h                        display usage
     --help                    display this help message
+    --config-file <file>      use the specified configuration file
     -c/--color <on|auto|off>  whether to use color output
     -s/--silent               suppress all output
     {{TODO: INSERT BASE OPTIONS HERE}}
@@ -104,13 +112,25 @@ EOF
 }
 
 function parse-args() {
+    # Parse the arguments first for a config file to load default values from
+    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
+    for ((i=0; i<${#}; i++)); do
+        case "${!i}" in
+            -c | --config-file)
+                let i++
+                CONFIG_FILE="${!i}"
+                ;;
+        esac
+    done
+    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
+
     # Default values
     # {{TODO: INSERT DEFAULT VALUES HERE}}
     DO_COLOR=false
     DO_SILENT=false
     ACTION=""
     ACTION_ARGS=()
-    local color_when='auto' # auto, on, yes, always, off, no, never
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -123,6 +143,9 @@ function parse-args() {
             --help)
                 help-full
                 exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
                 ;;
             -c | --color)
                 color_when="${2}"
@@ -190,7 +213,7 @@ function parse-args() {
                 return ${E_ERROR}
                 ;;
         esac
-        ${DO_COLOR} && setup-colors
+        ${DO_COLOR} && setup-colors || unset-colors
     fi
 
     # {{TODO: INSERT OPTION VALIDATIONS HERE}}

@@ -1,0 +1,415 @@
+#!/usr/bin/env bash
+#
+# Compares and validates java file package declarations against filepaths.
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    # Check if the file descriptors are open
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED='\e[31m'
+    C_GREEN='\e[32m'
+    C_YELLOW='\e[33m'
+    C_BLUE='\e[34m'
+    C_MAGENTA='\e[35m'
+    C_CYAN='\e[36m'
+    C_WHITE='\e[37m'
+    S_RESET='\e[0m'
+    S_BOLD='\e[1m'
+    S_DIM='\e[2m'
+    S_UNDERLINE='\e[4m'
+    S_BLINK='\e[5m'
+    S_INVERT='\e[7m'
+    S_HIDDEN='\e[8m'
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-hVP] [-c <when>] [--classpath <path>] [--sourcepath <path>] <file>..."
+}
+
+function help-epilogue() {
+    echo "compare and validate java file package declarations against filepaths"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                      display usage
+    --help                  display this help message
+    -c/--color <when>       when to use color ("auto", "always", "never")
+    --hide-valid            hide valid files
+    -V/--show-valid         show valid files
+    --hide-packageless      hide files without a declared package
+    -P/--show-packageless   show files without a declared package
+    -A/--show-all           show all files
+    -q/--quiet              suppress all output
+    --classpath <path>      the classpath to use
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATHS=()
+    DO_HIDE_VALID=false
+    DO_HIDE_PACKAGELESS=false
+    DO_QUIET=false
+    DO_COLOR=false
+    CLASSPATHS=()
+    local color_when='auto'
+    local classpath=""
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            --classpath)
+                classpath="${2}"
+                ;;
+            --hide-valid)
+                DO_HIDE_VALID=true
+                ;;
+            -V | --show-valid)
+                DO_HIDE_VALID=false
+                DO_QUIET=false
+                ;;
+            --hide-packageless)
+                DO_HIDE_PACKAGELESS=true
+                ;;
+            -P | --show-packageless)
+                DO_HIDE_PACKAGELESS=false
+                DO_QUIET=false
+                ;;
+            -A | --show-all)
+                DO_HIDE_VALID=false
+                DO_HIDE_PACKAGELESS=false
+                DO_QUIET=false
+                ;;
+            -q | --quiet)
+                DO_QUIET=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+    
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        FILEPATHS+=("${1}")
+        shift 1
+    done
+
+    # If we're in quiet mode, silence the output
+    ${DO_QUIET} && silence-output
+
+    # Set up colors
+    case "${color_when}" in
+        always)
+            DO_COLOR=true
+            ;;
+        never)
+            DO_COLOR=false
+            ;;
+        auto)
+            if ${__IN_TERMINAL}; then
+                DO_COLOR=true
+            else
+                DO_COLOR=false
+            fi
+            ;;
+        *)
+            echo "error: invalid color mode: ${color_when}" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+    ${DO_COLOR} && setup-colors
+
+    # Split the classpath into an array
+    IFS=':' read -ra CLASSPATHS <<< "${classpath}"
+    
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Get the package of a java file
+# @usage get-package <filepath>
+function get-package() {
+    local filepath="${1}"
+    local package
+
+    # Use awk to find the package declaration in the file and exit once found
+    # (to avoid reading the entire file)
+    package=$(
+        awk '
+            /^[[:space:]]*package[[:space:]]+/ {
+                gsub(/^[[[:space:]]*package[[:space:]]+|[[:space:]]*;?[[:space:]]*$|\r/, "", $0)
+                print $0
+                exit
+            }
+        ' "${filepath}"
+    )
+    debug-vars filepath package
+
+    echo "${package}"
+}
+
+# @description Validate that a java file's package matches its filepath
+# @usage validate-package [-c <classpath>] <filepath>
+# @return 0 the package matches the filepath
+# @return 1 the package does not match the filepath
+# @return 2 no declared package, but the filepath is in the classpath
+# @return 3 no declared package, and the filepath is not in the classpath
+# @return 4 no declared package and no classpath
+function validate-package() {
+    # Parse the arguments
+    local filepath filepath_abs filedir comparedir package
+    local classpath="" classpaths=()
+    local declared_package implicit_package implicit_packages
+    local declared_package_length declared_package_pathy
+    local valid_filedir valid_filedirs=()
+
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -c | --classpath)
+                classpath="${2}"
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                filepath="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # Get the absolute path of the file
+    filepath_abs=$(realpath "${filepath}" 2>/dev/null)
+
+    if [[ -z "${filepath_abs}" ]]; then
+        echo "error: file not found: ${filepath}" >&2
+        return ${E_ERROR:-1}
+    fi
+
+    # Read the classpath into an array, validating each entry
+    while IFS=':' read -ra path; do
+        # Validate the classpath
+        classpath=$(realpath "${path}" 2>/dev/null)
+
+        # Add the classpath to the list of classpaths
+        if [[ -n "${classpath}" ]]; then
+            classpaths+=("${classpath}")
+        fi
+    done <<< "${classpath}"
+
+    # Get the declared package
+    declared_package=$(get-package "${filepath_abs}")
+    declared_package_length=${#declared_package}
+    declared_package_pathy=$(tr . / <<< "${declared_package}")
+
+    # Determine a list of valid filedirs based on the classpath and the
+    # declared package
+    filedir=$(dirname "${filepath_abs}")
+    comparedir="${filedir}"
+
+    debug-vars \
+        filepath filepath_abs filedir declared_package declared_package_length \
+        declared_package_pathy classpath classpaths
+    if [[ -n "${declared_package}" ]]; then
+        if [[ -n "${classpath}" ]]; then
+            ### classpath and declared package
+
+            # Generate a list of valid filedirs based on the classpath and the
+            # declared package
+            for classpath in "${classpaths[@]}"; do
+                valid_filedir=$(realpath -m "${classpath}/${declared_package_pathy}")
+                if [[ -n "${valid_filedir}" && -d "${valid_filedir}" ]]; then
+                    valid_filedirs+=("${valid_filedir}")
+                fi
+            done
+        else
+            ### declared package only, no classpath
+
+            # We will simply want to check if the end of the filedir matches the
+            # declared package, so trim the filedir to the length of the
+            # declared package
+            comparedir="${filedir: -${declared_package_length}}"
+
+            # And add the declared package to the list of valid filedirs
+            valid_filedirs+=("${declared_package//\./\/}")
+        fi
+    else
+        if [[ -n "${classpath}" ]]; then
+            ### classpath only, no declared package
+
+            # If there is only a classpath, then we will check if the file is
+            # in the classpath, i.e.: the only valid filedirs will be the
+            # classpath entries
+            valid_filedirs=("${classpaths[@]}")
+        else
+            ### no declared package and no classpath
+
+            return 4
+        fi
+    fi
+
+    # Check if the filedir is in the list of valid filedirs
+    for valid_filedir in "${valid_filedirs[@]}"; do
+        if [[ "${comparedir}" == "${valid_filedir}" ]]; then
+            return 0
+        fi
+    done
+
+    # Print a report
+    echo -e "  declared package: '${C_BLUE}${S_BOLD}${declared_package}${S_RESET}'" >&2
+    # echo -e "  filedir:          '${C_MAGENTA}${S_BOLD}${filedir}${S_RESET}'" >&2
+    if [[ -n "${classpath}" ]]; then
+        echo -e "  classpath:        '${C_CYAN}${S_BOLD}${classpath}${S_RESET}'" >&2
+    fi
+    echo -e "  valid filedirs:" >&2
+    for valid_filedir in "${valid_filedirs[@]}"; do
+        echo -e "    ${C_GREEN}${valid_filedir}/${S_RESET}" >&2
+    done
+    return 1
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    local filepath
+    local valid_count=0 invalid_count=0 no_package_count=0
+
+    for filepath in "${FILEPATHS[@]}"; do
+        echo -en "* validating ${C_CYAN}${filepath}${S_RESET} ... " >&2
+        local err
+        err=$(validate-package -c "${CLASSPATH}" "${filepath}" 2>&1 1>/dev/null)
+        case ${?} in
+            0)
+                echo -e "${C_GREEN}OK${S_RESET}"
+                let valid_count++
+                ;;
+            1)
+                echo -e "${C_RED}FAIL${S_RESET}"
+                let invalid_count++
+                ;;
+            2)
+                echo -e "${C_YELLOW}NO PACKAGE${S_RESET}"
+                let no_package_count++
+                ;;
+            3)
+                echo -e "${C_YELLOW}NO PACKAGE${S_RESET}"
+                let no_package_count++
+                ;;
+            4)
+                echo -e "${C_YELLOW}NO PACKAGE${S_RESET}"
+                let no_package_count++
+                ;;
+        esac
+
+        if [[ -n "${err}" ]]; then
+            printf '%s\n' "${err}" | sed $'s/^/  /'
+        fi
+    done
+
+    echo
+    echo "Summary:"
+    echo -e "  ${S_BOLD}${C_GREEN}${valid_count}${S_RESET} valid files"
+    echo -e "  ${S_BOLD}${C_RED}${invalid_count}${S_RESET} invalid files"
+    echo -e "  ${S_BOLD}${C_YELLOW}${no_package_count}${S_RESET} files without a declared package"
+
+    if [[ ${invalid_count} -gt 0 ]]; then
+        return ${E_ERROR}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

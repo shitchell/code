@@ -104,6 +104,9 @@ function parse-args() {
     PROJECT_ENC="$(urlencode "${PROJECT}")"
     REPO_ENC="$(urlencode "${REPO}")"
 
+    # Get the user id if not set
+    AZURE_USER_ID="${AZURE_USER_ID:-$(_subcommand_user-id)}"
+
     # Debug infos
     debug "SUBCOMMAND: ${SUBCOMMAND}"
     debug "SUBCOMMAND_ARGS: $(printf "%q " "${SUBCOMMAND_ARGS[@]}")"
@@ -113,6 +116,7 @@ function parse-args() {
     debug "REPO: ${REPO}"
     debug "PASS_NAME: ${PASS_NAME}"
     debug "TOKEN: ${TOKEN}"
+    debug "AZURE_USER_ID: ${AZURE_USER_ID}"
 }
 
 function help-full() {
@@ -1055,8 +1059,14 @@ function _subcommand_pr-create() {
     local description="${4}"
 
     # Parse the arguments
-    curl "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests?api-version=6.0" \
-        --silent \
+    local url="https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests?api-version=6.0"
+    debug "${url}"
+    local curl_args=()
+    if ! debug; then
+        curl_args+=("--silent")
+    fi
+    curl "${url}" \
+        "${curl_args[@]}" \
         --request POST \
         --header "Content-Type: application/json" \
         --user ":${TOKEN}" \
@@ -1155,6 +1165,10 @@ function _subcommand_pr-complete() {
 # @description Create a pull request from / to the specified branches and auto-complete it
 # @usage pr <source branch> <target branch> [title] [description]
 function _subcommand_pr() {
+    local source_branch="${1}"
+    local target_branch="${2}"
+    local title="${3}"
+    local description="${4}"
     local pr_id
 
     # Create the pull request and get the id
@@ -1164,11 +1178,13 @@ function _subcommand_pr() {
             pr_id="$(echo "${line}" | sed -E 's/.*: ([0-9]+),/\1/')"
         fi
         echo "${line}"
-    done < <(_subcommand_pr-create "${@}")
+    done < <(_subcommand_pr-create "${source_branch}" "${target_branch}" "${title}" "${description}")
+
+    echo "pr_id: ${pr_id}"
 
     # Set the pull request to auto-complete
     if [[ -n "${pr_id}" ]]; then
-        _subcommand_pr-auto-complete "${pr_id}"
+        _subcommand_pr-approve "${pr_id}" && _subcommand_pr-auto-complete "${pr_id}" "${title}"
     else
         echo "error: failed to create pull request" >&2
         return 1
@@ -1196,8 +1212,16 @@ function _subcommand_pr-cancel() {
 # @usage pr-list
 function _subcommand_pr-list() {
     # Parse the arguments
-    curl "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests?api-version=6.0" \
-        --silent \
+    url="https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests?api-version=6.0"
+    debug "${url}"
+    local curl_args=()
+    if debug; then
+        curl_args+=("--verbose")
+    else
+        curl_args+=("--silent")
+    fi
+    curl "${url}" \
+        "${curl_args[@]}" \
         --user ":${TOKEN}" \
             | python -m json.tool
 }
@@ -1370,6 +1394,28 @@ function _subcommand_help() {
         done
     fi
     exit ${exit_code}
+}
+
+# @description Get the current user information
+# @usage user
+function _subcommand_user() {
+    # Parse the arguments
+    url="https://dev.azure.com/${ORGANIZATION_ENC}/_apis/connectionData"
+    curl "${url}" \
+        --silent \
+        --user ":${TOKEN}" \
+            | python -m json.tool
+}
+
+# @Description Get the current authorized user's id
+# @usage user-id
+function _subcommand_user-id() {
+    awk -F '"' '
+        $0 ~ /"id": / {
+            print $4;
+            exit;
+        }
+    ' < <(_subcommand_user)
 }
 
 # @description List all projects in the configured organization
