@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+#
+# Escape a string for use in a regular expression
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    # {{TODO: UPDATE USAGE}}
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    # {{TODO: UPDATE EPILOGUE}}
+    echo "escape regular expression characters in a string"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                display usage
+    --help            display this help message
+    -E/--extended     escape characters for an extended regular expression
+    -B/--basic        escape characters for a basic regular expression
+    -P/--perl         escape characters for a Perl regular expression
+    -A/--awk          escape characters for an awk regular expression
+    -J/--javascript   escape characters for a JavaScript regular expression
+EOF
+}
+
+function parse-args() {
+    # Default values
+    STRING=""
+    REGEX_TYPE="extended"
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -E | --extended)
+                REGEX_TYPE="extended"
+                ;;
+            -B | --basic)
+                REGEX_TYPE="basic"
+                ;;
+            -P | --perl)
+                REGEX_TYPE="perl"
+                ;;
+            -A | --awk)
+                REGEX_TYPE="awk"
+                ;;
+            -J | --javascript)
+                REGEX_TYPE="javascript"
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                [[ -n "${STRING}" ]] && STRING+=" "
+                STRING+="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        [[ -n "${STRING}" ]] && STRING+=" "
+        STRING+="${1}"
+        shift 1
+    done
+
+    # Ensure a string was provided
+    if [[ -z "${STRING}" ]]; then
+        echo "error: no string provided" >&2
+        help-usage >&2
+        return ${E_ERROR}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Escape a string for use in a basic regular expression
+function escape-basic() {
+    local string="${1}"
+
+    # Escape the escaped regex characters
+    sed -E '
+        s/^\^/\\^/g
+        s/\\[]{(|)}[]/\\&/g
+        # TODO: Escape \+, \*, and \? unless they appear:
+        # - at the beginning of the string
+        # - after a "\(", "\|", or "\{"
+        # - at the end of the string
+        # s/^(.+)([^\\][^{(|])\\([+*?])$/\1\2\\&/g
+        s/\\([+*?])/\\&/g
+        s/\$$/\\$/g
+    ' <<< "${string}"
+}
+
+# @description Escape a string for use in an extended regular expression
+function escape-extended() {
+    local string="${1}"
+
+    # Escape the string
+    sed -E '
+        s/^\^/\\^/g
+        s/[]{(.+*?|)}[]/\\&/g
+        s/\$$/\\$/g
+    ' <<< "${string}"
+}
+
+# @description Escape a string for use in a perl regular expression
+function escape-perl() {
+    local string="${1}"
+
+    echo "\Q${string}\E"
+}
+
+# TODO: implement escape-awk and escape-javascript
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    # Try to find the escape function
+    local escape_function="escape-${REGEX_TYPE}"
+    if ! declare -f "${escape_function}" &>/dev/null; then
+        echo "error: unknown regex type: ${REGEX_TYPE}" >&2
+        return ${E_ERROR}
+    fi
+
+    # Escape the string
+    "${escape_function}" "${STRING}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

@@ -177,6 +177,8 @@ function as-config() {
             if ($0 ~ /^ *#/) {
                 next;
             }
+            # Remove any comments from the line
+            gsub(/ *#.*$/, "", $0);
             # Trim the value from the line and remove whitespace from the key
             gsub(/ *=.*/, "", $0);
             gsub(/^ */, "", $0);

@@ -95,20 +95,39 @@
 ## helpful functions ###########################################################
 ################################################################################
 
-# Reliably determine the current shell
+# @description Print a debug message if DEBUG or DEBUG_LOG is set
+# @usage debug <msg> [<msg> ...]
+function __debug() {
+    local prefix timestamp
+    if [[
+            "${INCLUDE_DEBUG}" == "1"
+            || "${INCLUDE_DEBUG}" == "true"
+            || -n "${INCLUDE_DEBUG_LOG}"
+        ]]; then
+        timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+        prefix="\033[36m[${timestamp}]\033[0m "
+        prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
+        [[ "${FUNCNAME[1]}" != "main" ]] && prefix+="\033[1m:${FUNCNAME[1]}()\033[0m"
+        prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
+        printf "%s\n" "${@}" \
+            | awk -v prefix="${prefix}" '{print prefix $0}' >> "${INCLUDE_DEBUG_LOG:-/dev/stderr}"
+    fi
+}
+
+# @description Reliably determine the current shell
+# @usage get-shell
 function get-shell() {
-    local shell=$(
-        basename "`ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//'`" \
-            | tr '[:upper:]' '[:lower:]'
-    )
+    local process_name=$(ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//')
+    local shell=$(basename "${process_name}" | tr '[:upper:]' '[:lower:]')
     echo "${shell}"
 }
 
-# Cross-shell function for returning the calling function name
+# @description Cross-shell function for returning the calling function name
+# @usage functionname [<stack index>]
 function functionname() {
     local shell=$(get-shell)
     local index=${1:- -1}
-    case $shell in
+    case "${shell}" in
         bash)
             echo ${FUNCNAME[${index}]}
             ;;
@@ -116,24 +135,29 @@ function functionname() {
             echo ${funcstack[${index}]}
             ;;
         *)
-            echo "unknown shell: $shell" >&2
+            echo "unknown shell: ${shell}" >&2
             return 1
             ;;
     esac
 }
 
-# Checks if an item is in an array.
-# usage: in-array <item> "${array[@]}"
-# returns 0 if the item is in the array, 1 otherwise
+# @description Checks if an item is in an array.
+# @usage in-array <item> <array-item-1> [<array-item-2> ...
+# @return 0 the item is in the array
+# @return 1 the item is not in the array
 function in-array() {
+    #__debug "_call(${@})"
+
     local item=${1}
     local array=${2}
     local e
+
     for e in ${array[@]}; do
         if [ "${e}" = "${item}" ]; then
             return 0
         fi
     done
+
     return 1
 }
 
@@ -240,19 +264,25 @@ function __include_source_parse_args() {
 
 # Return the value of <SHELL>_LIB_PATH or PATH if it is not set.
 function __bash_libs_get_path() {
+    #__debug "_call(${@})"
+
     # reliably determine the shell
     local shell_lower=$(get-shell)
     local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
 
     # determine the current shell's lib path
     local lib_path="${shell_upper}_LIB_PATH"
+    #__debug "lib_path: ${lib_path}"
 
     # load the value of the lib path from the environment
     if [ "${shell_lower}" = "bash" ]; then
+        #__debug "getting bash lib path"
         local lib_path_value="${!lib_path}"
     elif [ "${shell_lower}" = "zsh" ]; then
+        #__debug "getting zsh lib path"
         local lib_path_value="${(P)lib_path}"
     else
+        #__debug "attempting generic lib path eval"
         # attempt a generic eval, although chances are low that the rest of
         # the module will work even if this does
         eval local lib_path_value="\$${lib_path}"
@@ -262,11 +292,15 @@ function __bash_libs_get_path() {
         fi
     fi
 
+    #__debug "lib_path_value: ${lib_path_value}"
+
     echo "${lib_path_value:-${PATH}}"
 }
 
 # Get the path to a script in the current directory, <SHELL>_LIB_PATH, PATH
 function __bash_libs_get_filepath() {
+    #__debug "_call(${@})"
+
     local filename="${1}"
 
     # look for the file in the current directory
@@ -276,10 +310,14 @@ function __bash_libs_get_filepath() {
     fi
 
     # Try to find the path in <SHELL>_LIB_PATH or PATH
-    IFS=$'\n' local lib_path_array=($(__bash_libs_get_path | tr ':' '\n'))
+    local lib_path_array
+    IFS=":" read -ra lib_path_array <<< "$(__bash_libs_get_path)"
+    #__debug "lib_path_array: ${lib_path_array[@]}"
     for dir in ${lib_path_array[@]}; do
+        #__debug "looking for '${filename}' in '${dir}'"
         # determine if a readable file with the given name exists in this dir
         if [ -f "${dir}/${filename}" ] && [ -r "${dir}/${filename}" ]; then
+            #__debug "found '${filename}' in '${dir}'"
             echo "${dir}/${filename}"
             return 0
         fi
@@ -291,6 +329,8 @@ function __bash_libs_get_filepath() {
 
 # Get the location of the shell lib, whether a file or url
 function __bash_libs_get_location() {
+    #__debug "_call(${@})"
+
     local filename="${1}"
 
     # determine if the file is a filepath or a url
@@ -312,7 +352,8 @@ function __bash_libs_get_location() {
 
 # Import a shell script from a url
 function source-url() {
-    debug "source-url(${@@Q})"
+    #__debug "_call(${@})"
+
     local url="${1}"
     local filename="${url##*/}"
 
@@ -354,6 +395,8 @@ function source-url() {
 
 # Import a shell script from a filename
 function source-lib() {
+    #__debug "_call(${@})"
+
     local filename="${1}"
 
     # get the path to the file
@@ -388,6 +431,8 @@ function source-lib() {
 
 # Import a shell script from ${<SHELL>_LIB_PATH:-${PATH}} given a filename
 function include-source() {
+    #__debug "_call(${@})"
+
     local filename="${1}"
     local exit_code=0
 
@@ -573,6 +618,8 @@ function __compile_sources_find_include_source_line() {
 #  1 - one or more included libs was empty
 #  2 - error parsing source file
 function __compile_sources() {
+    #__debug "_call(${@})"
+
     # get the filepath
     local filepath="${1}"
 
@@ -673,7 +720,11 @@ function __compile_sources() {
 ## main functions
 ###
 
+# @description Replace `include-source` calls with the source contents
+# @usage compile-sources <file> [<file> ...]
 function compile-sources() {
+    #__debug "_call(${@})"
+
     local exit_code=0
     local filepath="${1}"
 
@@ -712,6 +763,7 @@ function compile-sources() {
 ## Export Functions ############################################################
 ################################################################################
 
+export -f __debug
 export -f get-shell
 export -f functionname
 export -f in-array
@@ -732,3 +784,9 @@ export -f __compile_sources_parse_args
 export -f __compile_sources_find_include_source_line
 export -f __compile_sources
 export -f compile-sources
+
+
+## Export Variables ############################################################
+################################################################################
+
+export INCLUDE_SOURCE="include-source"

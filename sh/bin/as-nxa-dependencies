@@ -227,7 +227,7 @@ function main() {
     debug "getting filenames for initial set of services"
     readarray -t initial_services < <(
          {
-            as-nxa-ids -d "${NXA_DIR}" -f '{path}' "${SERVICES[@]}" 2>&1 1>&3 3>&- \
+            as-nxa-ids -d "${NXA_DIR}" -f '{filepath}' "${SERVICES[@]}" 2>&1 1>&3 3>&- \
                 | sed 's/.*/ERROR/'
         } 3>&1
     )
@@ -278,7 +278,7 @@ function main() {
         # Fetch the info for the current batch of unprocessed services
         readarray -t services_info < <(
             {
-                as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{path}' "${unprocessed_services[@]}" 2>&1 1>&3 3>&- \
+                as-nxa-ids -d "${NXA_DIR}" -f '{fullname}\t{filepath}' "${unprocessed_services[@]}" 2>&1 1>&3 3>&- \
                     | sed 's/.*/ERROR/'
             } 3>&1
         )

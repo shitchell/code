@@ -4,4 +4,9 @@
 
 WRAP_CHARS="${1:-80}"
 
+if ! [[ "${WRAP_CHARS}" =~ ^[0-9]+$ ]]; then
+    echo "usage: $(basename "${0}") <width: int>" >&2
+    exit 1
+fi
+
 fold -s -w "${WRAP_CHARS}" | sed 's/[[:space:]]*$//'
