@@ -3,6 +3,9 @@
 # Loop over a list of files in a git repo and update their timestamps to match
 # their respective git commit timestamps.
 
+include-source 'debug.sh'
+
+
 ## usage functions #############################################################
 ################################################################################
 
@@ -59,12 +62,10 @@ function parse-args() {
         FILEPATHS+=("${@}")
     fi
 
-    # For time savings
-    GIT_TOPLEVEL=$(git rev-parse --show-toplevel)
-
     # If no filepaths were specified, use the git root
     if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
-        FILEPATHS=( "${GIT_TOPLEVEL}" )
+        # If no filepaths were specified, use the git root
+        FILEPATHS=( "$(git rev-parse --show-toplevel)" )
     fi
 }
 
@@ -102,7 +103,6 @@ function update-timestamp() {
             --date=format:%Y%m%d%H%M.%S \
             --pretty=format:%ad \
             --date-order \
-                "${GIT_LOG_OPTS[@]}" \
             -- "${filepath}"
     )
 
@@ -112,7 +112,14 @@ function update-timestamp() {
         echo "${timestamp}  ${file}"
     touch -m -t "${timestamp}" "${filepath}"
 
-    echo "${timestamp}"
+    local seconds="${timestamp:13:2}"
+    printf '%d-%02d-%02d %02d:%02d:%02d\n' \
+        "${timestamp:0:4}" \
+        "${timestamp:4:2}" \
+        "${timestamp:6:2}" \
+        "${timestamp:8:2}" \
+        "${timestamp:10:2}" \
+        "${seconds#.}"
 }
 
 
@@ -123,21 +130,19 @@ function main() {
     parse-args "${@}"
 
     local line sub_filepath timestamp
-    # Since ls-tree returns filepaths relative to the git root, ensure that we
-    # can convert those paths into paths relative to the current directory
-    local git_toplevel_rel=$(realpath --relative-to=. "${GIT_TOPLEVEL}")
+    debug-vars "FILEPATHS" "GIT_LOG_OPTS"
 
     for filepath in "${FILEPATHS[@]}"; do
         # If the file is a directory, then descend recursively
         if [[ -d "${filepath}" ]]; then
-            git ls-tree -r --full-tree HEAD | while read -r line; do
-                sub_filepath="${git_toplevel_rel}/${line#*$'\t'}"
-                printf '%s => ' "${sub_filepath}"
-                update-timestamp "${sub_filepath}"
+            debug "descending into directory: ${filepath}"
+            git ls-files HEAD -- "${filepath}" | while read -r line; do
+                printf '%s => ' "${line}"
+                update-timestamp "${line}"
             done
         else
             printf '%s => ' "${filepath}"
-            update-timestamp "${filepath}"
+            update-timestamp "${filepath}" || echo "error" >&2
         fi
     done
 }
