@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# Return the ctc or dfn file for each nxa service provided
+
+FILE="${1:-/dev/stdin}"
+
+awk '{
+  # Trim any leading/trailing whitespace
+  gsub(/^[:space:]+|[:space:]*$/, "")
+
+  # Swap "_dfn.xml$" with "_ctc.xml$" and vice versa
+  if ($0 ~ /_dfn.xml$/) {
+    gsub(/_dfn.xml$/, "_ctc.xml")
+  } else {
+    gsub(/_ctc.xml$/, "_dfn.xml")
+  }
+  print
+}' "${FILE}"
