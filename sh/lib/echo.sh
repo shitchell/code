@@ -343,3 +343,162 @@ function echo-managed() {
         echo ${echo_args} "${message}"
     fi
 }
+
+function repeat-char_printf() {
+    local char="${1:-=}"
+    local count="${2:-10}"
+
+    printf '%s' `eval echo "'${char}'\\$__{1..${count}}"`
+}
+
+function repeat-char_forprintf() {
+    local char="${1:-=}"
+    local count="${2:-10}"
+
+    for ((i=0; i<${count}; i++)); do
+        printf '%s' "${char}"
+    done
+}
+
+function repeat-char_forstring() {
+    local char="${1:-=}"
+    local count="${2:-10}"
+
+    local string=""
+
+    for ((i=0; i<${count}; i++)); do
+        string="${string}${char}"
+    done
+
+    printf '%s' "${string}"
+}
+
+
+
+# @description Print a header to the console
+# @arg $@ string The text to print in the header
+# @example print-header This is a header
+# @example print-header -B 1 This is a header with a 1 line margin before it
+# @example print-header -M 2 This is a header with a 2 line margin
+# @example print-header --markdown --level 3 This is a markdown header
+function print-header() {
+    local args=()
+    local header_text=""
+    local style="bordered" # "bordered", "markdown", "underlined"
+    local markdown_level=1
+    local border_character="="
+    local _border_width=80 # int, "fit-text" or "fit-terminal"
+    local lines_before=0
+    local lines_after=1
+
+    # set after parsing args
+    local border_width=80 # to be set after parsing args
+
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -B | --before)
+                lines_before="${2}"
+                shift 2
+                ;;
+            -A | --after)
+                lines_after="${2}"
+                shift 2
+                ;;
+            -M | --margin)
+                lines_before="${2}"
+                lines_after="${2}"
+                shift 2
+                ;;
+            --markdown)
+                style="markdown"
+                shift 1
+                ;;
+            --level)
+                markdown_level="${2}"
+                shift 2
+                ;;
+            --underline | --underlined)
+                style="underlined"
+                shift 1
+                ;;
+            --border | --bordered)
+                style="bordered"
+                shift 1
+                ;;
+            --border-width)
+                _border_width="${2}"
+                shift 2
+                ;;
+            --border-character)
+                border_character="${2}"
+                shift 2
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            *)
+                args+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # Collect any remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        args+=("${1}")
+        shift 1
+    done
+
+    # Set the header text
+    header_text="${args[*]}"
+
+    # Set the border width as an int
+    case "${_border_width}" in
+        fit-text)
+            border_width="${#header_text}"
+            ;;
+        fit-terminal)
+            border_width=$(tput cols 2>/dev/null)
+            # If the terminal width could not be determined, default to 80
+            if [[
+                -z "${border_width}"
+                || "${border_width}" =~ [^0-9]
+                || ${border_width} -le 1
+            ]]; then
+                echo "warning: could not determine terminal width" >&2
+                border_width=80
+            fi
+            ;;
+        *)
+            border_width="${_border_width}"
+            ;;
+    esac
+
+    # Print the header
+    ## Margin before the header
+    for ((i=0; i<lines_before; i++)); do echo; done
+
+    ## Print the initial border or markdown header
+    if [[ "${style}" == "bordered" ]]; then
+        # Print the first border
+        for ((i=0; i<border_width; i++)); do printf '%s' "${border_character}"; done
+        echo
+    elif [[ "${style}" == "markdown" ]]; then
+        for ((i=0; i<markdown_level; i++)); do echo -n "#"; done
+        echo -n " "
+    fi
+
+    ## Print the header text
+    echo "${S_BOLD}${header_text}${S_RESET}"
+
+    ## Print the final border or underline
+    if [[ "${style}" == "bordered" || "${style}" == "underlined" ]]; then
+        # Print the final border
+        for ((i=0; i<border_width; i++)); do printf '%s' "${border_character}"; done
+        echo
+    fi
+
+    ## Margin after the header
+    for ((i=0; i<lines_after; i++)); do echo; done
+}
