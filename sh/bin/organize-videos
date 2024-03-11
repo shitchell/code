@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+#
+# This script organizes files into directories based on a pattern.
+
+## traps #######################################################################
+################################################################################
+
+# trap 'echo goodbye' EXIT
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    echo "organize files into directories based on a pattern"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "The regular pattern set by -p/--pattern must include a capture group"
+    echo "in the form of parentheses. The capture group will be used to create"
+    echo "the directory name."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                  display usage
+    --help              display this help message
+    -p/--pattern        the pattern to match against
+    -x/--exclude        exclude files that match this pattern
+    -E/--extended       use extended regular expressions
+    -P/--perl           use perl regular expressions
+    -G/--glob           use glob patterns
+    -d/--directory      the directory to organize files into
+    -c/--copy           copy files instead of moving them
+    -m/--move           move files instead of copying them
+    -n/--dry-run        don't actually do anything
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATHS=()
+    local filepaths=()
+    EXCLUDE_PATTERNS=()
+    DIRECTORY="."
+    PATTERN=""
+    PATTERN_TYPE="extended" # extended, perl, glob
+    DO_DRY_RUN=false
+    DO_COPY=false
+    
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            -f | --foo)
+                echo "oh my foo"
+                ;;
+            -p | --pattern)
+                PATTERN="${2}"
+                shift 1
+                ;;
+            -x | --exclude)
+                EXCLUDE_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            -E | --extended)
+                PATTERN_TYPE="extended"
+                ;;
+            -P | --perl)
+                PATTERN_TYPE="perl"
+                ;;
+            -G | --glob)
+                PATTERN_TYPE="glob"
+                ;;
+            -n | --dry-run)
+                DO_DRY_RUN=true
+                ;;
+            -d | --directory)
+                DIRECTORY="${2}"
+                shift 1
+                ;;
+            -c | --copy)
+                DO_COPY=true
+                ;;
+            -m | --move)
+                DO_COPY=false
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                filepaths+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+    
+    # If -- was used, collect the remaining arguments as filepaths
+    while [[ ${#} -gt 0 ]]; do
+        filepaths+=("${1}")
+        shift 1
+    done
+
+    # If no filepaths were given, use the current directory
+    [[ ${#filepaths[@]} -eq 0 ]] && filepaths+=(".")
+
+    # If any filepaths are directories, find all files in the directory
+    for filepath in "${filepaths[@]}"; do
+        if [[ -d "${filepath}" ]]; then
+            local dir_files=()
+            readarray -t dir_files < <(find "${filepath}" -type f)
+            FILEPATHS+=("${dir_files[@]}")
+        elif [[ -f "${filepath}" ]]; then
+            FILEPATHS+=("${filepath}")
+        else
+            echo "warning: '${filepath}' is not a file or directory, skipping" >&2
+        fi
+    done
+
+    # Prettify the directory path
+    DIRECTORY="$(realpath --relative-to=. "${DIRECTORY}")"
+    
+    return 0
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Do stuff
+# @usage do-stuff
+function do-stuff() {
+    echo -n "i'm doin the stuff"
+    [[ -n "${1}" ]] && echo " to ${1}" || echo
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    debug-vars \
+        FILEPATHS EXCLUDE_PATTERNS DIRECTORY PATTERN PATTERN_TYPE DO_DRY_RUN
+
+    for filepath in "${FILEPATHS[@]}"; do
+        # Make sure the file does not match any of the exclude patterns
+        for exclude in "${EXCLUDE_PATTERNS[@]}"; do
+            if [[ "${filepath}" =~ ${exclude} ]]; then
+                continue 2
+            fi
+        done
+
+        # Print the original path
+        echo -en "${filepath} => "
+
+        # Extract the name using the specified pattern
+        local name=""
+        local filename="${filepath##*/}"
+        local new_dir=""
+        local new_path=""
+        debug-vars filepath filename
+        if [[ "${PATTERN_TYPE}" == "glob" ]]; then
+            # Construct a perl style pattern from the glob
+            echo "error: glob patterns not yet supported" >&2
+            return 1
+        elif [[ "${PATTERN_TYPE}" == "perl" ]]; then
+            echo "error: perl patterns not yet supported" >&2
+            return 1
+        elif [[ "${PATTERN_TYPE}" == "extended" ]]; then
+            debug "using extended pattern"
+            if [[ "${filename}" =~ ${PATTERN} ]]; then
+                name="${BASH_REMATCH[1]}"
+            fi
+        fi
+
+        # If the name is empty, skip this file
+        if [[ -z "${name}" ]]; then
+            echo "error: could not extract name from '${filename}', skipping" >&2
+            continue
+        fi
+
+        new_dir="${DIRECTORY}/${name}"
+        new_path="${new_dir}/${filename}"
+
+        # If in dry-run mode, just print the new path
+        if ${DO_DRY_RUN}; then
+            echo "${new_path}"
+            continue
+        fi
+
+        # Make the directory if it doesn't exist
+        if [[ ! -d "${new_dir}" ]]; then
+            mkdir -p "${new_dir}"
+        fi
+
+        # Move the file to the new directory
+        echo "${new_path}"
+        if ${DO_COPY}; then
+            cp "${filepath}" "${new_path}" 2>/dev/null
+            if [[ ${?} -ne 0 ]]; then
+                echo "error: could not copy '${filepath}' to '${new_path}'" >&2
+            fi
+        else
+            mv "${filepath}" "${new_path}" 2>/dev/null
+            if [[ ${?} -ne 0 ]]; then
+                echo "error: could not move '${filepath}' to '${new_path}'" >&2
+            fi
+        fi
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
