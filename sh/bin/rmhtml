@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# Remove HTML tags from stdin
+
+if [[ ${#} -eq 0 ]]; then
+    DATA=$(cat -)
+else
+    DATA="${1}"
+fi
+
+sed 's/<[^>]*>//g' <<< "${DATA}"
+
+# echo "${DATA}" \
+    # | perl -pe 's{\n}{ }g' \
+    # | perl -pe 's{>}{>\n}g' \
+    # | perl -pe 's{<}{\n<}g' \
+    # | grep -v '<' \
+    # | grep -v '^\s*$'
