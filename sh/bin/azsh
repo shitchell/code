@@ -1115,6 +1115,19 @@ function _subcommand_pr-status() {
             | python -m json.tool
 }
 
+# @description Get the tags associated with a pull request
+# @usage pr-tags <pr id>
+function _subcommand_pr-tags() {
+    local pr_id="${1}"
+    local url="https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullRequests/${pr_id}/labels?api-version=7.1-preview.1"
+
+    debug-vars url
+    curl "${url}" \
+        --silent \
+        --user ":${TOKEN}" \
+            | python -m json.tool
+}
+
 # @description Set a pull request to auto-complete
 # @usage pr-auto-complete <pr id> [title]
 function _subcommand_pr-auto-complete() {
