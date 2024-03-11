@@ -47,7 +47,7 @@ function in-array() {
 # usage: is-in <item> <arg1> <arg2> ... <argN>
 # returns 0 if the item is in any of the arguments or arrays, 1 otherwise
 function is-in() {
-    local item=${1}
+    local item="${1}"
     shift
     local arg
     for arg in "${@}"; do
@@ -477,4 +477,351 @@ function for-each() {
     else
         return 2
     fi
+}
+
+# @description
+#   Check for dependencies and exit if any are not met.
+#
+#   Commands:
+#   --optional: if the specified command is not found, a warning will be
+#   printed, but the script will continue.
+#
+#   --one-of: this option allows you to specify a set of commands where only
+#   one of them is required. The first command in the set that is found will be
+#   set to the variable name specified in the --one-of option. e.g.:
+#       require --one-of downloader="curl wget"
+#       echo "${downloader}"
+#   If curl is found, `downloader` will be set to curl. If curl is not found,
+#   but wget is, downloader will be set to wget. If neither curl nor wget is
+#   found, the script will exit.
+#
+#   Variables/values:
+#   --value <value1>="<value2>": if `value1` is not equal to `value2`, the
+#   script will exit.
+#
+#   --variable-value <varname>="<value>": if the variable `varname` is not equal
+#   to `value`, the script will exit.
+#
+#   --is-set <varname>: if the variable `varname` is not set, the script will
+#   exit.
+#
+#   --is-empty <varname>: if the variable `varname` is not empty, the script
+#   will exit.
+#
+#  Access:
+#  --root: if this option is specified, the script will exit if it is not run as
+#  root.
+#
+#  --uid <uid>: if this option is specified, the script will exit if it is not
+#  run as the specified user.
+#
+#  --user <username>: if this option is specified, the script will exit if it is
+#  not run as the specified user.
+#
+#  --gid <gid>: if this option is specified, the script will exit if it is not
+#  run as the specified group.
+#
+#  --group <groupname>: if this option is specified, the script will exit if it
+#  is not run as the specified group.
+#
+#  --read <filepath>: if this option is specified, the script will exit if it
+#  does not have read permissions for the specified file or directory.
+#
+#  --write <filepath>: if this option is specified, the script will exit if it
+#  does not have write permissions for the specified file or directory.
+#
+#  Misc:
+#  --os <os>: if this option is specified, the script will exit if it is not
+#  run on the specified OS. The value of this option should be the value of the
+#  ID field in /etc/os-release.
+# @usage: require [-r|--root] [-o|--optional <dep>] [-O|--one-of <name>="<dep1> <dep2> <dep3>"] <dep1> <dep2> <dep3>
+# @example:
+#   require --root --one-of downloader="curl wget" tar
+#   case "${downloader}" in
+#       curl)
+#           curl -sSL https://example.com | tar -xzf -
+#           ;;
+#       wget)
+#           wget -qO- https://example.com | tar -xzf -
+#           ;;
+#   esac
+function require() {
+    # Default values
+    local required_user=""
+    local required_uid=""
+    local required_group=""
+    local required_gid=""
+    local required_os=""
+    local optional_dependencies=()
+    local required_dependencies=()
+    local should_exit=false
+    local error_messages=()
+    local warning_messages=()
+    local exit_code=0
+    local set_variables=()
+    local empty_variables=()
+    local read_filepaths=()
+    local write_filepaths=()
+    local do_quiet=false
+    local do_exit_on_failure=true
+    declare -A values # format: ['value1'="val1" 'value2'="val2"...]
+    declare -A variable_values # format: ['varname'="value'...]
+    declare -A one_of # format: ['download'="curl wget" 'extract'="unzip tar"...]
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -o | --optional)
+                optional_dependencies+=("${2}")
+                shift 2
+                ;;
+            -O | --one-of)
+                # syntax: --one-of name="dep1 dep2 dep3"
+                if ! [[ "${2}" =~ = ]]; then
+                    echo "error: --one-of requires an argument in the format: name=\"dep1 dep2 dep3\"" >&2
+                    exit 1
+                fi
+                local name="${2%%=*}"
+                local deps="${2#*=}"
+                one_of["${name}"]="${deps}"
+                shift 2
+                ;;
+            -R | --os)
+                required_os="${2}"
+                shift 2
+                ;;
+            --root)
+                required_user="root"
+                shift 1
+                ;;
+            -u | --user)
+                required_user="${2}"
+                shift 2
+                ;;
+            -U | --uid)
+                required_uid="${2}"
+                shift 2
+                ;;
+            -g | --group)
+                required_group="${2}"
+                shift 2
+                ;;
+            -G | --gid)
+                required_gid="${2}"
+                shift 2
+                ;;
+            -r | --read)
+                read_filepaths+=("${2}")
+                shift 2
+                ;;
+            -w | --write)
+                write_filepaths+=("${2}")
+                shift 2
+                ;;
+            -n | --is-set)
+                set_variables+=("${2}")
+                shift 2
+                ;;
+            -z | --is-empty)
+                empty_variables+=("${2}")
+                shift 2
+                ;;
+            -v | --value)
+                # syntax: --value name="value"
+                if ! [[ "${2}" =~ = ]]; then
+                    echo "error: --value requires an argument in the format: name=\"value\"" >&2
+                    exit 1
+                fi
+                local value1="${2%%=*}"
+                local value2="${2#*=}"
+                values["${value1}"]="${value2}"
+                shift 2
+                ;;
+            -V | --variable-value)
+                # syntax: --variable-value varname="value"
+                if ! [[ "${2}" =~ = ]]; then
+                    echo "error: --variable-value requires an argument in the format: varname=\"value\"" >&2
+                    exit 1
+                fi
+                local varname="${2%%=*}"
+                local value="${2#*=}"
+                variable_values["${varname}"]="${value}"
+                shift 2
+                ;;
+            -q | --quiet)
+                do_quiet=true
+                shift 1
+                ;;
+            --no-exit)
+                do_exit_on_failure=false
+                shift 1
+                ;;
+            *)
+                required_dependencies+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # If quiet mode is enabled, then redirect all output to /dev/null
+    ${do_quiet} && exec 9>&1 8>&2 1>/dev/null 2>&1
+
+    # Check the OS
+    if [[ -n "${required_os}" ]]; then
+        local current_os=$(grep -Po '(?<=^ID=).+' /etc/os-release)
+        if [[ "${current_os}" != "${required_os}" ]]; then
+            error_messages+=("must be run on ${required_os}")
+            exit_code=1
+        fi
+    fi
+
+    # Check for uid/user
+    if [[ -n "${required_uid}" ]]; then
+        # set the required user to the user name
+        required_user="$(id -u "${required_uid}" -n)"
+    fi
+    if [[ -n "${required_user}" ]]; then
+        if [[ "${required_user}" != "$(id -un)" ]]; then
+            error_messages+=("must be run as ${required_user}")
+            exit_code=1
+        fi
+    fi
+
+    # Check for gid/group
+    if [[ -n "${required_gid}" ]]; then
+        # set the required group to the group name
+        required_group="$(getent group "${required_gid}" | cut -d: -f1)"
+    fi
+    if [[ -n "${required_group}" ]]; then
+        if ! getent group "${required_group}" | grep -qE ":${USER}$"; then
+            error_messages+=("user must be in group '${required_group}'")
+            exit_code=1
+        fi
+    fi
+
+    # Check for read permissions
+    for filepath in "${read_filepaths[@]}"; do
+        if [[ ! -r "${filepath}" ]]; then
+            error_messages+=("must have read permissions for '${filepath}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for write permissions
+    for filepath in "${write_filepaths[@]}"; do
+        local check_filepath=true
+        # If the filepath does not exist, then check if its parent directory is
+        # writable
+        if [[ ! -e "${filepath}" ]]; then
+            local parent_dir
+            parent_dir="$(dirname "${filepath}")"
+
+            # If the parent directory also doesn't exist, then exit with an
+            # error
+            if [[ ! -e "${parent_dir}" ]]; then
+                error_messages+=("must have write permissions for '${filepath}', but parent directory '${parent_dir}' does not exist")
+                exit_code=1
+                check_filepath=false
+            else
+                filepath="${parent_dir}"
+            fi
+        fi
+        if ${check_filepath} && [[ ! -w "${filepath}" ]]; then
+            error_messages+=("must have write permissions for '${filepath}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for set variables
+    for var in "${set_variables[@]}"; do
+        if [[ -z "${!var}" ]]; then
+            error_messages+=("variable '${var}' must be set")
+            exit_code=1
+        fi
+    done
+
+    # Check for empty variables
+    for var in "${empty_variables[@]}"; do
+        if [[ -n "${!var}" ]]; then
+            error_messages+=("variable '${var}' must be empty")
+            exit_code=1
+        fi
+    done
+
+    # Check values
+    for key in "${!values[@]}"; do
+        if [[ "${key}" != "${values["${key}"]}" ]]; then
+            error_messages+=("value '${key}' is not '${values["${key}"]}'")
+            exit_code=1
+        fi
+    done
+
+    # Check variable values
+    for var in "${!variable_values[@]}"; do
+        if [[ "${!var}" != "${variable_values["${var}"]}" ]]; then
+            error_messages+=("variable '${var}' is set to '${!var}', not '${variable_values["${var}"]}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for required dependencies
+    for dep in "${required_dependencies[@]}"; do
+        if ! command -v "${dep}" &> /dev/null; then
+            error_messages+=("missing required dependency: '${dep}'")
+            exit_code=1
+        fi
+    done
+
+    # Check for optional dependencies
+    for dep in "${optional_dependencies[@]}"; do
+        if ! command -v "${dep}" &> /dev/null; then
+            warning_messages+=("missing optional dependency: '${dep}'")
+        fi
+    done
+
+    # Check for one of a set of dependencies
+    for name in "${!one_of[@]}"; do
+        local found=false
+        local found_dep
+        for dep in ${one_of["${name}"]}; do
+            if command -v "${dep}" &> /dev/null; then
+                found=true
+                found_dep="${dep}"
+                break
+            fi
+        done
+        if ! ${found}; then
+            # echo "error: missing '${name}': ${one_of["${name}"]}" >&2
+            # _ex 1
+            error_messages+=("missing '${name}': ${one_of["${name}"]}")
+            exit_code=1
+        else
+            # Set the variable to the found dependencyis
+            read -r "${name}" <<< "${found_dep}"
+        fi
+    done
+
+    # Print any warning messages
+    for msg in "${warning_messages[@]}"; do
+        echo "warning: ${msg}" >&2
+    done
+
+    # Print any error messages and exit if necessary
+    if [[ ${exit_code} -ne 0 ]]; then
+        for msg in "${error_messages[@]}"; do
+            echo "error: ${msg}" >&2
+        done
+
+    fi
+
+    # Restore output if quiet mode was enabled
+    ${do_quiet} && exec 1>&9 2>&8 9>&- 8>&-
+
+    # If this function is being called from an interactive shell, then
+    # exit on failure, else return
+    if ${do_exit_on_failure} && [[ ! "${-}" =~ i && "${exit_code}" -ne 0 ]]; then
+        echo "exiting due to unmet dependencies" >&2
+        exit "${exit_code}"
+    fi
+    return "${exit_code}"
 }
