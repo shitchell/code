@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# Parse a string into a timestamp
+
+STRING="${1}"
+FORMAT="${2:-%Y-%m-%d %H:%M:%S}"
+
+if [[ -z "${STRING}" ]]; then
+    echo "usage: $(basename "${0}") <string> [<strftime>]" >&2
+    exit 1
+fi
+
+if [[ "${STRING}" =~ ^[0-9]{7,11}$ ]]; then
+	# Treat it as a unix timestamp
+	STRING="@${STRING}"
+fi
+
+date -d "${STRING}" +"${FORMAT}"
