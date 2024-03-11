@@ -77,9 +77,9 @@ def score(guess, solution):
 # Logically get the answer given
 def splitline(line):
 	if re.search('[^d]', line):
-		answer = re.findall('\d', line)
+		answer = re.findall(r'\d', line)
 	else:
-		answer = re.findall('\d+', line)
+		answer = re.findall(r'\d+', line)
 	return [int(x) for x in answer]
 
 # Solve the game automatically if necessary
