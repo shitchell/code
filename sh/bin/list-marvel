@@ -1,11 +1,289 @@
 #!/usr/bin/env bash
 #
-# List Marvel movies and TV shows
+# This script does some stuff
 
-include-source 'echo.sh'
 
-# Determine whether to colorize the output
-[[ -t 0 && -t 1 ]] && ECHO_FORMATTED=always || ECHO_FORMATTED=no
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_INVALID_ARGUMENT=2
+declare -ri E_INVALID_COMPONENT=3
+
+
+## traps #######################################################################
+################################################################################
+
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+
+    # Custom colors
+    C_HEADER="${S_BOLD}"
+    C_DATE="${C_CYAN}"
+    C_TITLE="${S_BOLD}${C_BLUE}"
+    C_TYPE="${C_YELLOW}"
+    C_RESET="${S_RESET}"
+}
+
+# @description Unset color variables
+# @usage unset-colors
+function unset-colors() {
+    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
+          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
+    
+    # Custom colors
+    unset C_HEADER C_DATE C_TITLE C_TYPE C_RESET
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [--color <when>] [--(no-)pager]"
+    echo "       [--(no-)header] [--(no-)sort] [--sort-column <int>]"
+    echo "       [--format <format>]"
+    echo "       <component>..."
+}
+
+function help-epilogue() {
+    echo "Fetch the latest Marvel release dates"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                    display usage
+    --help                display this help message
+    -c/--color <when>     when to use color ("auto", "always", "never")
+    -s/--silent           suppress all output
+    -p/--pager            use \`autopage\` for output (default)
+    -P/--no-pager         do not use a pager for output
+    -c/--columns          columnize the output (default: true if format not set)
+    -C/--no-columns       do not columnize the output
+    --header              include a header in the output
+    --no-header           do not include a header in the output
+    --sort                sort the output
+    -k/--sort-column <n>  sort the output by the specified column
+    --format <format>     the format to use for the output (see below, default:
+                          "{date}\t{title}\t{component}")
+    <component>           the component name to fetch results from
+EOF
+    echo
+    echo "Components:"
+    _print-components | sed 's/^/    /'
+    echo
+    echo "Format:"
+    echo "    {date}      - the release date"
+    echo "    {dateY}     - the release year"
+    echo "    {dateM}     - the release month"
+    echo "    {dateD}     - the release day"
+    echo "    {title}     - the title"
+    echo "    {component} - the component type"
+}
+
+function parse-args() {
+    # Default values
+    COMPONENTS=()
+    DO_COLOR=false
+    DO_SILENT=false
+    DO_PAGE=true
+    DO_COLUMNS="" # set to true if format_specified is false after parsing
+    DO_HEADER=true
+    DO_SORT=true
+    SORT_COLUMN=1
+    FORMAT=$'{date}\t{title}\t{component}'
+    local format_specified=false
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            -p | --pager)
+                DO_PAGE=true
+                ;;
+            -P | --no-pager)
+                DO_PAGE=false
+                ;;
+            -c | --columns)
+                DO_COLUMNS=true
+                ;;
+            -C | --no-columns)
+                DO_COLUMNS=false
+                ;;
+            --header)
+                DO_HEADER=true
+                ;;
+            --no-header)
+                DO_HEADER=false
+                ;;
+            --format)
+                FORMAT="${2}"
+                format_specified=true
+                shift 1
+                ;;
+            --sort)
+                DO_SORT=true
+                ;;
+            --no-sort)
+                DO_SORT=false
+                ;;
+            -k | --sort-column)
+                SORT_COLUMN="${2}"
+                shift 1
+                ;;
+            --list-components)
+                printf "%s\n" "${COMPONENT_IDS_BY_ID[@]}" | tr ' ' '\n' | sort
+                exit ${E_SUCCESS}
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                COMPONENTS+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        COMPONENTS+=("${1}")
+        shift 1
+    done
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL} && ! ${format_specified}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && setup-colors || unset-colors
+    fi
+
+    # If no components were given, default to all
+    [[ ${#COMPONENTS[@]} -eq 0 ]] && COMPONENTS=("all")
+
+    # Ensure the components are valid
+    for component in "${COMPONENTS[@]}"; do
+        if [[ -z "${COMPONENT_IDS_BY_NAME["${component}"]}" ]]; then
+            echo "error: invalid component: ${component}" >&2
+            return ${E_INVALID_COMPONENT}
+        fi
+    done
+
+    # If no format was specified, then we should columnize the output
+    if ! ${format_specified}; then
+        DO_COLUMNS=true
+    elif [[ -z "${DO_COLUMNS}" ]]; then
+        DO_COLUMNS=false
+    fi
+
+    # Ensure the sort column is a number
+    if ! [[ "${SORT_COLUMN}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid sort column: ${SORT_COLUMN}" >&2
+        return ${E_INVALID_ARGUMENT}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
 
 # Setup the component IDs
 COMPONENT_IDS=(
@@ -91,6 +369,18 @@ function _fetch-results() {
                 do_header=false
                 shift
                 ;;
+            --sort)
+                do_sort=true
+                shift
+                ;;
+            --no-sort)
+                do_sort=false
+                shift
+                ;;
+            --sort-column)
+                sort_column="${2}"
+                shift 2
+                ;;
             *)
                 component_id="${1}"
                 if [[ "${component_id}" != [0-9]+ ]];  then
@@ -116,13 +406,13 @@ function _fetch-results() {
     # Show the header
     if ${do_header}; then
         header=$(
-            awk '{
-                gsub(/{date}/, "Release Date");
-                gsub(/{dateY}/, "Release Year");
-                gsub(/{dateM}/, "Release Month");
-                gsub(/{dateD}/, "Release Day");
-                gsub(/{title}/, "Title");
-                gsub(/{component}/, "Type");
+            awk -v c="${C_HEADER}" -v r="${C_RESET}" '{
+                gsub(/{date}/,      c "Release Date" r);
+                gsub(/{dateY}/,     r "Release Year" r);
+                gsub(/{dateM}/,     c "Release Month" r);
+                gsub(/{dateD}/,     c "Release Day" r);
+                gsub(/{title}/,     c "Title" r);
+                gsub(/{component}/, c "Type" r);
                 print $0;
             }' <<< "${format}" | printf "%b" "$(cat)"
         )
@@ -143,7 +433,8 @@ function _fetch-results() {
             [[ ${exit_code} -eq 0 ]] && exit_code=1
         fi
 
-        awk -v component="${COMPONENT_IDS_BY_ID["${component_id}"]}" -v format="${format}" '
+        awk -v component="${COMPONENT_IDS_BY_ID["${component_id}"]}" -v format="${format}" \
+            -v c_date="${C_DATE}" -v c_title="${C_TITLE}" -v c_type="${C_TYPE}" -v c_reset="${C_RESET}" '
             function is_int(x) {
                 return x ~ /^[0-9]+$/;
             }
@@ -186,12 +477,12 @@ function _fetch-results() {
             # If we have a title, day, month, and year, print them out
             title != "" && day != "" && month != "" && year != "" {
                 # print year "-" month "-" day "\t" title "\t" component;
-                line = gensub(/{date}/, year "-" month "-" day, 1, format);
-                line = gensub(/{dateY}/, year, 1, line);
-                line = gensub(/{dateM}/, month, 1, line);
-                line = gensub(/{dateD}/, day, 1, line);
-                line = gensub(/{title}/, title, 1, line);
-                line = gensub(/{component}/, component, 1, line);
+                line = gensub(/{date}/,  c_date year "-" month "-" day c_reset, 1, format);
+                line = gensub(/{dateY}/, c_date year c_reset, 1, line);
+                line = gensub(/{dateM}/, c_date month c_reset, 1, line);
+                line = gensub(/{dateD}/, c_date day c_reset, 1, line);
+                line = gensub(/{title}/, c_title title c_reset, 1, line);
+                line = gensub(/{component}/, c_type component c_reset, 1, line);
                 print line;
 
                 # Reset the title, day, month, and year
@@ -209,26 +500,63 @@ function _fetch-results() {
     return ${exit_code}
 }
 
+function _print-components() {
+    for component in "${COMPONENT_IDS[@]}"; do
+        name="${component%%::*}"
+        id="${component##*::}"
+        echo -e "- ${name}\t(${id})"
+    done | column -t -s $'\t'
+}
+
+function _ensure-multiple-rows() {
+    # If DO_HEADER is false, then we don't have to worry about this
+    ! ${DO_HEADER} && cat && return
+
+    # Wait until at least 1 row of results is available before printing
+    local row_count=0
+    local lines=()
+    while read -r line && ((row_count < 2)); do
+        lines+=("${line}")
+        let row_count++
+    done
+
+    # If we collected 2 lines (the header + 1 result), then print everything
+    if [[ ${row_count} -eq 2 ]]; then
+        printf "%s\n" "${lines[@]}"
+        cat
+    fi
+}
+
+function _pager() {
+    ${DO_PAGE} && autopage || cat
+}
+
+function _columnize() {
+    ${DO_COLUMNS} && column -t -s $'\t' || cat
+}
+
+function _format-output() {
+    _columnize | _pager
+}
+
+
 ## main ########################################################################
 ################################################################################
 
 function main() {
-    if [[ "${1}" =~ ^"help"|"-h"|"--help"$ || -z "${1}" ]]; then
-        echo "List Marvel movies and TV shows from the Marvel website"
-        echo "usage: $(basename "${0}") category [category ...]"
-        echo
-        echo "Categories:"
-        # Print all of the components
-        for component in "${COMPONENT_IDS[@]}"; do
-            name="${component%%::*}"
-            id="${component##*::}"
-            echo -e "- ${name}\t(${id})"
-        done | column -t -s $'\t'
-        [[ -n "${1}" ]] && return 0
-    fi
+    parse-args "${@}" || return ${?}
 
-    _fetch-results --header "${@}" | column -t -s $'\t'
+    local fetch_args=()
+    ${DO_HEADER} && fetch_args+=("--header")
+    ${DO_SORT} \
+        && fetch_args+=("--sort" "--sort-column" "${SORT_COLUMN}") \
+        || fetch_args+=("--no-sort")
+    fetch_args+=("--format" "${FORMAT}")
+    fetch_args+=("${COMPONENTS[@]}")
+
+    _fetch-results "${fetch_args[@]}" | _ensure-multiple-rows | _format-output
 }
+
 
 ## run #########################################################################
 ################################################################################
