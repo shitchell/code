@@ -819,6 +819,9 @@ function __action-log() {
     else
         awk -v FS=$'\x1e' -v format="${format}" -v home="${HOME}" '
         function format_line(string) {
+            if (!string) {
+                return;
+            }
             split(string, parts, "\x1e")
 
             # Special vars
@@ -968,7 +971,10 @@ function __action-log() {
         {
             if (NR > 1) {
                 # Print the formatted line
-                print format_line(str)
+                line = format_line(str)
+                if (line) {
+                    print line
+                }
             }
             str = $0
         }
@@ -976,7 +982,10 @@ function __action-log() {
             # On the last line, remove any trailing newlines and print the
             # formatted line
             gsub(/(\n)+$/, "", format)
-            print format_line(str)
+            line = format_line(str)
+            if (line) {
+                print line
+            }
         }'
     fi
 }
@@ -1287,6 +1296,7 @@ function __action-_test() {
     done
 
     echo "${message}"
+    return 69
 }
 
 
@@ -1319,8 +1329,8 @@ function main() {
     # Verify the action function exists
     if type -t "${action_func}" &>/dev/null; then
         # Call the action function
-        "${action_func}" "${ACTION_ARGS[@]}"
-        exit_code=${?}
+        "${action_func}" "${ACTION_ARGS[@]}" | autopage
+        exit_code=${PIPESTATUS[0]}
     else
         echo "error: no such action function found: ${ACTION}" >&2
         exit_code=${E_INVALID_ACTION}
