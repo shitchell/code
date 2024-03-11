@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# Provide an info on an alias or all aliases
+
+ALIAS="${1}"
+ALIASES=$(git config --get-regexp "^alias\.")
+
+if [[ -z "${ALIAS}" ]]; then
+    printf '%s\n' "${ALIASES}"
+else
+    awk -v alias="${1}" '$1 == "alias." alias { print; exit }' <<< "${ALIASES}"
+fi
