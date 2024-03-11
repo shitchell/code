@@ -825,3 +825,95 @@ function require() {
     fi
     return "${exit_code}"
 }
+
+# @description Run benchmarks on a command
+# @usage benchmark --iterations <num> command [args...]
+function benchmark() {
+    local iterations=1
+    local do_silent=false
+    local do_progress=true
+    local do_show_output=false
+    local cmd=()
+
+    # determine these after processing the args
+    local progress_as_header=false
+    local progress_as_inplace=false
+
+    # Parse the command and arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --iterations)
+                iterations="${2}"
+                shift 2
+                ;;
+            --silent)
+                do_silent=true
+                shift 1
+                ;;
+            --progress)
+                do_progress=true
+                shift 1
+                ;;
+            --no-progress)
+                do_progress=false
+                shift 1
+                ;;
+            --show-output)
+                do_show_output=true
+                shift 1
+                ;;
+            --no-show-output)
+                do_show_output=false
+                shift 1
+                ;;
+            --)
+                shift 1
+                cmd+=("${@}")
+                break
+                ;;
+            *)
+                cmd+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+
+    # If showing progress *and* output, then show a header above each iteration
+    if ${do_progress}; then
+        if ${do_show_output}; then
+            progress_as_header=true
+        else
+            progress_as_inplace=true
+        fi
+    fi
+
+    if ${do_silent}; then
+        exec 9>/dev/null 8>/dev/null
+    else
+        exec 9>&1 8>&2
+    fi
+
+    if ${do_show_output}; then
+        exec 3>&1 4>&2
+    else
+        exec 3>/dev/null 4>/dev/null
+    fi
+
+    debug-vars do_silent iterations cmd
+
+    # Run the command the specified number of times
+    time (
+        for ((i = 0; i < iterations; i++)); do
+            # # Print the progress header
+            # if ${progress_as_header}; then
+            #     echo -e "\033[1miteration\033[0m ${i}"
+            # elif ${progress_as_inplace}; then
+            #     printf '\r[%d/%d] ' "${i}" "${iterations}"
+            # fi
+            "${cmd[@]}"
+        done 1>&9 2>&8
+    )
+
+    # Restore the output
+    exec 9>&- 8>&- 3>&- 4>&-
+}
