@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# wget, but without the query string in the output filename
+
+function _wgeto() {
+    local url="${1}"
+    local name protocol domain path query
+    
+    if [[ "${url}" =~ ^([^:]+)"://"([^/]+)(/?)(/[^?]+)?(\?(.*))? ]]; then
+        protocol="${BASH_REMATCH[1]}"
+        domain="${BASH_REMATCH[2]}"
+        path="${BASH_REMATCH[4]}"
+        query="${BASH_REMATCH[6]}"
+        if [[ "${path}" =~ /. ]]; then
+            name="${path##*/}"
+        else
+            name="${domain}"
+        fi
+    else
+        name="${url##*/}"
+        name="${name%%\?*}"
+    fi
+
+    wget "${url}" -O "${name}"
+}
+
+for url in "${@}"; do
+    _wgeto "${url}"
+done
