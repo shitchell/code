@@ -97,18 +97,19 @@ function update-timestamp() {
 
     timestamp=$(
         git log \
-            "${git_opts[@]}" \
+                "${GIT_LOG_OPTS[@]}" \
             -n 1 \
             --date=format:%Y%m%d%H%M.%S \
             --pretty=format:%ad \
             --date-order \
+                "${GIT_LOG_OPTS[@]}" \
             -- "${filepath}"
     )
 
     if [[ -z "${timestamp}" ]]; then
         return 1
     fi
-
+        echo "${timestamp}  ${file}"
     touch -m -t "${timestamp}" "${filepath}"
 
     echo "${timestamp}"
