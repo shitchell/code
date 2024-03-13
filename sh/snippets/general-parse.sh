@@ -33,12 +33,19 @@ function show-help() {
     -s/--silent              suppress all output
     -m/--model               a model name
     -d/--directory <dir>     a directory to use
-    
+
 EOF
 	# If a custom-help function is defined, run it
 	declare -f help-options &>/dev/null && help-options
 }
 
+# @description Determine if the parent process is a shell
+function parent-is-shell() {
+	local ps_args=$(ps -o args= "$$")
+	debug-vars ps_args
+
+	! [[ "${ps_args}" == *" "* ]]
+}
 
 # @description A general argument parser
 # @usage parse-args --foo=bar --option --no-other-option arg1 arg2 -- -andthis
@@ -56,7 +63,7 @@ function parse-args() {
             -h | --help)
             	debug "  halp!"
             	show-help
-                exit 0
+            	parent-is-shell && return 0 || exit 0
                 ;;
             -s | --silent)
             	debug "  shhhh"
@@ -111,6 +118,6 @@ function parse-args() {
         POSARGS+=("${1}")
         shift 1
     done
-    
+
     ${DO_SILENT} && silence-output
 }
