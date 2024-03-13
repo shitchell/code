@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# This script wans you when a utility needs to be set up via linking
+#
+# Scenario:
+# You have a utility `foo` which needs to be setup differently for different
+# environments, e.g.: within WSL vs Git Bash vs OSX vs *nix. So you have 3
+# versions:
+# - ~/code/osx/foo.sh
+# - ~/code/win/foo-wsl.sh
+# - ~/code/win/foo-gitbash.sh
+#
+# So when you move to a new system, you might want to link one of the above
+# scripts to your ~/bin directory. Using this script, you can run:
+#
+#   ln -s link-required foo
+#
+# to set up a symlink for `foo` in a directory on your $PATH that is a lower
+# priority than ~/bin. Then, if you run `foo` on a new system, it will run the
+# symlink and:
+# - print a warning that `foo` has not been properly set up yet on this system
+# - search for and find the above 3 candidates, then show them to you
+# - if the shell is interactive, prompt you to link ~/bin/foo to one of the
+#   candidates
+#
+# e.g.:
+#   $ foo
+#   error: foo is not yet set up
+#
+#   Please review the following candidates for linking to ~/bin/foo:
+#    - /home/username/code/osx/foo.sh
+#    - /home/username/code/win/foo-wsl.sh
+#    - /home/username/code/win/foo-gitbash.sh
+#
+#   Link ~/bin/foo to one of the above candidates? [y/N]
+
+# Get the name this script is running as
+SCRIPT_NAME=$(basename "${0}")
+LINK_PATH=$(realpath -s "${0}")
+FILE_TYPE=$(file -bi "${LINK_PATH}")
+
+# If the script is being run directly (i.e. not via a symlink), then just print
+# some info and exit
+if [[ "${FILE_TYPE}" =~ "shellscript" ]]; then
+    echo "This script is meant to be symlinked to, e.g. by:"
+    echo "  ln -s \"$(realpath "${0}")\" \"${HOME}/code/bin/foo\""
+    echo
+    echo "If you have multiple versions of \`foo\` for different environments,"
+    echo "with the intention to pick which one via symlinking, then you can"
+    echo "use this script to generate a lower priority symlink that warns you"
+    echo "and prompts you to set up \`foo\` when you run it."
+    exit 0
+fi
+
+# Find all programs that match the pattern `$SCRIPT_NAME([-.].*)?`
+# - The pattern matches the script name, optionally followed by a dash or dot
+#   and any number of characters
+# - The pattern is anchored to the beginning of the string, so it will only
+#   match programs that start with the script name
+REGEX="^${SCRIPT_NAME}([-.].*)?$"
+readarray -t CANDIDATES < <(
+    IFS=:
+    for DIR in ${PATH}; do
+        shopt -s nullglob
+        for FILE in "${DIR}/${SCRIPT_NAME}"*; do
+            if [[
+                -x "${FILE}"
+                && "${FILE}" != "${LINK_PATH}"
+            ]]; then
+                echo "${FILE}"
+            fi
+        done
+        shopt -u nullglob
+    done
+)
+echo "error: ${SCRIPT_NAME} is not yet set up" >&2
+echo
+echo "Please review the following candidates for linking to ~/bin/${SCRIPT_NAME}:"
+for ((i=0; i<${#CANDIDATES[@]}; i++)); do
+    printf '  %d. %s\n' "${i}" "${CANDIDATES[$i]}"
+done
+
+# If the shell is interactive, prompt the user to link one of the candidates
+if [[ -t 0 ]]; then
+    # Validate that ~/bin/${SCRIPT_NAME} does not already exist
+    NEW_LINK_PATH="${HOME}/bin/${SCRIPT_NAME}"
+    if [[ -e "${NEW_LINK_PATH}" ]]; then
+        echo "error: ${NEW_LINK_PATH} already exists" >&2
+        echo "       you might want to validate that ~/bin is a higher priority in \$PATH" >&2
+        echo "PATH:  ${PATH}" >&2
+        exit 1
+    fi
+
+    # Prompt the user to link one of the candidates
+    while ! [[ "${REPLY}" =~ ^([0-9]+|[Qq]([Uu][Ii][Tt])?)$ ]]; do
+        read -p "Enter the number of the candidate to link, or 'q' to quit: " REPLY
+    done
+
+    # If the user entered a number, link the candidate
+    if [[ "${REPLY}" =~ ^[0-9]+$ ]]; then
+        CANDIDATE="${CANDIDATES[${REPLY}]}"
+        echo "Linking ${CANDIDATE} to ${NEW_LINK_PATH}"
+        ln -s "${CANDIDATE}" "${NEW_LINK_PATH}"
+
+        # Add a function to the $PROMPT_COMMAND to:
+        # - reset the cached path for the script so that the new symlink is used
+        # - remove the function from the $PROMPT_COMMAND
+        function clear-bash-cache() {
+            # Clear the cached path for the script
+            hash -d "${SCRIPT_NAME}"
+
+            # Remove this function from the $PROMPT_COMMAND
+            PROMPT_COMMAND="${PROMPT_COMMAND//;clear-bash-cache;}"
+        }
+        export PROMPT_COMMAND="${PROMPT_COMMAND};clear-bash-cache;sdf"
+    fi
+
+    # If the user entered 'q', exit
+    if [[ "${REPLY}" =~ ^[Qq]([Uu][Ii][Tt])?$ ]]; then
+        exit 0
+    fi
+fi

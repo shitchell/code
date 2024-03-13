@@ -3,6 +3,69 @@ include-source 'echo.sh'
 include-source 'shell.sh'
 include-source 'text.sh'
 
+# @description
+#     Given a `git` command, parse out the git arguments, subcommand, and
+#     subcommand arguments. These will be stored into the following variables:
+#     - GIT_ARGS: the arguments to the `git` command
+#     - GIT_SUBCOMMAND: the `git` subcommand
+#     - GIT_SUBCOMMAND_ARGS: the arguments to the `git` subcommand
+# @usage parse-git-command <git command>
+# @example parse-git-command git log --oneline
+function parse-git-command() {
+    declare -ga GIT_ARGS=()
+    declare -g  GIT_SUBCOMMAND=""
+    declare -ga GIT_SUBCOMMAND_ARGS=()
+
+    while [[ ${#} -gt 0 ]]; do
+        debug "parsing: ${1}"
+        case ${1} in
+            # Handle all options that take no arguments
+            -h | --help | --version | --html-path | --man-path | --info-path | \
+            -p | --paginate | -P | --no-pager | --no-replace-objects | --bare | \
+            --literal-pathspecs | --glob-pathspecs | --noglob-pathspecs | \
+            --icase-pathspecs | --no-optional-locks | --no-renames | --exec-path*)
+                debug "no arg: ${1}"
+                GIT_ARGS+=("${1}")
+                shift 1
+                ;;
+
+            # Handle all options that optionally take an argument
+            --git-dir* | --work-tree* | --namespace* | --super-prefix* | \
+            --config-env* | --list-cmds*)
+                debug "arg optional: ${1}"
+                # Determine if the argument contains an equals sign
+                if [[ "${1}" =~ = ]]; then
+                    # If it does, then there is no 2nd argument
+                    GIT_ARGS+=("${1}")
+                    shift 1
+                else
+                    # If it doesn't, then there is a 2nd argument to store
+                    GIT_ARGS+=("${1}" "${2}")
+                    shift 2
+                fi
+                ;;
+
+            # Handle all options that require an argument
+            -C | -c)
+                debug "arg required: ${1}"
+                GIT_ARGS+=("${1}" "${2}")
+                shift 2
+                ;;
+
+            *)
+                # This is the subcommand -- store it and the rest of the args
+                GIT_SUBCOMMAND="${1}"
+                shift 1
+                GIT_SUBCOMMAND_ARGS=("${@}")
+                debug "subcommand: ${GIT_SUBCOMMAND}"
+                debug "subcommand args (${#@}):`printf " '%s'" "${GIT_SUBCOMMAND_ARGS[@]}"`"
+                break
+                ;;
+        esac
+        debug "git args (${#@}):`printf " '%s'" "${GIT_ARGS[@]}"`"
+    done
+}
+
 # Return the path to the git repository root
 function git-root() {
     git rev-parse --show-toplevel

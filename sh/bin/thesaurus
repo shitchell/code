@@ -113,12 +113,7 @@ function parse-args() {
         exit 1
     fi
 
-    debug "NUM: ${NUM}"
-    debug "WORD: ${WORD}"
-    debug "MAX_WIDTH: ${MAX_WIDTH}"
-    debug "SHOW_SCORE: ${SHOW_SCORE}"
-    debug "USE_COLOR: ${USE_COLOR}"
-    debug "SHOW_CATEGORIES: ${SHOW_CATEGORIES}"
+    debug-vars NUM WORD MAX_WIDTH SHOW_SCORE USE_COLOR SHOW_CATEGORIES
 }
 
 
@@ -141,7 +136,7 @@ function json-format() {
 function main() {
     parse-args "${@}"
 
-    local html json json_formatted
+    local html json json_formatted output exit_code
 
     # Get the synonyms
     html=$(curl -s "https://www.thesaurus.com/browse/$(urlencode "${WORD}")")
@@ -149,14 +144,16 @@ function main() {
         echo-stderr "empty response from thesaurus.com"
         return 1
     fi
-    debug "raw fetched HTML:"
-    debug "${html}"
     json=$(
         echo "${html}" \
           | grep -oP '<script>window\.__staticRouterHydrationData = JSON\.parse\(\K[^<]*'
     )
-    [[ "${DEBUG}" == true ]] && echo "${html}" > /tmp/thesaurus.html
-    [[ "${DEBUG}" == true ]] && echo "${json}" > /tmp/thesaurus.json
+    [[ "${DEBUG}" == true ]] && {
+        echo "${html}" > /tmp/thesaurus.html
+        echo "${json}" > /tmp/thesaurus.json
+        debug "HTML saved to /tmp/thesaurus.html"
+        debug "JSON saved to /tmp/thesaurus.json"
+    }
     # If the JSON ends with ");", then parse it
     if [[ "${json: -2}" == ");" ]]; then
         json="${json::-2}"
@@ -168,237 +165,257 @@ function main() {
         echo-stderr "could not find JSON in response"
         return 1
     fi
-    debug "parsed json:"
-    debug "${json}"
-    # The JSON is stored as a string literal, so we'll eval it
-    # (yay security! (what can i say, i'm not too concerned hackers are going to
-    # inject shell code into the JSON string literal on thesaurus.com))
+    [[ "${DEBUG}" == true ]] && {
+        echo "${json}" > /tmp/thesaurus.json
+        debug "/tmp/thesaurus.json updated with parsed JSON"
+    }
+    # The JSON is stored as a string literal, so we'll eval it after verifying
+    # there are no double quotes *not* escaped by a backslash (kinda secure-ish?)
+    if [[ "${json:1:-1}" =~ [^\\]\" ]]; then
+        echo-stderr "JSON string literal contains unescaped double quotes"
+        return 1
+    fi
     if ! eval "json=${json}" 2>/dev/null; then
         echo-stderr "unable to evaluate JSON string literal"
     fi
-    [[ "${DEBUG}" == true ]] && echo "${json}" > /tmp/thesaurus.json
+    [[ "${DEBUG}" == true ]] && {
+        echo "${json}" > /tmp/thesaurus.json
+        debug "/tmp/thesaurus.json updated with evaluated JSON"
+    }
     json_formatted=$(echo "${json}" | json-format - 2>/dev/null)
     if [[ -z "${json_formatted}" ]]; then
         echo-stderr "failed to parse JSON"
         return 1
     fi
-    echo "${json_formatted}" \
-        | awk -v use_color="${USE_COLOR}" \
-              -v num_colors=$(tput colors) \
-              -v max_width="${MAX_WIDTH}" \
-              -v show_categories="${SHOW_CATEGORIES}" \
-              -v show_similarities="${SHOW_SCORE}" \
-              -v num="${NUM}" \
-              -v DEBUG="${DEBUG}" '
-            function debug(s) {
-                if (DEBUG == "1" || DEBUG == "true") {
-                    # Print the debug message and line number to stderr
-                    print "[" FILENAME ":" FNR "] " s > "/dev/stderr";
-                }
-            }
-            function urlunquote(s) {
-                # Unquote a URL
-                # Loop over the string and replace %XX with the character
-                # represented by the hex value XX
-                for (i = 1; i <= length(s); i++) {
-                    if (substr(s, i, 1) == "%") {
-                        # Get the hex value
-                        hex = substr(s, i + 1, 2);
-                        # Convert the hex value to a decimal value
-                        dec = strtonum("0x" hex);
-                        # Convert the decimal value to a character
-                        char = sprintf("%c", dec);
-                        # Replace the %XX with the character
-                        s = substr(s, 1, i - 1) char substr(s, i + 3);
+    output=$(
+        echo "${json_formatted}" \
+            | awk -v use_color="${USE_COLOR}" \
+                -v num_colors=$(tput colors) \
+                -v max_width="${MAX_WIDTH}" \
+                -v show_categories="${SHOW_CATEGORIES}" \
+                -v show_similarities="${SHOW_SCORE}" \
+                -v num="${NUM}" \
+                -v DEBUG="${DEBUG}" '
+                function debug(s) {
+                    if (DEBUG == "1" || DEBUG == "true") {
+                        # Print the debug message and line number to stderr
+                        print "[" FILENAME ":" FNR "] " s > "/dev/stderr";
                     }
                 }
-                return s;
-            }
-            BEGIN {
-                inDefinitionData = 0;
-                inCategory = 0;
-                inSynonyms = 0;
-                inAntonyms = 0;
-                inTerm = 0;
-                categoryDefinition = "";
-                categoryIsInformal = "";
-                categoryPartOfSpeech = "";
-                term = "";
-                termIsInformal = "";
-                termSimilarity = 0;
-                termLineLength = 0; # track the characters is a single grouping of synonyms
-                if (use_color == "true") {
-                    C_searchTerm = "\033[1m";
-                    C_partOfSpeech = "\033[35m";
-                    C_informal = "\033[34m";
-                    C_synonym = "\033[1;32m";
-                    C_antonym = "\033[31m";
-                    C_categoryDefinition = "\033[1;34m";
-                    C_reset = "\033[0m";
-
-                    ## search term colors
-                    if (num_colors >= 256) {
-                        # If we have 256 colors or more, use a gradient from
-                        # dim grey to white
-                        C_syn_sim_00_25 = "\033[38;5;240m";
-                        C_syn_sim_25_50 = "\033[38;5;245m";
-                        C_syn_sim_50_75 = "\033[38;5;250m";
-                        C_syn_sim_75_100 = "\033[38;5;255m";
-                    } else {
-                        # If we have 8 colors or less, simply use dim for low
-                        # matches and bold for high matches
-                        C_syn_sim_00_25 = "\033[2m";
-                        C_syn_sim_25_50 = "\033[2m";
-                        C_syn_sim_50_75 = "\033[1m";
-                        C_syn_sim_75_100 = "\033[1m";
+                function urlunquote(s) {
+                    # Unquote a URL
+                    # Loop over the string and replace %XX with the character
+                    # represented by the hex value XX
+                    for (i = 1; i <= length(s); i++) {
+                        if (substr(s, i, 1) == "%") {
+                            # Get the hex value
+                            hex = substr(s, i + 1, 2);
+                            # Convert the hex value to a decimal value
+                            dec = strtonum("0x" hex);
+                            # Convert the decimal value to a character
+                            char = sprintf("%c", dec);
+                            # Replace the %XX with the character
+                            s = substr(s, 1, i - 1) char substr(s, i + 3);
+                        }
                     }
-                    C_synSimilarity = "\033[2m";
+                    return s;
                 }
-            }
-
-            {
-                # Get the term thesaurus.com interpreted the search term as
-                if (!term && $0 ~ /"displayForm":/) {
-                    gsub(/.*"displayForm": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    term = $0;
-                    debug("FOUND TERM: " term);
-                    print C_searchTerm urlunquote($0) C_reset;
-                }
-
-                # Determine if we are in the definition data
-                if (!inDefinitionData && $0 ~ /"definitionData":/) {
-                    inDefinitionData = 1;
-                    debug("BEGINNING OF DEFINITION DATA");
-                } else if (inDefinitionData && $0 ~ /^                        }/) {
+                BEGIN {
                     inDefinitionData = 0;
-                    debug("END OF DEFINITION DATA");
-                    exit 0;
-                } else if (!inDefinitionData) {
-                    next;
-                }
-                
-                # Print the search term, category definitions, parts of speech,
-                # and synonyms
-                if ($0 ~ /^                                {/) {
-                    inCategory = 1;
-                    debug("BEGINNING OF CATEGORY -- " categoryDefinition);
-                } else if ($0 ~ /"synonyms":/) {
-                    inSynonyms = 1;
-                    debug("BEGINNING OF SYNONYMS");
-                    ### Print the category info and synonyms
-                    debug("PRINTING CATEGORY INFO AND SYNONYMS");
-                    print "";
-                    if (show_categories) {
-                        printf("(%s%s%s", C_partOfSpeech, categoryPartOfSpeech, C_reset);
-                        if (categoryIsInformal) {
-                            printf(", %sinformal%s", C_informal, C_reset)
-                        }
-                        printf(")  ");
-                        printf("%s%s%s ", C_categoryDefinition, categoryDefinition, C_reset);
-                        print "";
-                    }
-                    # Track whether we have printed the first synonym
-                    firstCategoryTermPrinted = 0;
-                } else if ($0 ~ /"antonyms": \[$/) {
-                    inAntonyms = 1;
-                    # Track whether we have printed the first antonym
-                    firstCategoryTermPrinted = 0;
-                    debug("BEGINNING OF ANTONYMS");
-                } else if ($0 ~ /^                                    \]/ || $0 ~ /"antonyms": \[\]/) {
-                    inAntonyms = 0;
+                    inCategory = 0;
                     inSynonyms = 0;
-                    if (! ($0 ~ /"antonyms": \[\]/)) {
-                        print "";
-                    }
-                    debug("END OF ANTONYMS / SYNONYMS");
-                } else if ($0 ~ /"pos":/) {
-                    ### Store the part of speech
-                    gsub(/.*"pos": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    categoryPartOfSpeech = $0;
-                    debug("FOUND PART OF SPEECH: " categoryPartOfSpeech);
-                } else if (inCategory && $0 ~ /"definition":/) {
-                    ### Store the category definition
-                    gsub(/.*"definition": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    categoryDefinition = $0;
-                    debug("FOUND CATEGORY DEFINITION: " categoryDefinition);
-                } else if (inCategory && !inTerm && $0 ~ /"isInformal":/) {
-                    ### Store whether the category is informal
-                    gsub(/.*"isInformal": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    if ($0 == "0") {
-                        categoryIsInformal = "";
-                    } else {
-                        categoryIsInformal = 1;
-                    }
-                    debug("FOUND CATEGORY IS INFORMAL: " categoryIsInformal);
-                } else if ($0 ~ /^                                        {/) {
-                    inTerm = 1;
-                    debug("BEGINNING OF TERM");
-                } else if (inTerm && $0 ~ /"term":/) {
-                    ### Store the term
-                    gsub(/.*"term": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    term = $0;
-                    debug("FOUND TERM: " term);
-                } else if (inTerm && $0 ~ /"similarity":/) {
-                    gsub(/.*"similarity": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    termSimilarity = $0;
-                } else if (inTerm && $0 ~ /"isInformal":/) {
-                    gsub(/.*"isInformal": "/, "", $0);
-                    gsub(/".*/, "", $0);
-                    if ($0 != "0") {
-                        termIsInformal = 1;
-                    } else {
-                        termIsInformal = "";
-                    }
-                    debug("FOUND TERM IS INFORMAL: " termIsInformal);
-                } else if (inTerm && $0 ~ /^                                        }/) {
-                    ### Print the term
-                    debug("PRINTING TERM: " term " (" termSimilarity ", " termIsInformal ")");
-                    term_str = "";
-                    term_color = "";
-                    termSimilarity = int(termSimilarity);
-                    if (inAntonyms) {
-                        term_color = C_antonym;
-                        debug("USING C_antonym because inAntonyms");
-                    } else if (inSynonyms) {
-                        if (termSimilarity < 25) {
-                            term_color = C_syn_sim_00_25;
-                            debug("USING C_syn_sim_00_25 because " termSimilarity " < 25");
-                        } else if (termSimilarity < 50) {
-                            term_color = C_syn_sim_25_50;
-                            debug("USING C_syn_sim_25_50 because " termSimilarity " < 50");
-                        } else if (termSimilarity < 75) {
-                            term_color = C_syn_sim_50_75;
-                            debug("USING C_syn_sim_50_75 because " termSimilarity " < 75");
-                        } else {
-                            term_color = C_syn_sim_75_100;
-                            debug("USING C_syn_sim_75_100 because " termSimilarity " >= 75");
-                        }
-                    }
-                    if (!firstCategoryTermPrinted) {
-                        firstCategoryTermPrinted = 1;
-                    } else {
-                        term_str = term_str ", ";
-                    }
-                    term_str = term_str sprintf("%s%s%s",
-                                           term_color, term, C_reset);
-                    if (show_similarities == "true") {
-                        term_str = term_str sprintf(" (%s%d%s)",
-                                                    C_synSimilarity, termSimilarity, C_reset);
-                    }
-                    if (termIsInformal) {
-                        term_str = term_str sprintf(" %s(informal)%s",
-                                               C_informal, C_reset);
-                    }
-                    printf(term_str);
+                    inAntonyms = 0;
                     inTerm = 0;
+                    categoryDefinition = "";
+                    categoryIsInformal = "";
+                    categoryPartOfSpeech = "";
+                    term = "";
+                    termIsInformal = "";
+                    termSimilarity = 0;
+                    termLineLength = 0; # track the characters is a single grouping of synonyms
+                    if (use_color == "true") {
+                        C_searchTerm = "\033[1m";
+                        C_partOfSpeech = "\033[35m";
+                        C_informal = "\033[34m";
+                        C_synonym = "\033[1;32m";
+                        C_antonym = "\033[31m";
+                        C_categoryDefinition = "\033[1;34m";
+                        C_reset = "\033[0m";
+
+                        ## search term colors
+                        if (num_colors >= 256) {
+                            # If we have 256 colors or more, use a gradient from
+                            # dim grey to white
+                            C_syn_sim_00_25 = "\033[38;5;240m";
+                            C_syn_sim_25_50 = "\033[38;5;245m";
+                            C_syn_sim_50_75 = "\033[38;5;250m";
+                            C_syn_sim_75_100 = "\033[38;5;255m";
+                        } else {
+                            # If we have 8 colors or less, simply use dim for low
+                            # matches and bold for high matches
+                            C_syn_sim_00_25 = "\033[2m";
+                            C_syn_sim_25_50 = "\033[2m";
+                            C_syn_sim_50_75 = "\033[1m";
+                            C_syn_sim_75_100 = "\033[1m";
+                        }
+                        C_synSimilarity = "\033[2m";
+                    }
                 }
-            }' | printf "%b" "$(cat)" ; echo
+
+                {
+                    # Get the term thesaurus.com interpreted the search term as
+                    if (inDefinitionData && !term && $0 ~ /"entry":/) {
+                        gsub(/.*"entry": "/, "", $0);
+                        gsub(/"[^"]+$/, "", $0);
+                        term = $0;
+                        debug("FOUND TERM: " term);
+                        print C_searchTerm urlunquote($0) C_reset;
+                    }
+
+                    # Determine if we are in the definition data
+                    if (!inDefinitionData && $0 ~ /"definitionData":/) {
+                        inDefinitionData = 1;
+                        debug("BEGINNING OF DEFINITION DATA");
+                    } else if (inDefinitionData && $0 ~ /^                        }/) {
+                        inDefinitionData = 0;
+                        debug("END OF DEFINITION DATA");
+                        exit 0;
+                    } else if (!inDefinitionData) {
+                        next;
+                    }
+                    
+                    # Print the search term, category definitions, parts of speech,
+                    # and synonyms
+                    if ($0 ~ /^                                {/) {
+                        inCategory = 1;
+                        debug("BEGINNING OF CATEGORY -- " categoryDefinition);
+                    } else if ($0 ~ /"synonyms":/) {
+                        inSynonyms = 1;
+                        debug("BEGINNING OF SYNONYMS");
+                        ### Print the category info and synonyms
+                        debug("PRINTING CATEGORY INFO AND SYNONYMS");
+                        print "";
+                        if (show_categories) {
+                            printf("(%s%s%s", C_partOfSpeech, categoryPartOfSpeech, C_reset);
+                            if (categoryIsInformal) {
+                                printf(", %sinformal%s", C_informal, C_reset)
+                            }
+                            printf(")  ");
+                            printf("%s%s%s ", C_categoryDefinition, categoryDefinition, C_reset);
+                            print "";
+                        }
+                        # Track whether we have printed the first synonym
+                        firstCategoryTermPrinted = 0;
+                    } else if ($0 ~ /"antonyms": \[$/) {
+                        inAntonyms = 1;
+                        # Track whether we have printed the first antonym
+                        firstCategoryTermPrinted = 0;
+                        debug("BEGINNING OF ANTONYMS");
+                    } else if ($0 ~ /^                                    \]/ || $0 ~ /"antonyms": \[\]/) {
+                        inAntonyms = 0;
+                        inSynonyms = 0;
+                        if (! ($0 ~ /"antonyms": \[\]/)) {
+                            print "";
+                        }
+                        debug("END OF ANTONYMS / SYNONYMS");
+                    } else if ($0 ~ /"pos":/) {
+                        ### Store the part of speech
+                        gsub(/.*"pos": "/, "", $0);
+                        gsub(/".*/, "", $0);
+                        categoryPartOfSpeech = $0;
+                        debug("FOUND PART OF SPEECH: " categoryPartOfSpeech);
+                    } else if (inCategory && $0 ~ /"definition":/) {
+                        ### Store the category definition
+                        gsub(/.*"definition": "/, "", $0);
+                        gsub(/".*/, "", $0);
+                        categoryDefinition = $0;
+                        debug("FOUND CATEGORY DEFINITION: " categoryDefinition);
+                    } else if (inCategory && !inTerm && $0 ~ /"isInformal":/) {
+                        ### Store whether the category is informal
+                        gsub(/.*"isInformal": "/, "", $0);
+                        gsub(/".*/, "", $0);
+                        if ($0 == "0") {
+                            categoryIsInformal = "";
+                        } else {
+                            categoryIsInformal = 1;
+                        }
+                        debug("FOUND CATEGORY IS INFORMAL: " categoryIsInformal);
+                    } else if ($0 ~ /^                                        {/) {
+                        inTerm = 1;
+                        debug("BEGINNING OF TERM");
+                    } else if (inTerm && $0 ~ /"term":/) {
+                        ### Store the term
+                        gsub(/.*"term": "/, "", $0);
+                        gsub(/".*/, "", $0);
+                        term = $0;
+                        debug("FOUND TERM: " term);
+                    } else if (inTerm && $0 ~ /"similarity":/) {
+                        gsub(/.*"similarity": "/, "", $0);
+                        gsub(/".*/, "", $0);
+                        termSimilarity = $0;
+                    } else if (inTerm && $0 ~ /"isInformal":/) {
+                        gsub(/.*"isInformal": "/, "", $0);
+                        gsub(/".*/, "", $0);
+                        if ($0 != "0") {
+                            termIsInformal = 1;
+                        } else {
+                            termIsInformal = "";
+                        }
+                        debug("FOUND TERM IS INFORMAL: " termIsInformal);
+                    } else if (inTerm && $0 ~ /^                                        }/) {
+                        ### Print the term
+                        debug("PRINTING TERM: " term " (" termSimilarity ", " termIsInformal ")");
+                        term_str = "";
+                        term_color = "";
+                        termSimilarity = int(termSimilarity);
+                        if (inAntonyms) {
+                            term_color = C_antonym;
+                            debug("USING C_antonym because inAntonyms");
+                        } else if (inSynonyms) {
+                            if (termSimilarity < 25) {
+                                term_color = C_syn_sim_00_25;
+                                debug("USING C_syn_sim_00_25 because " termSimilarity " < 25");
+                            } else if (termSimilarity < 50) {
+                                term_color = C_syn_sim_25_50;
+                                debug("USING C_syn_sim_25_50 because " termSimilarity " < 50");
+                            } else if (termSimilarity < 75) {
+                                term_color = C_syn_sim_50_75;
+                                debug("USING C_syn_sim_50_75 because " termSimilarity " < 75");
+                            } else {
+                                term_color = C_syn_sim_75_100;
+                                debug("USING C_syn_sim_75_100 because " termSimilarity " >= 75");
+                            }
+                        }
+                        if (!firstCategoryTermPrinted) {
+                            firstCategoryTermPrinted = 1;
+                        } else {
+                            term_str = term_str ", ";
+                        }
+                        term_str = term_str sprintf("%s%s%s",
+                                            term_color, term, C_reset);
+                        if (show_similarities == "true") {
+                            term_str = term_str sprintf(" (%s%d%s)",
+                                                        C_synSimilarity, termSimilarity, C_reset);
+                        }
+                        if (termIsInformal) {
+                            term_str = term_str sprintf(" %s(informal)%s",
+                                                C_informal, C_reset);
+                        }
+                        printf(term_str);
+                        inTerm = 0;
+                    }
+                }
+                END {
+                    if (!term) {
+                        print "no results found";
+                        exit 1;
+                    }
+                }
+            '
+    )
+    exit_code=${?}
+    printf "%b" "${output}" && echo
+    return ${exit_code}
 }
 
 

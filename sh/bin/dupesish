@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+#
+# Find closely matching files
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+function trap-exit() {
+    echo -e "\nexiting"
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED='\e[31m'
+    C_GREEN='\e[32m'
+    C_YELLOW='\e[33m'
+    C_BLUE='\e[34m'
+    C_MAGENTA='\e[35m'
+    C_CYAN='\e[36m'
+    C_WHITE='\e[37m'
+    S_RESET='\e[0m'
+    S_BOLD='\e[1m'
+    S_DIM='\e[2m'
+    S_UNDERLINE='\e[4m'
+    S_BLINK='\e[5m'
+    S_INVERT='\e[7m'
+    S_HIDDEN='\e[8m'
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    echo "do stuff"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                     display usage
+    --help                 display this help message
+    -c/--color <when>      when to use color ("auto", "always", "never")
+    -r/--recursive         search directories recursively
+    -d/--directory <dir>   a directory to search for similar files
+    -t/--threshold <num>   the similarity threshold (0-100)
+    -x/--exclude <regex>   exclude files matching the given regex
+    -m/--show-matches      show files that are 100% similar
+    -M/--skip-matches      skip files that are 100% similar
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATHS=()
+    DO_COLOR=false
+    DO_RECURSIVE=false
+    DO_SKIP_MATCHES=false
+    EXCLUDE_PATTERNS=()
+    THRESHOLD=90
+    TARGET_DIRECTORIES=()
+    local color_when='auto'
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -r | --recursive)
+                DO_RECURSIVE=true
+                ;;
+            -d | --directory)
+                TARGET_DIRECTORIES+=("${2}")
+                shift 1
+                ;;
+            -t | --threshold)
+                THRESHOLD="${2}"
+                shift 1
+                ;;
+            -x | --exclude)
+                EXCLUDE_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            -m | --show-matches)
+                DO_SKIP_MATCHES=false
+                ;;
+            -M | --skip-matches)
+                DO_SKIP_MATCHES=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+    
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        FILEPATHS+=("${1}")
+        shift 1
+    done
+
+    # Set up colors
+    case "${color_when}" in
+        always)
+            DO_COLOR=true
+            ;;
+        never)
+            DO_COLOR=false
+            ;;
+        auto)
+            if ${__IN_TERMINAL}; then
+                DO_COLOR=true
+            else
+                DO_COLOR=false
+            fi
+            ;;
+        *)
+            echo "error: invalid color mode: ${color_when}" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+    ${DO_COLOR} && setup-colors
+
+    # Ensure at least one filepath is given
+    if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
+        echo "error: no filepaths given" >&2
+        return ${E_ERROR}
+    fi
+
+    # If no target directories are given, use the current directory
+    [[ ${#TARGET_DIRECTORIES[@]} -eq 0 ]] && TARGET_DIRECTORIES+=(".")
+
+    debug-vars \
+        FILEPATHS DO_COLOR color_when DO_RECURSIVE TARGET_DIRECTORIES \
+        THRESHOLD EXCLUDE_PATTERNS DO_SKIP_MATCHES
+    
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Calculate the number of characters different between two files
+# @usage char-diff [-c/--count] <file1> <file2>
+function char-diff() {
+    local file1 file2
+    local do_show_count=false
+
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -c | --count)
+                do_show_count=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                if [[ -z ${file1} ]]; then
+                    file1="${1}"
+                elif [[ -z ${file2} ]]; then
+                    file2="${1}"
+                else
+                    echo "error: too many arguments" >&2
+                    return ${E_ERROR:-1}
+                fi
+                ;;
+        esac
+        shift 1
+    done
+
+    git diff --no-index --word-diff=porcelain --word-diff-regex=. -U0 "${file1}" "${file2}" \
+        | awk -v do_show_count="${do_show_count}" '
+            BEGIN {
+                total = 0
+            }
+            NR > 4 && $0 ~ /^[-+]/ {
+                if (do_show_count == "false") {
+                    gsub(/^[+-]/, "")
+                    print $0
+                } else {
+                    total += length($0) - 1
+                }
+            }
+            END {
+                if (do_show_count == "true") {
+                    print total
+                }
+            }
+        '
+}
+
+# @description Calculate the percentage similarity between two files
+# @usage similarity <file1> <file2>
+function similarity() {
+    local file1="${1}"
+    local file2="${2}"
+    local same_chars_count=0
+    local diff_chars_count=0
+    local total_chars_count=0
+    local similarity=0
+    
+    local file1_chars file2_chars
+    local smaller_chars size_difference
+
+    debug-vars file1 file2
+
+    # Find the total number of characters in the larger file
+    file1_chars=$(wc -c < "${file1}")
+    file2_chars=$(wc -c < "${file2}")
+    total_chars_count=$((file1_chars > file2_chars ? file1_chars : file2_chars))
+    smaller_chars=$((file1_chars < file2_chars ? file1_chars : file2_chars))
+
+    if [[ ${smaller_chars} -eq 0 ]]; then
+        # Since we can't divide by 0, if one file is empty, the similarity will
+        # only be 0 or 100
+        if [[ ${total_chars_count} -eq 0 ]]; then
+            # Both files are empty = 100% similarity
+            similarity=100
+        else
+            # One file is empty = 0% similarity
+            similarity=0
+        fi
+    else
+        # Find the number of characters that are the same
+        # same_chars_count=$(diff -U 0 "${file1}" "${file2}" | grep -c '^ ')
+        # diff_chars_count=$((total_chars_count - same_chars_count))
+        diff_chars_count=$(char-diff -c "${file1}" "${file2}")
+        size_difference=$((total_chars_count - smaller_chars))
+        diff_chars_count=$((diff_chars_count + size_difference))
+        same_chars_count=$((total_chars_count - diff_chars_count))
+        debug-vars \
+            file1_chars file2_chars total_chars_count smaller_chars \
+            size_difference same_chars_count diff_chars_count
+
+        # Calculate the similarity
+        similarity=$((same_chars_count * 100 / total_chars_count))
+    fi
+
+    echo "${similarity}"
+}
+
+# @description Determine if a string matches a set of regex patterns
+# @usage matches-patterns <string> <pattern1> [<pattern2> ...]
+function matches-patterns() {
+    local string="${1}"
+    shift 1
+    local patterns=("${@}")
+
+    for pattern in "${patterns[@]}"; do
+        if [[ "${string}" =~ ${pattern} ]]; then
+            return ${E_SUCCESS}
+        fi
+    done
+
+    return ${E_ERROR}
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    local source_filepaths=()
+    local target_filepaths=()
+
+    # Find all files
+    local find_args=()
+    ${DO_RECURSIVE} || find_args+=(-maxdepth 1)
+
+    ## source files
+    readarray -t source_filepaths < <(find "${FILEPATHS[@]}" "${find_args[@]}" -type f | sort -u)
+
+    ## target files
+    readarray -t target_filepaths < <(find "${TARGET_DIRECTORIES[@]}" "${find_args[@]}" -type f | sort -u)
+
+    echo "Source files: ${#source_filepaths[@]}"
+    echo "Target files: ${#target_filepaths[@]}"
+    echo "Threshold: ${THRESHOLD}%"
+    ${DO_SKIP_MATCHES} && echo "Skipping 100% matches"
+    echo
+
+    debug-vars source_filepaths target_filepaths
+
+    for filepath in "${source_filepaths[@]}"; do
+        if matches-patterns "${filepath}" "${EXCLUDE_PATTERNS[@]}"; then
+            debug "excluding '${filepath}'"
+            continue
+        fi
+
+        echo -e "${C_CYAN}${filepath}${S_RESET}"
+
+        for target_filepath in "${target_filepaths[@]}"; do
+            if matches-patterns "${target_filepath}" "${EXCLUDE_PATTERNS[@]}"; then
+                debug "excluding '${target_filepath}'"
+                continue
+            fi
+
+            local similarity=$(similarity "${filepath}" "${target_filepath}")
+            debug-vars filepath target_filepath similarity
+
+            local color=""
+            if [[ ${similarity} -eq 100 ]]; then
+                if ${DO_SKIP_MATCHES}; then
+                    continue
+                fi
+                color="${C_GREEN}"
+            elif [[ ${similarity} -ge ${THRESHOLD} ]]; then
+                color="${C_YELLOW}"
+            else
+                continue
+            fi
+
+            echo -e " - ${color}(${similarity}%)${S_RESET} ${target_filepath}"
+        done
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

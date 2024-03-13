@@ -34,7 +34,7 @@ function debug() {
 
     # if DEBUG and DEBUG_LOG are not set, return
     if [[ -z "${DEBUG}" && -z "${DEBUG_LOG}" ]]; then
-        return
+        return 1
     fi
 
     # if DEBUG_LOG is set, then use that as the log file, else use /dev/stderr
@@ -66,6 +66,12 @@ function debug() {
         "${DEBUG}" =~ ^"true"|"all"|"*"$ \
         || ("${DEBUG}" =~ ^[0-9]+$ && "${DEBUG}" -ge ${debug_level})
     ]]; then
+        # if no arguments at all are provided, simply return 0 to indicate that
+        # the debug message would have been printed
+        if [[ -z "${1}" ]]; then
+            return 0
+        fi
+
         # create a timestamp
         timestamp=$(date +"%Y-%m-%d %H:%M:%S")
 
@@ -146,6 +152,8 @@ function debug() {
             | dd of="${debug_file}" conv=notrunc oflag=append status=none
             # ^^^ this is a hack to avoid redirect errors where `debug` consumes
             # and obliterates the output of the command it is called from
+    else
+        return 1
     fi
 }
 

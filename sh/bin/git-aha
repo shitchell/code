@@ -47,7 +47,7 @@ function parse-args() {
     COLOR=true # true, false. this tool needs no "auto" option
     BACKGROUND="white" # white, black
     DO_HTML_HEADER=true
-    DO_SHOW_COMMAND=false
+    DO_SHOW_COMMAND=true
     GIT_CMD="log" # log, diff
     GIT_CMD_ARGS=() # -c color.ui=always, -c color.ui=never
     GIT_SUBCMD_ARGS=() # --no-pager, --stat, etc.

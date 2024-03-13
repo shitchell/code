@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+#
+# Generate a list of files promoted for specified Jira tickets
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+include-source 'shell.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_NO_MATCHES=2
+
+
+## traps #######################################################################
+################################################################################
+
+# function trap-exit() {
+#     echo -e "\nexiting"
+# }
+# trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED='\e[31m'
+    C_GREEN='\e[32m'
+    C_YELLOW='\e[33m'
+    C_BLUE='\e[34m'
+    C_MAGENTA='\e[35m'
+    C_CYAN='\e[36m'
+    C_WHITE='\e[37m'
+    S_RESET='\e[0m'
+    S_BOLD='\e[1m'
+    S_DIM='\e[2m'
+    S_UNDERLINE='\e[4m'
+    S_BLINK='\e[5m'
+    S_INVERT='\e[7m'
+    S_HIDDEN='\e[8m'
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    echo "do stuff"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                  display usage
+    --help              display this help message
+EOF
+}
+
+function parse-args() {
+    # Default values
+    DO_COLOR="auto" # auto, yes/true, no/false
+    JQL=""
+    JIRA_KEYS=()
+    DEPLOYMENT_PLAN_PATTERN=""
+    OUTPUT_FILE="Jira Ticket Files $(date '+%Y-%m-%d').txt"
+    OUTPUT_DIRECTORY="."
+    GIT_REPO="."
+    GIT_OPTIONS=()
+    DO_COMBINED_FILE=false
+    DO_NAME_STATUS=false
+    DO_INCLUDE_COMMITS=false
+    DO_INCLUDE_KEY=false
+    DO_INCLUDE_PLAN=false
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit 0
+                ;;
+            --help)
+                help-full
+                exit 0
+                ;;
+            --color)
+                DO_COLOR="${2}"
+                shift 2
+                ;;
+            -j | --jql)
+                JQL="${2}"
+                shift 2
+                ;;
+            -k | --jira-key)
+                JIRA_KEYS+=("${2}")
+                shift 2
+                ;;
+            -d | --deployment-plan-pattern)
+                DEPLOYMENT_PLAN_PATTERN="${2}"
+                shift 2
+                ;;
+            -c | --combined-file)
+                DO_COMBINED_FILE=true
+                shift 1
+                ;;
+            -s | --separate-files)
+                DO_COMBINED_FILE=false
+                shift 1
+                ;;
+            -o | --output)
+                OUTPUT_FILE="${2}"
+                shift 2
+                ;;
+            -O | --output-directory)
+                OUTPUT_DIRECTORY="${2}"
+                shift 2
+                ;;
+            -r | --repo)
+                GIT_REPO="${2}"
+                shift 2
+                ;;
+            --name-status)
+                DO_NAME_STATUS=true
+                shift 1
+                ;;
+            --name-only)
+                DO_NAME_STATUS=false
+                shift 1
+                ;;
+            -c | --include-commits)
+                DO_INCLUDE_COMMITS=true
+                shift 1
+                ;;
+            -C | --no-include-commits)
+                DO_INCLUDE_COMMITS=false
+                shift 1
+                ;;
+            -k | --include-key)
+                DO_INCLUDE_KEY=true
+                shift 1
+                ;;
+            -K | --no-include-key)
+                DO_INCLUDE_KEY=false
+                shift 1
+                ;;
+            -p | --include-plan)
+                DO_INCLUDE_PLAN=true
+                shift 1
+                ;;
+            -P | --no-include-plan)
+                DO_INCLUDE_PLAN=false
+                shift 1
+                ;;
+            --files-only)
+                DO_INCLUDE_COMMITS=false
+                DO_NAME_STATUS=false
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                JIRA_KEYS+=("${1}")
+                ;;
+        esac
+    done
+    
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        JIRA_KEYS+=("${1}")
+        shift 1
+    done
+
+    # Setup colors
+    if [[ "${DO_COLOR}" == "auto" ]]; then
+        if ${__IN_TERMINAL}; then
+            DO_COLOR=true
+        else
+            DO_COLOR=false
+        fi
+    elif [[ "${DO_COLOR}" == "yes" || "${DO_COLOR}" == "true" ]]; then
+        DO_COLOR=true
+    elif [[ "${DO_COLOR}" == "no" || "${DO_COLOR}" == "false" ]]; then
+        DO_COLOR=false
+    else
+        echo "error: invalid value for --color: ${DO_COLOR}" >&2
+        return ${E_ERROR}
+    fi
+    ${DO_COLOR} && setup-colors
+
+    # If no JQL or JIRA keys were specified, then print the help message and
+    # exit with an error
+    if [[ -z "${JQL}" && ${#JIRA_KEYS[@]} -eq 0 ]]; then
+        help-full >&2
+        return ${E_ERROR}
+    fi
+
+    # If any JIRA keys were specified, then add them to the JQL
+    for key in "${JIRA_KEYS[@]}"; do
+        if [[ -n "${JQL}" ]]; then
+            JQL="${JQL} OR "
+        fi
+        JQL="${JQL}key = ${key}"
+    done
+
+    # Set up the git options
+    if ${DO_NAME_STATUS}; then
+        GIT_OPTIONS+=("--name-status")
+    else
+        GIT_OPTIONS+=("--name-only")
+    fi
+    if ${DO_INCLUDE_COMMITS}; then
+        GIT_OPTIONS+=(
+            "--pretty=format:%h%x09%an%x09%ad%x09%s"
+            "--date=format-local:%Y-%m-%d %H:%M:%S"
+        )
+    else
+        GIT_OPTIONS+=("--format=")
+    fi
+
+    # If splitting up the output files and the output directory doesn't exist,
+    # then create it
+    if ! ${DO_COMBINED_FILE} && [[ ! -d "${OUTPUT_DIRECTORY}" ]]; then
+        mkdir -p "${OUTPUT_DIRECTORY}"
+    fi
+
+    debug-vars JQL JIRA_KEYS DEPLOYMENT_PLAN_PATTERN OUTPUT_FILE \
+        DO_COMBINED_FILE DO_NAME_STATUS DO_INCLUDE_COMMIT_MESSAGE \
+        GIT_REPO GIT_OPTIONS __IN_TERMINAL DO_COLOR
+    
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Do stuff
+# @usage do-stuff
+function do-stuff() {
+    echo -n "i'm doin the stuff"
+    [[ -n "${1}" ]] && echo " to ${1}" || echo
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    local results=()
+    local jira_key
+    local output_file
+    local deployment_plans=()
+    local issue_files=()
+
+    # Require the jira and git commands
+    require 'jira' 'git'
+
+    # Parse the arguments
+    parse-args "${@}" || return ${?}
+
+    # Fetch information about the deployment plans used for each ticket
+    echo -en "* fetching tickets matching '${C_CYAN}${JQL}${S_RESET}' ... "
+    readarray -t results < <(
+        jira --jql "${JQL}" --field "Deployment Plan" --field "subtasks" --tsv \
+            | sed 1d
+    )
+    if [[ ${?} -ne 0 ]]; then
+        echo -e "${C_RED}${S_BOLD}failed${S_RESET}" >&2
+        return ${E_ERROR}
+    else
+        echo -e "${C_GREEN}${#results[@]} tickets found${S_RESET}"
+    fi
+
+    # If no results were returned, then exit with an error
+    if [[ ${#results[@]} -eq 0 ]]; then
+        return ${E_NO_MATCHES}
+    fi
+
+    # For each ticket, get all Deployment Plans and then search for that
+    # Deployment Plan in the git log
+    for result in "${results[@]}"; do
+        jira_key=$(echo "${result}" | cut -d$'\t' -f1)
+        readarray -t deployment_plans < <(
+            echo "${result}" | grep -oE "${DEPLOYMENT_PLAN_PATTERN}" | sort -u
+        )
+        echo -e -n "* processing ${C_BLUE}${S_BOLD}${jira_key}${S_RESET} ... "
+        debug "processing ${jira_key} (${#deployment_plans[@]} plans)"
+
+        if [[ ${#deployment_plans[@]} -eq 0 ]]; then
+            echo -e "${C_RED}${S_BOLD}no deployment plans found${S_RESET}"
+            continue
+        fi
+
+        echo -e "${C_GREEN}${#deployment_plans[@]} deployment plans${S_RESET}"
+
+        # Validate that at least one deployment plan was found
+        if [[ ${#deployment_plans[@]} -eq 0 ]]; then
+            continue
+        fi
+
+        # Determine the output file
+        if ${DO_COMBINED_FILE}; then
+            output_file="${OUTPUT_FILE}"
+        else
+            output_file="${OUTPUT_DIRECTORY}/${jira_key} Files $(date '+%Y-%m-%d').txt"
+        fi
+
+        # Search git for all promotions for each deployment plan
+        readarray -t issue_files < <(
+            for deployment_plan in "${deployment_plans[@]}"; do
+                debug "  ${deployment_plan}"
+                git -C "${GIT_REPO}" log --grep="${deployment_plan}" \
+                    "${GIT_OPTIONS[@]}" \
+                    | while read -r line; do
+                        if ${DO_INCLUDE_KEY}; then
+                            echo -n "${jira_key}"$'\t'
+                        fi
+                        if ${DO_INCLUDE_PLAN}; then
+                            echo -n "${deployment_plan}"$'\t'
+                        fi
+                        echo "${line}"
+                    done
+            done
+        )
+
+        # If we're not organizing by commit, then sort and uniq the results
+        issue_files=$(printf "%s\n" "${issue_files[@]}")
+        if ! ${DO_INCLUDE_COMMITS}; then
+            issue_files=$(sort -u <<< "${issue_files}")
+        fi
+
+        echo -e "* writing ${#issue_files[@]} files to '${C_CYAN}${output_file}${S_RESET}'"
+
+        # Write the results to the output file
+        if ${DO_COMBINED_FILE}; then
+            echo "${issue_files}" >> "${output_file}"
+        else
+            echo "${issue_files}" > "${output_file}"
+        fi
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

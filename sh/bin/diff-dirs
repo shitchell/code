@@ -40,6 +40,7 @@ function help-full() {
                                    determine the timestamps
     *--strftime <format>           use <format> as the timestamp format
     --exclude-empty-dirs           exclude empty dirs from the output
+    -p/--filepath-prefix <prefix>  prefix filepaths with <prefix> in the output
 EOF
     echo
     echo "Allowed diff options:"
@@ -84,6 +85,7 @@ function parse-args() {
     DO_EXCLUDE_EMPTY_DIRS=0
     DO_RECURSIVE=1
     DO_BRIEF=0
+    FILEPATH_PREFIX=""
     STRFTIME="%Y-%m-%d %H:%M:%S"
     FILTERS=()
     DIFF_OPTS=()
@@ -137,6 +139,10 @@ function parse-args() {
         --exclude-empty-dirs)
             DO_EXCLUDE_EMPTY_DIRS=1
             shift 1
+            ;;
+        -p | --filepath-prefix)
+            FILEPATH_PREFIX=${2}
+            shift 2
             ;;
         # -c | -u | \
         -t | --expand-tabs | \
@@ -283,8 +289,11 @@ function main() {
             -v left_is_git="${left_is_git}" -v right_is_git="${right_is_git}" \
             -v color="${DO_COLOR}" -v reverse="${DO_REVERSE}" \
             -v show_timestamps="${DO_SHOW_TIMESTAMPS}" -v tfmt="${STRFTIME}" \
-            -v use_git_ts="${DO_GIT_TIMESTAMPS}" -v exclude_empty="${DO_EXCLUDE_EMPTY_DIRS}" \
-            -v do_brief="${DO_BRIEF}" -v show_opts="${DO_SHOW_OPTS}" -v diff_opts="${DIFF_OPTS[*]}" '
+            -v use_git_ts="${DO_GIT_TIMESTAMPS}" \
+            -v filepath_prefix="${FILEPATH_PREFIX}" \
+            -v exclude_empty="${DO_EXCLUDE_EMPTY_DIRS}" \
+            -v do_brief="${DO_BRIEF}" -v show_opts="${DO_SHOW_OPTS}" \
+            -v diff_opts="${DIFF_OPTS[*]}" '
             # Use stat to get the timestamp of a file
             function stat_timestamp(file) {
                 # Get the timestamp of the file
@@ -305,20 +314,20 @@ function main() {
                 rightabspath = right_path "/" filepath;
                 printf("%s %s%s/%s ", diff_cmd, c_red, left_name, c_reset);
                 printf("%s%s/%s ", c_green, right_name, c_reset);
-                printf("%s-- %s%s%s\n", c_white, c_bold, filepath, c_reset);
+                printf("%s-- %s%s%s\n", c_white, c_bold, filepath_prefix filepath, c_reset);
                 if (show_timestamps) {
                     if (left_is_git) {
                         timestamp = git_timestamp(left_path, filepath);
                     } else {
                         timestamp = stat_timestamp(leftabspath);
                     }
-                    printf("%s%s/%s%s  %s(%s)%s\n", c_red, left_name, filepath, c_reset, c_cyan, timestamp, c_reset);
+                    printf("%s%s/%s%s  %s(%s)%s\n", c_red, left_name, filepath_prefix filepath, c_reset, c_cyan, timestamp, c_reset);
                     if (right_is_git) {
                         timestamp = git_timestamp(right_path, filepath);
                     } else {
                         timestamp = stat_timestamp(rightabspath);
                     }
-                    printf("%s%s/%s%s  %s(%s)%s\n", c_green, right_name, filepath, c_reset, c_cyan, timestamp, c_reset);
+                    printf("%s%s/%s%s  %s(%s)%s\n", c_green, right_name, filepath_prefix filepath, c_reset, c_cyan, timestamp, c_reset);
                 }
             }
             # Use git to get the timestamp of a file
@@ -405,7 +414,7 @@ function main() {
                     if (system("test -d \" absfilepath \"") == 0) {
                         filepath = filepath "/";
                     }
-                    printf("Only in %s: %s%s%s", basedirname, c_bold c_white, filepath, c_reset);
+                    printf("Only in %s: %s%s%s", basedirname, c_bold c_white, filepath_prefix filepath, c_reset);
                     if (show_timestamps) {
                         if (basedirname == left_name) {
                             if (left_is_git) {
@@ -432,7 +441,7 @@ function main() {
                     filepath = gensub(/"/, "", "g", $0);
                     filepath = gensub(/Files '"${left_dir//\//\\/}"'\/(.*) and '"${right_dir//\//\\/}"'\/(.*) are identical/, "\\1", "g", filepath);
                     if (do_brief) {
-                        printf("%sFile matches%s: %s%s%s", c_green, c_reset, c_bold c_white, filepath, c_reset);
+                        printf("%sFile matches%s: %s%s%s", c_green, c_reset, c_bold c_white, filepath_prefix filepath, c_reset);
                         if (show_timestamps) {
                             if (left_is_git) {
                                 timestamp_left = git_timestamp(left_path, filepath);
@@ -449,7 +458,7 @@ function main() {
                         print "";
                     } else {
                         print_diff_header(filepath);
-                        printf("%sFiles %s%s/%s%s and %s%s/%s%s are identical%s\n", c_white, c_red, left_name, filepath, c_reset, c_green, right_name, filepath, c_reset, c_reset);
+                        printf("%sFiles %s%s/%s%s and %s%s/%s%s are identical%s\n", c_white, c_red, left_name, filepath_prefix filepath, c_reset, c_green, right_name, filepath, c_reset, c_reset);
                     }
                 } else if (/^Binary files .* differ$/) {
                     # Use the same format as lines that start with "^diff"
@@ -460,7 +469,7 @@ function main() {
                 } else if (/^Files .* differ$/) {
                     filepath = gensub(/Files '"${left_dir//\//\\/}"'\/(.+) and .* differ/, "\\1", "g", $0);
                     if (do_brief) {
-                        printf("%sFile differs%s: %s%s%s", c_red, c_reset, c_bold c_white, filepath, c_reset);
+                        printf("%sFile differs%s: %s%s%s", c_red, c_reset, c_bold c_white, filepath_prefix filepath, c_reset);
                         if (show_timestamps) {
                             if (left_is_git) {
                                 timestamp_left = git_timestamp(left_path, filepath);

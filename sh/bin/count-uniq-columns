@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+#
+# Count the number of unique occurences of each entry in a column of a file.
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+# function trap-exit() {
+#     echo -e "\nexiting"
+# }
+# trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    echo "do stuff"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                         display usage
+    --help                     display this help message
+    -d/--delimeter <str>       the delimeter to use, defaults to tab
+    -k/--column <int>          the column to count, defaults to 1
+    -r/--show-rows             show the rows that were counted
+    -R/--no-show-rows          don't show the rows that were counted
+    -e/--show-header           show each entry as a header
+    -E/--no-show-header        don't show each entry as a header
+    -c/--show-count            show the count for each entry (implies -e)
+    -C/--no-show-count         don't show the count for each entry
+    -p/--show-duplicates       show duplicate entries
+    -P/--no-show-duplicates    don't show duplicate entries
+    -u/--show-unique           show unique entries
+    -U/--no-show-unique        don't show unique entries
+    -a/--color                 enable color output
+    -A/--no-color              disable color output
+    --sort                     sort the entries by count
+    --sort-reverse             sort the entries by count in reverse order
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATHS=()
+    DELIMETER=$'\t'
+    COLUMN=1
+    DO_SHOW_ROWS=false
+    DO_SHOW_ENTRY_HEADER=true
+    DO_SHOW_COUNT=true
+    DO_COLOR=auto # auto, true, yes, false, no
+    DO_SORT=false
+    DO_SORT_REVERSE=false
+    DO_SHOW_DUPLICATES=true
+    DO_SHOW_UNIQUE=true
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        debug "processing arg: ${1}"
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -d|--delimeter)
+                DELIMETER="${2}"
+                shift 2
+                ;;
+            -k|--column)
+                COLUMN="${2}"
+                shift 2
+                ;;
+            -r|--show-rows)
+                DO_SHOW_ROWS=true
+                shift 1
+                ;;
+            -R|--no-show-rows)
+                DO_SHOW_ROWS=false
+                shift 1
+                ;;
+            -e|--show-header)
+                DO_SHOW_HEADER=true
+                shift 1
+                ;;
+            -E|--no-show-header)
+                DO_SHOW_HEADER=false
+                shift 1
+                ;;
+            -c|--show-count)
+                DO_SHOW_COUNT=true
+                shift 1
+                ;;
+            -C|--no-show-count)
+                DO_SHOW_COUNT=false
+                shift 1
+                ;;
+            -p|--show-duplicates)
+                DO_SHOW_DUPLICATES=true
+                shift 1
+                ;;
+            -P|--no-show-duplicates)
+                DO_SHOW_DUPLICATES=false
+                shift 1
+                ;;
+            -u|--show-unique)
+                DO_SHOW_UNIQUE=true
+                shift 1
+                ;;
+            -U|--no-show-unique)
+                DO_SHOW_UNIQUE=false
+                shift 1
+                ;;
+            -a|--color)
+                DO_COLOR=true
+                shift 1
+                ;;
+            -A|--no-color)
+                DO_COLOR=false
+                shift 1
+                ;;
+            --sort)
+                DO_SORT=true
+                DO_SORT_REVERSE=false
+                shift 1
+                ;;
+            --sort-reverse)
+                DO_SORT_REVERSE=true
+                DO_SORT=false
+                shift 1
+                ;;
+            --)
+                debug "found -- end of options"
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                shift 1
+                ;;
+        esac
+    done
+    
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        FILEPATHS+=("${1}")
+        shift 1
+    done
+
+    # Validate arguments
+
+    # If no filepaths were specified, use stdin
+    if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
+        FILEPATHS+=("/dev/stdin")
+    fi
+
+    # If the column is less than 1, error
+    if [[ ${COLUMN} -lt 1 ]]; then
+        echo "error: column must be greater than 0" >&2
+        return ${E_ERROR}
+    fi
+
+    # If counts are enabled, enable headers
+    ${DO_SHOW_COUNT} && DO_SHOW_HEADER=true
+
+    # Setup colors
+    case ${DO_COLOR} in
+        auto)
+            if ${__IN_TERMINAL}; then
+                setup-colors
+            else
+                DO_COLOR=false
+            fi
+            ;;
+        true|yes)
+            setup-colors
+            ;;
+        false|no)
+            DO_COLOR=false
+            ;;
+        *)
+            echo "error: invalid value for --color: ${DO_COLOR}" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+    
+    debug-vars \
+        FILEPATHS DELIMETER COLUMN \
+        DO_SHOW_ROWS DO_SHOW_HEADER DO_SHOW_COUNT DO_COLOR \
+        DO_SORT DO_SORT_REVERSE DO_SHOW_DUPLICATES DO_SHOW_UNIQUE
+    
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Do stuff
+# @usage do-stuff
+function do-stuff() {
+    echo -n "i'm doin the stuff"
+    [[ -n "${1}" ]] && echo " to ${1}" || echo
+}
+
+# @description Count the occurrences of each entry in a column of a file
+# @usage count-entries
+function count-entries() {
+    local results
+    local post_process_cmd=("cat")
+
+    results=$(
+        awk -F "${DELIMETER}" \
+            -v DEBUG="${DEBUG}" -v column="${COLUMN}" \
+            -v show_rows="${DO_SHOW_ROWS}" -v show_header="${DO_SHOW_HEADER}" \
+            -v show_count="${DO_SHOW_COUNT}" \
+            -v show_duplicates="${DO_SHOW_DUPLICATES}" -v show_unique="${DO_SHOW_UNIQUE}" \
+            -v bold="${S_BOLD}" -v reset="${S_RESET}" \
+            -v cyan="${C_CYAN}" -v green="${C_GREEN}" -v blue="${C_BLUE}" '
+                # * `entries` will be a map of entries to rows, where the value
+                #   is a newline delimited string of rows containing the
+                #   key/entry
+                # * `entry_counts` will be used to track the number of times an
+                #   entry has been seen
+                function debug(msg) {
+                    if (DEBUG == "true" || DEBUG == 1) {
+                        # Print a timestamp, the file line number, and the message
+                        printf("[%s] (LN%03d)  %s\n", strftime("%Y-%m-%d %H:%M:%S"), NR, msg) > "/dev/stderr"
+                    }
+                }
+                {
+                    # Add the row to the `entries` map
+                    entry = $column
+                    entries[entry] = entries[entry] $0 "\n"
+
+                    # Increment the count for the entry
+                    entry_counts[entry]++
+
+                    debug("entry: " entry " (" entry_counts[entry] ")")
+                }
+                END {
+                    # Loop over the entries
+                    for (entry in entries) {
+                        if (show_duplicates == "false" || show_duplicates == 0) {
+                            # If not showing duplicates, skip entries with
+                            # a count greater than 1
+                            if (entry_counts[entry] > 1) {
+                                debug("skipping duplicated entry: " entry " (" entry_counts[entry] ")")
+                                continue
+                            }
+                        }
+                        if (show_unique == "false" || show_unique == 0) {
+                            # If not showing unique entries, skip entries with
+                            # a count of 1
+                            if (entry_counts[entry] == 1) {
+                                debug("skipping unique entry: " entry " (" entry_counts[entry] ")")
+                                continue
+                            }
+                        }
+
+                        debug("printing entry: " entry " (" entry_counts[entry] ")")
+                        # Print the count for sorting
+                        printf "%d\t", entry_counts[entry]
+
+                        # If showing the entry header, print that now
+                        if (show_header == "true" || show_header == 1) {
+                            printf bold entry reset
+                        }
+
+                        # If showing the count, print that now
+                        if (show_count == "true" || show_count == 1) {
+                            printf " (%d)", entry_counts[entry]
+                        }
+
+                        # If showing the rows, print those now
+                        if (show_rows == "true" || show_rows == 1) {
+                            printf "\30"
+                            entry_row = entries[entry]
+                            gsub("\n", "\30", entry_row)
+                            printf "%s", entry_row
+                        }
+
+                        # Print a newline
+                        printf "\n"
+                    }
+                }
+            ' "${FILEPATHS[@]}"
+    )
+
+    # If sorting, do that
+    if ${DO_SORT}; then
+        post_process_cmd=("sort" "-n")
+    elif ${DO_SORT_REVERSE}; then
+        post_process_cmd=("sort" "-nr")
+    fi
+
+    results=$("${post_process_cmd[@]}" <<< "${results}")
+
+    # Print the results, replacing null bytes with newlines
+    echo "${results}" | sed $'s/^[0-9]*\t//g' | tr '\30' '\n'
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    count-entries
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

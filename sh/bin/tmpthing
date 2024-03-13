@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# Accepts stdin in the format:
+#    <subapp-1 id>\t<subapp-1 name>\t<service-1.1 name>\t<service-1.2 name>\t<service-1.3 name>...
+#    <subapp-2 id>\t<subapp-2 name>\t<service-2.1 name>\t<service-2.2 name>
+#    <subapp-3 id>\t<subapp-3 name>\t<service-3.1 name>\t<service-3.2 name>\t<service-3.3 name>\t<service-3.4 name>...
+#
+# It will convert this format to:
+#   <subapp-1 id>\t<subapp-1 name>\t<service-1.1 name>
+#   <subapp-1 id>\t<subapp-1 name>\t<service-1.2 name>
+#   <subapp-1 id>\t<subapp-1 name>\t<service-1.3 name>
+#   <subapp-2 id>\t<subapp-2 name>\t<service-2.1 name>
+#   ...
+
+awk -F '\t' '{
+    subapp_id = $1;
+    subapp_name = $2;
+    for (i = 3; i <= NF; i++) {
+        if ($i == "") {
+            continue;
+        }
+        print subapp_id "\t" subapp_name "\t" $i;
+    }
+}'

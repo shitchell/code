@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+#
+# Show the NxA version for an NxA server
+
+#!/usr/bin/env bash
+#
+# This script does some stuff
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+}
+
+# @description Unset color variables
+# @usage unset-colors
+function unset-colors() {
+    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
+          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    # {{TODO: UPDATE USAGE}}
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    # {{TODO: UPDATE EPILOGUE}}
+    echo "do stuff"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                    display usage
+    --help                display this help message
+    -c/--color <when>     when to use color ("auto", "always", "never")
+    -H/--host <host>      the host to connect to
+    -P/--port <port>      the port to connect to
+    --(no-)test-ports     if a port is not specified, test common ports
+    -s/--ssl              use SSL
+    -S/--no-ssl           do not use SSL
+    -t/--timeout <secs>   the timeout for the request
+EOF
+}
+
+function parse-args() {
+    # Default values
+    # {{TODO: INSERT DEFAULT VALUES HERE}}
+    HOST=""
+    PORT=""
+    TIMEOUT=0
+    DO_SSL=true
+    TEST_PORTS=(
+        "https" 443
+        "https" 8443
+        "http" 80
+        "http" 8080
+    )
+    DO_TEST_PORTS=false
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -H | --host)
+                HOST="${2}"
+                shift 1
+                ;;
+            -P | --port)
+                PORT="${2}"
+                shift 1
+                ;;
+            --test-ports)
+                DO_TEST_PORTS=true
+                ;;
+            --no-test-ports)
+                DO_TEST_PORTS=false
+                ;;
+            -s | --ssl | --https)
+                DO_SSL=true
+                ;;
+            -S | --no-ssl | --http)
+                DO_SSL=false
+                ;;
+            -t | --timeout)
+                TIMEOUT="${2}"
+                shift 1
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                if [[ -z "${HOST}" ]]; then
+                    HOST="${1}"
+                elif [[ -z "${PORT}" ]]; then
+                    PORT="${1}"
+                else
+                    echo "error: too many arguments" >&2
+                    help-usage >&2
+                fi
+                ;;
+        esac
+        shift 1
+    done
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && setup-colors || unset-colors
+    fi
+
+    # If no host was specified, use localhost
+    if [[ -z "${HOST}" ]]; then
+        HOST="localhost"
+    fi
+
+    # Check if the host includes a protocol and/or port
+    # if [[ "${HOST}" == *":"* ]]; then
+    if [[ "${HOST}" =~ ^("http"s?)(://)?([^:/]+)(:([0-9]+))? ]]; then
+        local protocol host port
+        protocol="${BASH_REMATCH[1]}"
+        host="${BASH_REMATCH[3]}"
+        port="${BASH_REMATCH[5]}"
+
+        # Set the protocol
+        case "${protocol}" in
+            "http")
+                DO_SSL=false
+                ;;
+            "https")
+                DO_SSL=true
+                ;;
+        esac
+
+        # Set the host
+        HOST="${host}"
+
+        # Set the port
+        [[ -n "${port}" ]] && PORT="${port}"
+    fi
+
+    # If no port was specified, use the default
+    if [[ -z "${PORT}" ]]; then
+        if ${DO_SSL}; then
+            PORT=443
+        else
+            PORT=80
+        fi
+    fi
+
+    # Validate the timeout
+    if ! [[ "${TIMEOUT}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid timeout: ${TIMEOUT}" >&2
+        return ${E_ERROR}
+    fi
+
+    # Validate the port
+    if ! [[ "${PORT}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid port: ${PORT}" >&2
+        return ${E_ERROR}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+# @description Prettify JSON using available tools
+# @usage prettify-json <json>
+function prettify-json() {
+    local json="${1:-$(</dev/stdin)}"
+
+    if command -v jq &>/dev/null; then
+        echo "${json}" | jq .
+    elif command -v python &>/dev/null; then
+        echo "${json}" | python -m json.tool
+    elif command -v perl &>/dev/null; then
+        echo "${json}" | perl -MJSON -0777 -ne 'print to_json(from_json($_), {pretty=>1})'
+    else
+        return 1
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    debug-vars "HOST" "PORT" "DO_SSL" "DO_COLOR"
+
+    local exit_code=0
+    local curl_args=()
+    local protocol url response
+
+    # Set the protocol
+    ${DO_SSL} && protocol="https" || protocol="http"
+
+    # Set the URL
+    url="${protocol}://${HOST}:${PORT}/as/ui/services/about/appinfo"
+
+    # Set up the curl arguments
+    curl_args+=("-S" "--no-progress-meter" "-k" "-m" "${TIMEOUT}")
+
+    # Make the request and capture the response
+    response=$(curl "${curl_args[@]}" "${url}" 2>&1)
+    exit_code=${?}
+
+    # If the request failed, print the error and exit
+    if [[ ${exit_code} -ne 0 ]]; then
+        echo "error: ${response}" >&2
+        return ${exit_code}
+    fi
+
+    # If the response is empty, print an error and exit
+    if [[ -z "${response}" ]]; then
+        echo "error: no response from server" >&2
+        return 1
+    fi
+
+    # Print the response
+    prettify-json "${response}" || echo "${response}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
