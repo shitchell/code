@@ -2,7 +2,51 @@
 #
 # List all python packages imported in directories or files
 
+include-source 'debug.sh'
+include-source 'echo.sh'
+
 LOCATIONS=("${@}")
+
+declare -A BUILTINS=(
+	[abc]="" [aifc]="" [argparse]="" [array]="" [ast]="" [asyncio]=""
+	[atexit]="" [audioop]="" [base64]="" [bdb]="" [binascii]="" [bisect]=""
+	[builtins]="" [bz2]="" [calendar]="" [cgi]="" [cgitb]="" [chunk]=""
+	[cmath]="" [cmd]="" [code]="" [codecs]="" [codeop]="" [collections]=""
+	[colorsys]="" [compileall]="" [concurrent]="" [configparser]=""
+	[contextlib]="" [contextvars]="" [copy]="" [copyreg]="" [cProfile]=""
+	[crypt]="" [csv]="" [ctypes]="" [curses]="" [dataclasses]="" [datetime]=""
+	[dbm]="" [decimal]="" [difflib]="" [dis]="" [doctest]="" [email]=""
+	[encodings]="" [ensurepip]="" [enum]="" [errno]="" [faulthandler]=""
+	[fcntl]="" [filecmp]="" [fileinput]="" [fnmatch]="" [fractions]=""
+	[ftplib]="" [functools]="" [__future__]="" [gc]="" [getopt]="" [getpass]=""
+	[gettext]="" [glob]="" [graphlib]="" [grp]="" [gzip]="" [hashlib]=""
+	[heapq]="" [hmac]="" [html]="" [http]="" [idlelib]="" [imaplib]=""
+	[imghdr]="" [importlib]="" [inspect]="" [io]="" [ipaddress]=""
+	[itertools]="" [json]="" [keyword]="" [lib2to3]="" [linecache]=""
+	[locale]="" [logging]="" [lzma]="" [mailbox]="" [mailcap]="" [__main__]=""
+	[marshal]="" [math]="" [mimetypes]="" [mmap]="" [modulefinder]=""
+	[msilib]="" [msvcrt]="" [multiprocessing]="" [netrc]="" [nis]=""
+	[nntplib]="" [numbers]="" [operator]="" [optparse]="" [os]=""
+	[ossaudiodev]="" [pathlib]="" [pdb]="" [pickle]="" [pickletools]=""
+	[pipes]="" [pkgutil]="" [platform]="" [plistlib]="" [poplib]="" [posix]=""
+	[pprint]="" [profile]="" [pstats]="" [pty]="" [pwd]="" [pyclbr]=""
+	[py_compile]="" [pydoc]="" [queue]="" [quopri]="" [random]="" [re]=""
+	[readline]="" [reprlib]="" [resource]="" [rlcompleter]="" [runpy]=""
+	[sched]="" [secrets]="" [select]="" [selectors]="" [shelve]="" [shlex]=""
+	[shutil]="" [signal]="" [site]="" [sitecustomize]="" [smtplib]=""
+	[sndhdr]="" [socket]="" [socketserver]="" [spwd]="" [sqlite3]="" [ssl]=""
+	[stat]="" [statistics]="" [string]="" [stringprep]="" [struct]=""
+	[subprocess]="" [sunau]="" [symtable]="" [sys]="" [sysconfig]=""
+	[syslog]="" [tabnanny]="" [tarfile]="" [telnetlib]="" [tempfile]=""
+	[termios]="" [test]="" [textwrap]="" [_thread]="" [threading]="" [time]=""
+	[timeit]="" [_tkinter]="" [tkinter]="" [token]="" [tokenize]=""
+	[tomllib]="" [trace]="" [traceback]="" [tracemalloc]="" [tty]=""
+	[turtle]="" [turtledemo]="" [types]="" [typing]="" [unicodedata]=""
+	[unittest]="" [urllib]="" [usercustomize]="" [uu]="" [uuid]="" [venv]=""
+	[warnings]="" [wave]="" [weakref]="" [webbrowser]="" [winreg]=""
+	[winsound]="" [wsgiref]="" [xdrlib]="" [xml]="" [xmlrpc]="" [zipapp]=""
+	[zipfile]="" [zipimport]="" [zlib]="" [zoneinfo]=""
+)
 
 # Use the current directory if no locations provided
 if [ ${#LOCATIONS[@]} -eq 0 ]; then
@@ -21,9 +65,20 @@ fi
         continue
     fi
     
+    regex='from\s+\.\.\s+import\s+\K[^ ,]+|from \K[\.\w]+(?=.*import)|^[^\w]*import \K[\.\w]+'
     if [ "${location}" = "-" ]; then
-        grep -hP${recurse}oI 'from \K\w+(?=.*import)|^[^\w]*import \K[\w]+' <<< "${data}"
+        grep -hP${recurse}oI "${regex}" <<< "${data}"
     else
-        grep -hP${recurse}oI 'from \K\w+(?=.*import)|^[^\w]*import \K[\w]+' "${location}"
+        grep -hP${recurse}oI "${regex}" "${location}"
     fi
-done) | sort | uniq
+done) | sort | uniq \
+| while read -r lib; do
+	# If a library is built in, echo it dimly
+	if [ "${BUILTINS[${lib}]+x}" ]; then
+		debug "is builtin"
+		echo-formatted -D "${lib}"
+	else
+		debug "normal lib"
+		echo "${lib}"
+	fi
+done
