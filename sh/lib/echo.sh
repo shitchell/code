@@ -59,6 +59,7 @@ function echo-formatted() {
     local code_c="${C_CYAN}"
     local code_w="${C_WHITE}"
     local code_B="${S_BOLD}"
+    local code_D="${S_DIM}"
     local code_R="${S_REVERSE}"
     local code_U="${S_UNDERLINE}"
     local code_K="${S_BLINK}"
