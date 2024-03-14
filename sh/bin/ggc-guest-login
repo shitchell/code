@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
 
+https://uswest4.cloudguest.central.arubanetworks.com/portal/scope.cust-8bb7217866c211eeb7904ef946a84a56/Click-Through/login
+https://securelogin.hpe.com/cgi-bin/login
+
 curl -m 5 -s 'http://198.18.34.1/reg.php' -d field1=guy -d field2=fawkes -d field3="lol@wat.com" -d checkbox=checkbox | grep 'ah_popup' &>/dev/null && echo "Successful!" || echo "Error logging in"
