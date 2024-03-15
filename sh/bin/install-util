@@ -69,6 +69,13 @@ function parse-args() {
                 list-meta-packages | awk '{print "    " $0}'
                 exit 0
                 ;;
+            --list-porcelain)
+                list-install-commands
+                local meta=()
+                readarray -t meta < <(list-meta-packages)
+                printf '%s\n' "${meta[@]%%:*}"
+                exit 0
+                ;;
             *)
                 PACKAGES+=("${1}")
                 ;;
@@ -540,6 +547,16 @@ function __install-util__pyenv() {
         cd "${INSTALL_DIR}"
         git clone https://github.com/yyuu/pyenv.git ./.pyenv
     )
+}
+
+function __install-util__gpg-ubuntu() {
+    require --root apt
+
+    apt update
+    apt install -y \
+        gpg \
+        pinentry-tty
+    update-alternatives --config pinentry
 }
 
 function __install-util__python-dependencies-ubuntu() {
