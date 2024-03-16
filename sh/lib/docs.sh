@@ -4,6 +4,8 @@ This module provides functions for generating help documentation for shell
 libraries and functions based on Python-style docstrings.
 '
 
+include-source 'debug.sh'
+
 function generate-library-docs() {
     : '
     Generate help documentation for a library based on a docstring defined as
