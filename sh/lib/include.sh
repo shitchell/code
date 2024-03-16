@@ -95,9 +95,12 @@
 ## helpful functions ###########################################################
 ################################################################################
 
-# @description Print a debug message if DEBUG or DEBUG_LOG is set
-# @usage debug <msg> [<msg> ...]
 function __debug() {
+    : '
+    Print a debug message if DEBUG or DEBUG_LOG is set
+
+    @usage      [<msg> ...]
+    '
     local prefix timestamp
     if [[
             "${INCLUDE_DEBUG}" == "1"
@@ -114,17 +117,21 @@ function __debug() {
     fi
 }
 
-# @description Reliably determine the current shell
-# @usage get-shell
 function get-shell() {
+    : '
+    Reliably determine the current shell
+    '
     local process_name=$(ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//')
     local shell=$(basename "${process_name}" | tr '[:upper:]' '[:lower:]')
     echo "${shell}"
 }
 
-# @description Cross-shell function for returning the calling function name
-# @usage functionname [<stack index>]
 function functionname() {
+    : '
+    Cross-shell function for returning the calling function name
+
+    @usage      [<stack index>]
+    '
     local shell=$(get-shell)
     local index=${1:- -1}
     case "${shell}" in
@@ -141,11 +148,14 @@ function functionname() {
     esac
 }
 
-# @description Checks if an item is in an array.
-# @usage in-array <item> <array-item-1> [<array-item-2> ...
-# @return 0 the item is in the array
-# @return 1 the item is not in the array
 function in-array() {
+    : '
+    Checks if an item is in an array.
+    
+    @usage      <item> <array-item-1> [<array-item-2> ...
+    @return     0 the item is in the array
+    @return     1 the item is not in the array
+    '
     #__debug "_call(${@})"
 
     local item=${1}
@@ -208,31 +218,35 @@ function __include_source_parse_args() {
     while [[ ${#} -gt 0 ]]; do
         local arg="$1"
         case "$arg" in
-            -v|--verbose)
+            -v | --verbose)
                 VERBOSE=1
                 shift
                 ;;
-            -V|--no-verbose)
+            -V | --no-verbose)
                 VERBOSE=0
                 shift
                 ;;
-            -l|--location)
+            -l | --location)
                 SHOW_LOCATION=1
                 shift
                 ;;
-            -n|--no-source)
+            -L |--no-location)
+                SHOW_LOCATION=0
+                shift
+                ;;
+            -N | --no-source)
                 DO_SOURCE=0
                 shift
                 ;;
-            -N|--source)
+            -n | --source)
                 DO_SOURCE=1
                 shift
                 ;;
-            -c|--cat)
+            -c | --cat)
                 DO_CAT=1
                 shift
                 ;;
-            -C|--no-cat)
+            -C | --no-cat)
                 DO_CAT=0
                 shift
                 ;;
@@ -262,8 +276,12 @@ function __include_source_parse_args() {
 ## Helpful functions
 ###
 
-# Return the value of <SHELL>_LIB_PATH or PATH if it is not set.
 function __bash_libs_get_path() {
+    : '
+    Return the value of <SHELL>_LIB_PATH or PATH if it is not set.
+
+    @stdout     The value of <SHELL>_LIB_PATH or PATH
+    '
     #__debug "_call(${@})"
 
     # reliably determine the shell
@@ -297,15 +315,25 @@ function __bash_libs_get_path() {
     echo "${lib_path_value:-${PATH}}"
 }
 
-# Get the path to a script in the current directory, <SHELL>_LIB_PATH, PATH
 function __bash_libs_get_filepath() {
+    : '
+    Given a library name (with or without the .sh extension), get its filepath
+    in the current directory, <SHELL>_LIB_PATH, or PATH
+
+    @usage      <filename>[.sh]
+    @stdout     The path to the file
+    '
     #__debug "_call(${@})"
 
     local filename="${1}"
 
-    # look for the file in the current directory
-    if [ -f "$(pwd)/${filename}" ] && [ -r "$(pwd)/${filename}" ]; then
+    # look for the file in the current directory with and without the .sh
+    # extension
+    if [[ -f "$(pwd)/${filename}" && -r "$(pwd)/${filename}" ]]; then
         echo "$(pwd)/${filename}"
+        return 0
+    elif [[ -f "$(pwd)/${filename}.sh" && -r "$(pwd)/${filename}.sh" ]]; then
+        echo "$(pwd)/${filename}.sh"
         return 0
     fi
 
@@ -313,12 +341,16 @@ function __bash_libs_get_filepath() {
     local lib_path_array
     IFS=":" read -ra lib_path_array <<< "$(__bash_libs_get_path)"
     #__debug "lib_path_array: ${lib_path_array[@]}"
-    for dir in ${lib_path_array[@]}; do
+    for dir in "${lib_path_array[@]}"; do
         #__debug "looking for '${filename}' in '${dir}'"
         # determine if a readable file with the given name exists in this dir
-        if [ -f "${dir}/${filename}" ] && [ -r "${dir}/${filename}" ]; then
+        if [[ -f "${dir}/${filename}" && -r "${dir}/${filename}" ]]; then
             #__debug "found '${filename}' in '${dir}'"
             echo "${dir}/${filename}"
+            return 0
+        elif [[ -f "${dir}/${filename}.sh" && -r "${dir}/${filename}.sh" ]]; then
+            #__debug "found '${filename}.sh' in '${dir}'"
+            echo "${dir}/${filename}.sh"
             return 0
         fi
     done
@@ -327,8 +359,13 @@ function __bash_libs_get_filepath() {
     return 1
 }
 
-# Get the location of the shell lib, whether a file or url
 function __bash_libs_get_location() {
+    : '
+    Get the location of the shell lib, whether a file or url
+
+    @usage      <filename>
+    @stdout     The location of the file
+    '
     #__debug "_call(${@})"
 
     local filename="${1}"
@@ -352,6 +389,11 @@ function __bash_libs_get_location() {
 
 # Import a shell script from a url
 function source-url() {
+    : '
+    Download a shell script from a url and source it in the current shell
+
+    @usage <url>
+    '
     #__debug "_call(${@})"
 
     local url="${1}"
@@ -395,6 +437,12 @@ function source-url() {
 
 # Import a shell script from a filename
 function source-lib() {
+    : '
+    Given a library name, find it in the LIB_PATH or PATH and source it in the
+    current shell.
+
+    @usage      <lib>[.sh]
+    '
     #__debug "_call(${@})"
 
     local filename="${1}"
@@ -431,6 +479,13 @@ function source-lib() {
 
 # Import a shell script from ${<SHELL>_LIB_PATH:-${PATH}} given a filename
 function include-source() {
+    : '
+    Given a library name or url, source it in the current shell.
+
+    @usage      [-h/--help] [-l/--location] [-L/--no-location] [-n/--dry-run]
+                [-N/--no-dry-run] [-c/--cat] [-C/--no-cat] [-v/--verbose]
+                [-V/--no-verbose] <filename>
+    '
     #__debug "_call(${@})"
 
     local filename="${1}"
@@ -720,9 +775,13 @@ function __compile_sources() {
 ## main functions
 ###
 
-# @description Replace `include-source` calls with the source contents
-# @usage compile-sources <file> [<file> ...]
 function compile-sources() {
+    : '
+    Replace `include-source` calls with the source library contents.
+
+    @usage      [-h/--help] [-i/--in-place] [-I/--no-in-place] [-b/--backups]
+                [-B/--no-backups] [-t/--tags] [-T/--no-tags] <file> [<file> ...]
+    '
     #__debug "_call(${@})"
 
     local exit_code=0
