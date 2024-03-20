@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#
+# Uh... print an em dash
+
+printf '\u2014'
