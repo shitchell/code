@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# Search for a word by regex
+
+include-source 'debug.sh'
+include-source 'shell.sh'
+
+# Require the dict command with re searching + a search query
+QUERY="${1}"
+require "dict"
+require --exit-success "dict -S | grep -q '^ re '"
+require --is-set "QUERY" --failure-message 'usage: wordsearch <regex>'
+
+# If the query doesn't start with a "^" or end with a "$", add them
+! [[ "${QUERY}" =~ ^"^"  ]] && QUERY="^${QUERY}"
+! [[ "${QUERY}" =~ "$"$ ]] && QUERY="${QUERY}$"
+
+debug-vars "QUERY"
+
+readarray -t WORDS < <(
+    dict --match --strategy re "${QUERY}" 2>/dev/null \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed "s/[^\-\:'a-z ]//g" \
+        | tr '[:space:]' '\n' \
+        | grep -E "${QUERY}" \
+        | sort -u
+)
+
+debug "${#WORDS[@]} words found"
+debug-vars "WORDS"
+
+if [[ "${#WORDS[@]}" -eq 0 ]]; then
+    echo "No matches found for /${QUERY/\//\\/}/"
+    exit 1
+fi
+
+# Get the longest word
+LONGEST_WORD=$(
+    printf '%s\n' "${WORDS[@]}" \
+        | awk '
+            BEGIN {
+                longest = 0
+            }
+            {
+                if (length > longest) {
+                    longest = length
+                }
+            }
+            END {
+                print longest
+            }
+        '
+)
+
+# Determine how many words to show per row based on the longest word
+WORDS_PER_ROW=$(( (COLUMNS / (LONGEST_WORD + 2)) + 1 ))
+
+debug-vars "COLUMNS" "WORDS_PER_ROW" "LONGEST_WORD"
+
+printf '%s\n' "${WORDS[@]}" \
+    | awk -v wpr="${WORDS_PER_ROW}" '
+        {
+            if (NR % wpr == 0) {
+                print line;
+                line = "";
+            } else {
+                if (line == "") {
+                    line = $0;
+                } else {
+                    line = line "\t" $0;
+                }
+            }
+        }
+        END {
+            print line;
+        }    
+    ' \
+    | column -t -s $'\t'
