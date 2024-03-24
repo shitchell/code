@@ -157,26 +157,192 @@ function debug() {
     fi
 }
 
+# @description Print a string with non-printable characters escaped
+# @usage print-escaped <string>
+function print-escaped() {
+    if [[ -n "${1}" ]]; then
+        printf '%s\n' "${1}"
+    elif [[ -t 2 && ! -t 0 ]]; then
+        cat -
+    fi | awk '
+        BEGIN {
+            # Create a character map for non-printable characters
+            for (n=0; n<256; n++) ord[sprintf("%c",n)] = n;
+        }
+        function escape(c) {
+            # Check for common escape characters
+            if (c == "\a") return "\\a";
+            if (c == "\b") return "\\b";
+            if (c == "\f") return "\\f";
+            if (c == "\n") return "\\n";
+            if (c == "\r") return "\\r";
+            if (c == "\t") return "\\t";
+            if (c == "\v") return "\\v";
+            return sprintf("\\x%02x", ord[c]);
+        }
+        NR > 1 { print escape("\n"); }
+        {
+            for (i = 1; i <= length; i++) {
+                c = substr($0, i, 1);
+                if (c ~ /[^[:print:]]/) {
+                    printf escape(c);
+                } else {
+                    printf "%s", c;
+                }
+            }
+        }
+    '
+}
+
 # @description Print the values of a list of variables given their names
 # @usage debug-vars <var1> <var2> ...
 # @example foo=bar bar=baz debug-vars "foo" "bar"
 function debug-vars() {
-    local var_name debug_message declare_str
+    local verbosity=${DEBUG_VERBOSITY:-1}
+    local var_names=()
+    local var_name var_type var_value var_length is_set
+    local display_type display_value
+    local debug_message declare_str
+    declare -n __ref
+
+    while [[ ${#} -gt 0 ]]; do
+        # debug "processing argument: ${1}"
+        case "${1}" in
+            --*)
+                case "${1}" in
+                    --verbosity=*)
+                        verbosity="${1#*=}"
+                        ;;
+                    --verbosity)
+                        ((verbosity++))
+                        shift
+                        ;;
+                    --)
+                        shift
+                        [[ ${#} -gt 0 ]] && var_names+=("${@}")
+                        break
+                        ;;
+                    *)
+                        debug "invalid option: ${1}"
+                        return 1
+                        ;;
+                esac
+                ;;
+            -*)
+                while read -r -N 1 arg_char; do
+                    case "${arg_char}" in
+                        $'\n') break ;;
+                        v)
+                            ((verbosity++))
+                            ;;
+                        *)
+                            debug "invalid option: -${arg_char}"
+                            return 1
+                            ;;
+                    esac
+                done <<< "${1#-}"
+                ;;
+            *)
+                var_names+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
 
     debug_message=$(
-        for var_name in "${@}"; do
+        for var_name in "${var_names[@]}"; do
+            # debug "processing variable: ${var_name}"
+            var_length="" var_info="" display_value=""
             declare_str=$(declare -p "${var_name}" 2>/dev/null)
+            # Determine if the variable is set
+            [[ "${declare_str}" =~ "=" ]] && is_set=true || is_set=false
             if [[ -z "${declare_str}" ]]; then
-                echo -e "${var_name}\x1e== <not found>"
-            elif ! [[ "${declare_str}" =~ "=" ]]; then
-                echo -e "${var_name}\x1e== <unset>"
+                # debug "variable not found: ${var_name}"
+                # echo -e "${var_name}\x1e== <not found>"
+                display_value="<not found>"
             else
-                echo "${declare_str}" \
-                    | sed -E '
-                        s/^declare -[^ ]+ ([^=]+)=(.*)$/\1\x1e== \2/;s/ \)$/)/
-                        2,$s/^/ \x1e.. /
-                    '
+                declare_str="${declare_str#declare -}"
+                var_type="${declare_str%% *}"
+                if ! ${is_set}; then
+                    display_value="<unset>"
+                elif [[ "${var_type}" =~ [Aan] ]]; then
+                    # debug "getting array value"
+                    var_value=$(
+                        awk '
+                            NR == 1 {
+                                gsub(/^[^=]+=/, "");
+                                value=$0;
+                            }
+                            NR > 1 {
+                                value=value "\n" $0;
+                            }
+                            END {
+                                # Remove the first and last quote
+                                print substr(value, 1, length(value));
+                            }
+                        ' <<< "${declare_str}"
+                    )
+                    display_value="${var_value}"
+                    if [[ "${var_type}" =~ "n" ]]; then
+                        # If it's a reference, remove the first and last quote
+                        var_value="${var_value#\"}"
+                        var_value="${var_value%\"}"
+                        display_value="${var_value}"
+                    elif [[ "${var_type}" == "A" ]]; then
+                        # If it's an associative array, remove the buggy space
+                        # before the last parenthesis
+                        display_value="${display_value% )})"
+                    fi
+                else
+                    # debug "getting value"
+                    var_value="${!var_name}"
+                    display_value=$(print-escaped "${var_value}")
+                fi
+                if ((verbosity > 1)); then
+                    display_type="${var_type}"
+                    if ${is_set}; then
+                        if [[ "${var_type}" =~ [aA] ]]; then
+                            var_length=${#__ref[@]}
+                        else
+                            var_length=${#var_value}
+                        fi
+                    fi
+                    if ((verbosity > 2)); then
+                        # Expand the var_type to a more human-readable form
+                        local expanded_type="" var_char
+                        while read -r -N 1 var_char; do
+                            case "${var_char}" in
+                                $'\n') break ;;
+                                a) expanded_type+=",arr" ;;
+                                A) expanded_type+=",map" ;;
+                                i) expanded_type+=",int" ;;
+                                l) expanded_type+=",lower" ;;
+                                n) expanded_type+=",ref" ;;
+                                r) expanded_type+=",ro" ;;
+                                t) expanded_type+=",trace" ;;
+                                u) expanded_type+=",upper" ;;
+                                x) expanded_type+=",export" ;;
+                                -) expanded_type+=",str" ;;
+                                *) expanded_type+=",unknown" ;;
+                            esac
+                        done <<< "${var_type}"
+                        display_type="${expanded_type#,}"
+                    fi
+                    var_info=" (${display_type}${var_length:+:${var_length}})"
+                else
+                    var_info=""
+                fi
+                if [[ "${var_type}" =~ "-" ]] && ${is_set}; then
+                    if [[ "${display_value}" =~ "\\" ]]; then
+                        display_value="\$'${display_value//\'/\'}'"
+                    else
+                        display_value="\"${display_value//\"/\\\"}\""
+                    fi
+                fi
             fi
+            printf "\033[1m%s\033[0m%s\x1e== %s\n" \
+                "${var_name}" "${var_info}" "${display_value}" \
+                | sed '2,$s/^/ \x1e.. /'
         done | column -t -s $'\x1e'
     )
     DEBUG_FUNCTION_NAME="${FUNCNAME[1]}" \
