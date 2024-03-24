@@ -2,6 +2,8 @@
 #
 # Git-ish paging: use the default pager if the input exceeds the terminal
 # height, otherwise just print the input to stdout
+#
+# I've since discovered........ less -F...... ;-;
 
 function autopage() {
     local filepath="${1:-/dev/stdin}"
