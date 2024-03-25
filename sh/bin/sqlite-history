@@ -1637,19 +1637,30 @@ function __help-reset-idx() {
 
 function __action-reset-idx() {
     local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
+    local update_sql
 
     # Get a list of all the sessions
     readarray -t sessions < <(
-        <. sqlite3 -noheader "${db_path}" '
+        <. sqlite3 -noheader -csv "${db_path}" '
             SELECT DISTINCT session FROM commands
-        ' | sed 's/ *$//'
+        '
     )
 
+    debug "Updating ${#sessions[@]} session IDs in '${db_path}'"
+
     # Loop over each, updating its session index
-    ((s_idx=1))
-    for s in "${sessions[@]}"; do
-        echo "UPDATE commands SET session_idx = '$((s_idx++))' WHERE session = '${s}';"
-    done | <. qlite3 -noheader "${db_path}"
+    update_sql=$(
+        ((s_idx=1))
+        local r=$'\r'
+        for s in "${sessions[@]}"; do
+            echo "UPDATE commands SET session_idx = '$((s_idx++))' WHERE session = '${s}';"
+        done
+    )
+    if [[ -n "${DEBUG_LOG}" ]]; then
+        # It's gonna be a lot, so only show it if using a debug file log
+        debug "${update_sql}"
+    fi
+    <. sqlite3 "${db_path}" "${update_sql}"
 }
 
 # Just show the help
