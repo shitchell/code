@@ -92,9 +92,11 @@ function help-full() {
     echo "Actions:"
     cat << EOF
     store                     store a command in the database
+    export                    export the database to an SQL file
     log                       list and query database history
     delete                    delete database history
     clear                     clear database history
+    reset-idx                 reset all session indexes
     install                   install the bash history hook
     help                      display this help message
 EOF
@@ -242,6 +244,7 @@ function db-verify() {
 
 # @description Setup the database
 # @usage db-setup [<db path>]
+# shellcheck disable=SC2120
 function db-setup() {
     local db_path="${1:-${DB_PATH}}"
 
@@ -265,7 +268,7 @@ function db-setup() {
     sqlite3 "${db_path}" '
         CREATE TABLE IF NOT EXISTS commands (
             id INTEGER PRIMARY KEY,
-            cmd_id INTEGER UNIQUE,
+            cmd_id TEXT UNIQUE,
             line TEXT,
             name TEXT NOT NULL,
             args TEXT,
@@ -274,7 +277,8 @@ function db-setup() {
             dir TEXT,
             timestamp TEXT,
             tty TEXT,
-            session TEXT
+            session TEXT,
+            session_idx INTEGER
         );
     ' <.
 }
@@ -295,6 +299,7 @@ function db-insert() {
     local cmd_timestamp=""
     local cmd_tty=""
     local cmd_session=""
+    local cmd_session_idx=""
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -346,6 +351,10 @@ function db-insert() {
                 cmd_session="${2}"
                 shift 1
                 ;;
+            -I | --session-idx)
+                cmd_session_idx="${2}"
+                shift 1
+                ;;
             --)
                 shift 1
                 break
@@ -387,6 +396,15 @@ function db-insert() {
         cmd_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     fi
 
+    # Prefix the cmd_id the session index
+    local cmd_id_prefix="${cmd_session_idx:-$(get-session-index "${cmd_session}")}-"
+    if [[ -z "${cmd_id}" ]]; then
+        # If no cmd_id is provided, generate a random one
+        cmd_id="${cmd_id_prefix}${RANDOM}"
+    else
+        cmd_id="${cmd_id_prefix}${cmd_id}"
+    fi
+
     # If the directory is empty, use the current directory
     if [[ -z "${cmd_dir}" ]]; then
         cmd_dir=$(pwd)
@@ -409,10 +427,11 @@ function db-insert() {
             dir,
             timestamp,
             tty,
-            session
+            session,
+            session_idx
         )
         VALUES (
-            '${BASH_SESSION_ID:0:4}${cmd_id}',
+            '${cmd_id}',
             '${cmd_name}',
             '${cmd_args_str//\'/\'\'}',
             '${cmd_exit_code}',
@@ -421,7 +440,8 @@ function db-insert() {
             '${cmd_dir//\'/\'\'}',
             '${cmd_timestamp}',
             '${cmd_tty}',
-            '${cmd_session//\'/\'\'}'
+            '${cmd_session//\'/\'\'}',
+            '${cmd_session_idx}'
         );
 EOF
     return ${?}
@@ -543,9 +563,43 @@ function generate-session-id() {
     tty="${tty:5}"
     tty="${tty//\//}"
     # Get the current timestamp from the year to the second
-    timestamp=$(date '+%Y%m%d%H%M%S')
+    timestamp=$(date '+%Y%m%d.%H%M%S')
     # Put 'em together and whaddaya got...
-    echo "${tty}.${timestamp}" # ...bippity boppity pts32.20210819123456
+    echo "${tty}:${timestamp}" # ...bippity boppity pts32.20210819123456
+}
+
+# @description Get the session index for a session
+# @usage get-session-index [<session id>]
+function get-session-index() {
+    local session_id="${1:-${BASH_SESSION_ID}}"
+    local session_idx="${BASH_SESSION_IDX}"
+    local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
+
+    # If the session index is already set, return it
+    [[ -n "${session_idx}" ]] && echo "${session_idx}" && return
+
+    # Get the session index for the session
+    session_idx=$(
+        <. sqlite3 -noheader "${db_path}" "
+            SELECT MAX(session_idx) FROM commands WHERE session = '${session_id}';
+        "
+    )
+
+    # If there is no session index for the session, get the most recent session
+    # index and increment it
+    if ! [[ "${session_idx}" =~ ^[0-9]+$ ]]; then
+        session_idx=$(
+            <. sqlite3 -noheader "${db_path}" "
+                SELECT MAX(session_idx + 0) + 1 FROM commands;
+            "
+        )
+        # Update any rows with the session id to the new session index
+        <. sqlite3 "${db_path}" "
+            UPDATE commands SET session_idx = ${session_idx} WHERE session = '${session_id}';
+        "
+    fi
+
+    echo "${session_idx}"
 }
 
 # @description Print a function definition all pretty-like
@@ -726,6 +780,7 @@ function __action-store() {
     [[ -z "${cmd_dir}" ]] && cmd_dir=$(pwd)
     [[ -z "${cmd_tty}" ]] && cmd_tty=$(tty)
     [[ -z "${cmd_session}" ]] && cmd_session="${BASH_SESSION_ID}"
+    [[ -z "${cmd_session_idx}" ]] && cmd_session_idx=$(get-session-index "${cmd_session}")
 
     # Store the command in the database
     db-insert -f "${DB_PATH}" \
@@ -738,6 +793,7 @@ function __action-store() {
         -t "${cmd_timestamp}" \
         -T "${cmd_tty}" \
         -S "${cmd_session}" \
+        -I "${cmd_session_idx}" \
         -- "${cmd_args[@]}"
     return ${?}
 }
@@ -1437,8 +1493,12 @@ function set-bash-session-id() {
 # Function for generating a session identifier
 $(print-function generate-session-id _generate_session_id)
 
+# Function for determining the session index
+$(print-function get-session-index _get_session_index)
+
 # Set a session identifier
 export BASH_SESSION_ID=\$(_generate_session_id)
+export BASH_SESSION_IDX=\$(_get_session_index "\${BASH_SESSION_ID}")
 EOF
     )
     if ${show_rc_lines}; then
@@ -1567,6 +1627,29 @@ EOF
     
     echo
     echo -e "Run \`\033[0;32msource '${hook_script}'\033[0m\` to enable the history hook for this session."
+}
+
+function __help-reset-idx() {
+    _print-usage "[-h]"
+    echo
+    echo "Reset all session indexes in the database."
+}
+
+function __action-reset-idx() {
+    local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
+
+    # Get a list of all the sessions
+    readarray -t sessions < <(
+        <. sqlite3 -noheader "${db_path}" '
+            SELECT DISTINCT session FROM commands
+        ' | sed 's/ *$//'
+    )
+
+    # Loop over each, updating its session index
+    ((s_idx=1))
+    for s in "${sessions[@]}"; do
+        echo "UPDATE commands SET session_idx = '$((s_idx++))' WHERE session = '${s}';"
+    done | <. qlite3 -noheader "${db_path}"
 }
 
 # Just show the help
