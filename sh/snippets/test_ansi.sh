@@ -64,7 +64,6 @@ cs_pad=$(printf "${color_support}" | wc -c)
 
 # Print "Terminal supports ${color_support} colors" with a rainbow of colors and
 # the color support in RGB (1st char = Red, 2nd char = Green, 3rd char = Blue)
-# echo -e "\e[35mTerminal supports \e[36;1m${color_support}\e[0m \e[35mcolors\e[0m"
 first_part="Terminal supports "
 second_part="${color_support}"
 third_part=" colors"
@@ -80,26 +79,19 @@ printf '\e[0m'
 while IFS= read -r -n1 char; do
     printf "\e[38;5;%im%s" "$(((RANDOM % color_support) + 1))" "${char}"
 done <<< "${third_part}"
-printf '\e[0m\n'
+printf '\e[0m\n\n'
 
 n=0
-include-source debug.sh
 needs_newline=true
 for ((i=0; i<color_support; i++)); do
-    # debug "[$i/$color_support] printing line $(printf "\e[38;5;%im\\\e[38;5;%0${cs_pad}im\e[0m" "${i}" "${i}")"
     printf "\e[38;5;%im\\\e[38;5;%0${cs_pad}im\e[0m" "${i}" "${i}"
 
-    # for i < 16, print 4 colors per line
-    # for i >= 16, print 6 colors per line, shifted by 2
     if [[ ${i} -lt 16 ]]; then
         n=4 s=0
     else
-        # n=7 and n=9 will not yield equal rows for 256 colors
-        #n=5 s=4
         n=6  s=2
-        # n=8  s=0
-        # n=10 s=4
     fi
+
     if [[ $(((i + s) % n)) -eq $((n - 1)) ]]; then
         echo
         needs_newline=false
@@ -109,10 +101,3 @@ for ((i=0; i<color_support; i++)); do
     fi
 done
 ${needs_newline} && echo
-
-    # [[ "${i}" == "16" ]] && n=3
-    # if [[ $(((i + n) % 6)) -eq 0 || ${i} -eq 15 ]]; then
-    #     echo
-    # else
-    #     printf "    "
-    # fi

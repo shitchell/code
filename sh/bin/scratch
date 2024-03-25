@@ -68,6 +68,7 @@ EOF
     -d / --dir <dir>    the directory to use for the scratch directory, defaults
                         to the directory used by \`mktemp\`. if no argument is
                         given, prints the scratch directory and exits
+    -u / --user-dirs    create \`scratch-<uid>\` directories in the scratch dir
     -u / --unique       guarantees a unique, unused scratch file
     -l / --last         use the last modified scratch file
     -e / --exec <cmd>   execute the specified command on the scratch file
