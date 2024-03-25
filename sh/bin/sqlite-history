@@ -7,11 +7,24 @@
 ## traps #######################################################################
 ################################################################################
 
-# function trap-exit() {
-#     echo -e "\nbye bye"
-# }
-# trap trap-exit EXIT
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
 
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
 
 ## colors ######################################################################
 ################################################################################
@@ -36,6 +49,13 @@ function setup-colors() {
     S_BLINK='\e[5m'
     S_INVERT='\e[7m'
     S_HIDDEN='\e[8m'
+
+    # Custom colors
+    C_FILE="${C_BLUE}"
+    C_DIR="${C_CYAN}"
+    C_CMD="${C_GREEN}"
+    C_ARG="${S_DIM}${C_GREEN}"
+    C_DATE="${C_YELLOW}"
 }
 
 
@@ -83,7 +103,7 @@ EOF
     cat << EOF
     -h                        display usage
     --help                    display this help message
-    -f/--file <file>          the file to use for the database
+    -d/--db <file>            the path to the $(basename "${0}") database file
     -c/--color <on|auto|off>  whether to use color output
 EOF
     echo
@@ -110,7 +130,9 @@ function parse-args() {
                 help-full
                 exit 0
                 ;;
-            -f | --file)
+            -f | --file | -d | --db)
+                # -f and --file are deprecated but retained for backwards
+                # compatibility
                 DB_PATH="${2}"
                 shift 1
                 ;;
@@ -178,6 +200,35 @@ function parse-args() {
 
 ## helpful functions ###########################################################
 ################################################################################
+
+# Set up debug functions if they don't already exist
+## debug
+if ! declare -f debug &>/dev/null; then
+    function debug() {
+        local prefix timestamp func
+        if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+            timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+            prefix="\033[36m[${timestamp}]\033[0m "
+            prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
+            func="${FUNCNAME[1]}"
+            [[ "${func}" == "debug-vars" ]] && func="${FUNCNAME[2]}"
+            [[ "${func}" != "main" ]] && prefix+="\033[1m:${func}\033[0m"
+            prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
+            printf "%s\n" "${@}" \
+                | awk -v prefix="${prefix}" '{print prefix $0}' >> "${DEBUG_LOG:-/dev/stderr}"
+        else
+            return 1 # debug is disabled
+        fi
+    }
+fi
+## debug-vars
+if ! declare -f debug-vars &>/dev/null; then
+    function debug-vars() {
+        if debug && [[ ${#} -gt 0 ]]; then
+            debug "$(declare -p "${@}")"
+        fi
+    }
+fi
 
 # @description Verify the database exists, is readable, and has the expected
 #              schema
@@ -376,19 +427,163 @@ EOF
     return ${?}
 }
 
-# @description Generate a random session identifier
-# @usage generate-session-id
-function generate-session-id() {
-    # Generate a random 45-bit number
-    echo $(((RANDOM<<15|RANDOM)<<15|RANDOM))
+# @description Determine the calling function name
+# @usage _functionname [<index>]
+function _functionname() {
+    local index=${1:- -1}
+    echo ${FUNCNAME[${index}]}
 }
 
+# @description Break a usage string into its component parts
+# @usage _split-usage <usage string>
+function _split-usage() {
+    local usage_string="${1}"
+    local breakable=true
+    local part=""
+
+    # Basically, we're just trying to not split on spaces within quotes or
+    # brackets
+    while read -N 1 char; do
+        case "${char}" in
+            $'\n')
+                continue
+                ;;
+            '"')
+                breakable=$(! ${breakable})
+                part+="${char}"
+                ;;
+            '(' | '[')
+                breakable=false
+                part+="${char}"
+                ;;
+            ')' | ']')
+                breakable=true
+                part+="${char}"
+                ;;
+            ' ')
+                if ${breakable} && [[ -n "${part}" ]]; then
+                    echo "${part}"
+                    part=""
+                else
+                    part+="${char}"
+                fi
+                ;;
+            *)
+                part+="${char}"
+                ;;
+        esac
+    done <<< "${usage_string}"
+
+    # Print any remaining part
+    [[ -n "${part}" ]] && echo "${part}"
+}
+
+# @description Wrap a usage string at N characters
+# @usage _wrap-usage <usage string> <width>
+function _wrap-usage() {
+    local usage_string="${1}"
+    local width="${2:-80}"
+    local part
+    local line tmp_line
+
+    while read -r part; do
+        [[ -n "${line}" ]] && tmp_line="${line} ${part}" || tmp_line="${part}"
+        if (( ${#tmp_line} > width )); then
+            echo "${line}"
+            line="${part}"
+        else
+            line="${tmp_line}"
+        fi
+    done <<< "$(_split-usage "${usage_string}")"
+    echo "${line}"
+}
+
+# @description Pretty print usage information
+# @usage _print-usage
+function _print-usage() {
+    local function_name script_name args prefix indent length
+
+    if [[ ${#} -eq 0 ]]; then
+        return
+    fi
+
+    # Set up the vars
+    function_name=$(_functionname 2)
+    function_name="${function_name#__help-}"
+    function_name="${function_name#__action-}"
+    script_name=$(basename "${0}")
+    prefix="usage: ${script_name} ${function_name}"
+    indent=$(printf " %${#prefix}s" " ")
+    args="${*}"
+
+    # Print the usage, wrapping at 80 and indenting after the first line
+    local line first_line remaining_lines
+    line="${prefix} ${args}"
+    first_line=$(echo "${line}" | fold -sw 80 | head -n1)
+    remaining_lines="${line:${#first_line}}"
+
+    debug-vars line first_line remaining_lines
+
+    # Print the first line
+    printf '%s\n' "${first_line}"
+
+    # Print any remaining lines
+    debug-vars remaining_lines indent
+    _wrap-usage "${remaining_lines}" ${#indent} | while read -r line; do
+        printf '%s\n' "${indent}${line}"
+    done
+}
+
+# @description Generate a random session identifier based on the tty and time
+# @usage generate-session-id
+function generate-session-id() {
+    local tty timestamp
+    # Get the tty, converting it from /dev/xyz(/abc) to xyzabc
+    tty=$(tty)
+    tty="${tty:5}"
+    tty="${tty//\//}"
+    # Get the current timestamp from the year to the second
+    timestamp=$(date '+%Y%m%d%H%M%S')
+    # Put 'em together and whaddaya got...
+    echo "${tty}.${timestamp}" # ...bippity boppity pts32.20210819123456
+}
+
+# @description Print a function definition all pretty-like
+# @usage print-function <function name> [<new name>]
+function print-function() {
+    local f_name="${1}"
+    local f_name_new="${2:-${f_name}}"
+    local f_declare
+
+    # Ensure a function was given
+    [[ -z "${f_name}" ]] && return
+
+    # Get the function declaration and exit with an error if it doesn't exist
+    f_declare=$(declare -f "${1}" 2>/dev/null)
+    [[ -z "${f_declare}" ]] && return 1
+
+    # Print the function source, optionally renaming the function
+    awk -v name="${f_name_new}" '
+        NR == 1 { printf("function %s() {\n", name) }
+        NR > 2
+    ' <<< "${f_declare}"
+}
+
+# @description Custom autopage to allow an action to disable autopaging
+function _autopage() {
+    if [[ "${__AUTOPAGE:-true}" == "false" ]]; then
+        autopage
+    else
+        cat
+    fi
+}
 
 ## action functions ############################################################
 ################################################################################
 
 function __help-store() {
-    echo "usage: $(basename "${0}") store [-h] [-c <cmd>] [-a <arg>] [-d <dir>] [-t <date>] [-- <args>]"
+    # echo "usage: $(basename "${0}") store [-h] [-c <cmd>] [-a <arg>] [-d <dir>] [-t <date>] [-- <args>]"
+    _print-usage "[-h] [-c/--command <cmd>] [-a/--arg <arg>] [-d/--directory <dir>] [-t/--timestamp <date>] [-T/--tty <tty>] [-S/--session <session>] [-- <args>]"
     echo
     echo "Save a command to the database."
     echo
@@ -547,6 +742,67 @@ function __action-store() {
     return ${?}
 }
 
+function __help-export() {
+    _print-usage "[-h] [-q/--quiet] [<filepath>]"
+    echo
+    echo "Export the command history to a file"
+EOF
+}
+
+function __action-export() {
+    # Default values
+    local export_file=""
+    local do_quiet=false
+    local timestamp
+    local row_count
+
+    # Validate the database exists
+    db-verify "${DB_PATH}" || {
+        echo "error: database does not exist: ${DB_PATH}" >&2
+        return ${E_DB_NOT_FOUND}
+    }
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -f | --file)
+                export_file="${2}"
+                shift 1
+                ;;
+            -q | --quiet)
+                do_quiet=true
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_INVALID_OPTION}
+                ;;
+            *)
+                export_file="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    ${do_quiet} && silence-output
+
+    # If no export file was specified, set it to the default
+    if [[ -z "${export_file}" ]]; then
+        timestamp=$(date +'%Y%m%d-%H%M%S')
+        export_file="sqlite-history_${timestamp}.bak.sql"
+    fi
+
+    echo -n "* exporting '${DB_PATH}' to '${export_file}' ... "
+
+    # Export the database
+    sqlite3 "${DB_PATH}" .dump <. >"${export_file}"
+
+    # Get the number of rows in the database
+    row_count=$(sqlite3 "${DB_PATH}" 'SELECT COUNT(*) FROM commands;')
+
+    # Output the number of rows exported
+    echo "exported ${row_count} rows to: ${export_file}"
+}
+
 function __help-log() {
     echo "usage: $(basename "${0}") log [-h] [-c <cmd>] [-a <arg>] [-d <dir>] [--since <date>] [--until <date>] [-T <tty>] [-S <session>] [-n <num>] [--order-by <field>] [-q <query>] [-v] [<command>]"
     echo
@@ -569,6 +825,8 @@ function __help-log() {
     -n/--num <num>           the maximum number of results to return
     -<num>                   the maximum number of results to return
     --order-by <field>       the field to order the results by
+    -r/--reverse             reverse the order of the results
+    --grep <pattern>         a pattern to search for in the results
     -q/--query <query>       the query string to use
     -v/--verbose             show the query string
 EOF
@@ -601,6 +859,7 @@ function __action-log() {
     local cmd_dir=""
     local cmd_tty=""
     local cmd_session=""
+    local grep_pattern=""
     local since_timestamp=""
     local until_timestamp=""
     local query_str=""
@@ -611,12 +870,17 @@ function __action-log() {
     local sqlite_args=()
     local do_show_query=false
     local do_delete=false
+    local do_reverse=false
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
             -i | --id)
                 cmd_ids+=(${2})
+                shift 1
+                ;;
+            --grep)
+                grep_pattern="${2}"
                 shift 1
                 ;;
             -c | --command)
@@ -675,6 +939,9 @@ function __action-log() {
             -o | --order-by)
                 order_by="${2}"
                 shift 1
+                ;;
+            -r | --reverse)
+                do_reverse=$(${do_reverse} && echo false || echo true)
                 ;;
             -q | --query)
                 query_str="${2}"
@@ -805,6 +1072,195 @@ function __action-log() {
         [[ -n "${limit_clause}" ]] && ! ${do_delete} && query_str+=" ${limit_clause}"
     fi
 
+    # Build formatting functions
+    function _format_reverse() {
+        ${do_reverse} \
+            && awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }' \
+            || cat
+    }
+    function _format_grep() {
+        [[ -n "${grep_pattern}" ]] && grep -i "${grep_pattern}" || cat
+    }
+    function _format_output() {
+        if [[ -z "${format}" ]]; then
+            cat
+        else
+            awk -v FS=$'\x1e' -v format="${format}" -v home="${HOME}" '
+            function format_line(string) {
+                if (!string) {
+                    return;
+                }
+                split(string, parts, "\x1e")
+
+                # Special vars
+                homified_dir = parts[8]
+                gsub(home, "~", homified_dir)
+
+                # Loop over the format string character by character
+                output = ""
+                for (i = 1; i <= length(format); i++) {
+                    # Get the current character
+                    char = substr(format, i, 1)
+                    # If the character is a percent sign, then the next character
+                    # is the field specifier
+                    if (char == "%") {
+                        # Get the next character
+                        i++
+                        char = substr(format, i, 1)
+                        # If the character is a valid specifier, then add its value
+                        # to the output
+                        if (char == "%") {
+                            output = output "%"
+                        } else if (char == "I") {
+                            output = output unescape_tcl(parts[1])
+                        } else if (char == "i") {
+                            output = output unescape_tcl(parts[2])
+                        } else if (char == "l") {
+                            output = output unescape_tcl(parts[3])
+                        } else if (char == "c") {
+                            cmd_part = unescape_tcl(parts[4])
+                            if (cmd_part == "<assignment>") {
+                                output = output unescape_tcl(parts[3])
+                            } else {
+                                output = output cmd_part
+                            }
+                        } else if (char == "a") {
+                            # Remove the leading and trailing double quotes
+                            quotes_part = substr(parts[5], 2, length(parts[5]) - 2)
+                            output = output unescape_tcl(escape_args(quotes_part))
+                        } else if (char == "d") {
+                            output = output unescape_tcl(parts[8])
+                        } else if (char == "h") {
+                            output = output unescape_tcl(homified_dir)
+                        } else if (char == "t") {
+                            output = output unescape_tcl(parts[9])
+                        } else if (char == "T") {
+                            output = output unescape_tcl(parts[10])
+                        } else if (char == "S") {
+                            output = output unescape_tcl(parts[11])
+                        } else if (char == "e") {
+                            output = output unescape_tcl(parts[6])
+                        } else if (char == "D") {
+                            output = output unescape_tcl(parts[7])
+                        } else {
+                            # If the character is not a valid field specifier, then
+                            # just add it to the output string
+                            output = output "%" char
+                        }
+                    } else {
+                        output = output char
+                    }
+                }
+                return output
+            }
+            function escape_args(args_string) {
+                output_args_string = ""
+                if (args_string) {
+                    # Split the string on the FS character
+                    split(args_string, args_string_parts, " \\\\037 ")
+                    for (k in args_string_parts) {
+                        arg_string = args_string_parts[k]
+
+                        # Escape single quotes
+                        gsub(/'"'"'/, "\\'"'"'", arg_string)
+
+                        # Surround the argument with single quotes if it contains
+                        # any whitespace or single quotes
+                        if (arg_string ~ /(\\[rntf]|'"'"'| )/) {
+                            # Surround the string in single quotes
+                            arg_string = "'"'"'" arg_string "'"'"'"
+                        }
+
+                        if (k == 1) {
+                            output_args_string = arg_string
+                        } else {
+                            output_args_string = output_args_string " " arg_string
+                        }
+                    }
+                }
+
+                return output_args_string
+            }
+            function unescape_tcl(tcl_string) {
+                tcl_output = ""
+                tcl_string_length = length(tcl_string)
+
+                for (j = 1; j <= tcl_string_length; j++) {
+                    # Get the current character
+                    char = substr(tcl_string, j, 1)
+
+                    # Skip leading/trailing double quotes
+                    if (j == 1 && char == "\"") {
+                        continue
+                    } else if (j == tcl_string_length && char == "\"") {
+                        continue
+                    }
+
+                    # If the character is a backslash, then the next character is
+                    # the escaped character
+                    if (char == "\\") {
+                        # Get the next character
+                        j++
+                        char = substr(tcl_string, j, 1)
+                        # If the character is a valid escape character, then add
+                        # its value to the output
+                        if (char == "a") {
+                            tcl_output = tcl_output "\a"
+                        } else if (char == "b") {
+                            tcl_output = tcl_output "\b"
+                        } else if (char == "f") {
+                            tcl_output = tcl_output "\f"
+                        } else if (char == "n") {
+                            tcl_output = tcl_output "\n"
+                        } else if (char == "r") {
+                            tcl_output = tcl_output "\r"
+                        } else if (char == "t") {
+                            tcl_output = tcl_output "\t"
+                        } else if (char == "v") {
+                            tcl_output = tcl_output "\v"
+                        } else if (char == "\"") {
+                            tcl_output = tcl_output "\""
+                        } else if (char == "'"'"'") {
+                            tcl_output = tcl_output "'"'"'"
+                        } else if (char == "\\") {
+                            tcl_output = tcl_output "\\"
+                        } else {
+                            # If the character is not a valid escape character, then
+                            # just add it to the output string
+                            tcl_output = tcl_output "\\" char
+                        }
+                    } else {
+                        tcl_output = tcl_output char
+                    }
+                }
+
+                return tcl_output
+            }
+            {
+                if (NR > 1) {
+                    # Print the formatted line
+                    line = format_line(str)
+                    if (line) {
+                        print line
+                    }
+                }
+                str = $0
+            }
+            END {
+                # On the last line, remove any trailing newlines and print the
+                # formatted line
+                gsub(/(\n)+$/, "", format)
+                line = format_line(str)
+                if (line) {
+                    print line
+                }
+            }'
+        fi
+    }
+    function _format() {
+        _format_reverse | _format_grep | _format_output
+    }
+
     # Run the query
     ${do_show_query} && echo "${query_str}" | xargs
     local sqlite_args=()
@@ -813,181 +1269,7 @@ function __action-log() {
     else
         sqlite_args+=(-header)
     fi
-    sqlite3 "${sqlite_args[@]}" "${DB_PATH}" "${query_str}" <. | if [[ -z "${format}" ]]; then
-        # If no formatting options given, then just print the results
-        cat
-    else
-        awk -v FS=$'\x1e' -v format="${format}" -v home="${HOME}" '
-        function format_line(string) {
-            if (!string) {
-                return;
-            }
-            split(string, parts, "\x1e")
-
-            # Special vars
-            homified_dir = parts[8]
-            gsub(home, "~", homified_dir)
-
-            # Loop over the format string character by character
-            output = ""
-            for (i = 1; i <= length(format); i++) {
-                # Get the current character
-                char = substr(format, i, 1)
-                # If the character is a percent sign, then the next character
-                # is the field specifier
-                if (char == "%") {
-                    # Get the next character
-                    i++
-                    char = substr(format, i, 1)
-                    # If the character is a valid specifier, then add its value
-                    # to the output
-                    if (char == "%") {
-                        output = output "%"
-                    } else if (char == "I") {
-                        output = output unescape_tcl(parts[1])
-                    } else if (char == "i") {
-                        output = output unescape_tcl(parts[2])
-                    } else if (char == "l") {
-                        output = output unescape_tcl(parts[3])
-                    } else if (char == "c") {
-                        cmd_part = unescape_tcl(parts[4])
-                        if (cmd_part == "<assignment>") {
-                            output = output unescape_tcl(parts[3])
-                        } else {
-                            output = output cmd_part
-                        }
-                    } else if (char == "a") {
-                        # Remove the leading and trailing double quotes
-                        quotes_part = substr(parts[5], 2, length(parts[5]) - 2)
-                        output = output unescape_tcl(escape_args(quotes_part))
-                    } else if (char == "d") {
-                        output = output unescape_tcl(parts[8])
-                    } else if (char == "h") {
-                        output = output unescape_tcl(homified_dir)
-                    } else if (char == "t") {
-                        output = output unescape_tcl(parts[9])
-                    } else if (char == "T") {
-                        output = output unescape_tcl(parts[10])
-                    } else if (char == "S") {
-                        output = output unescape_tcl(parts[11])
-                    } else if (char == "e") {
-                        output = output unescape_tcl(parts[6])
-                    } else if (char == "D") {
-                        output = output unescape_tcl(parts[7])
-                    } else {
-                        # If the character is not a valid field specifier, then
-                        # just add it to the output string
-                        output = output "%" char
-                    }
-                } else {
-                    output = output char
-                }
-            }
-            return output
-        }
-        function escape_args(args_string) {
-            output_args_string = ""
-            if (args_string) {
-                # Split the string on the FS character
-                split(args_string, args_string_parts, " \\\\037 ")
-                for (k in args_string_parts) {
-                    arg_string = args_string_parts[k]
-
-                    # Escape single quotes
-                    gsub(/'"'"'/, "\\'"'"'", arg_string)
-
-                    # Surround the argument with single quotes if it contains
-                    # any whitespace or single quotes
-                    if (arg_string ~ /(\\[rntf]|'"'"'| )/) {
-                        # Surround the string in single quotes
-                        arg_string = "'"'"'" arg_string "'"'"'"
-                    }
-
-                    if (k == 1) {
-                        output_args_string = arg_string
-                    } else {
-                        output_args_string = output_args_string " " arg_string
-                    }
-                }
-            }
-
-            return output_args_string
-        }
-        function unescape_tcl(tcl_string) {
-            tcl_output = ""
-            tcl_string_length = length(tcl_string)
-
-            for (j = 1; j <= tcl_string_length; j++) {
-                # Get the current character
-                char = substr(tcl_string, j, 1)
-
-                # Skip leading/trailing double quotes
-                if (j == 1 && char == "\"") {
-                    continue
-                } else if (j == tcl_string_length && char == "\"") {
-                    continue
-                }
-
-                # If the character is a backslash, then the next character is
-                # the escaped character
-                if (char == "\\") {
-                    # Get the next character
-                    j++
-                    char = substr(tcl_string, j, 1)
-                    # If the character is a valid escape character, then add
-                    # its value to the output
-                    if (char == "a") {
-                        tcl_output = tcl_output "\a"
-                    } else if (char == "b") {
-                        tcl_output = tcl_output "\b"
-                    } else if (char == "f") {
-                        tcl_output = tcl_output "\f"
-                    } else if (char == "n") {
-                        tcl_output = tcl_output "\n"
-                    } else if (char == "r") {
-                        tcl_output = tcl_output "\r"
-                    } else if (char == "t") {
-                        tcl_output = tcl_output "\t"
-                    } else if (char == "v") {
-                        tcl_output = tcl_output "\v"
-                    } else if (char == "\"") {
-                        tcl_output = tcl_output "\""
-                    } else if (char == "'"'"'") {
-                        tcl_output = tcl_output "'"'"'"
-                    } else if (char == "\\") {
-                        tcl_output = tcl_output "\\"
-                    } else {
-                        # If the character is not a valid escape character, then
-                        # just add it to the output string
-                        tcl_output = tcl_output "\\" char
-                    }
-                } else {
-                    tcl_output = tcl_output char
-                }
-            }
-
-            return tcl_output
-        }
-        {
-            if (NR > 1) {
-                # Print the formatted line
-                line = format_line(str)
-                if (line) {
-                    print line
-                }
-            }
-            str = $0
-        }
-        END {
-            # On the last line, remove any trailing newlines and print the
-            # formatted line
-            gsub(/(\n)+$/, "", format)
-            line = format_line(str)
-            if (line) {
-                print line
-            }
-        }'
-    fi
+    sqlite3 "${sqlite_args[@]}" "${DB_PATH}" "${query_str}" <. | _format
 }
 
 function __help-delete() {
@@ -1057,6 +1339,7 @@ function __action-install() {
                 ;;
             -n | --no-install)
                 show_rc_lines=true
+                __AUTOPAGE=false
                 ;;
             -s | --skip-preexec)
                 do_skip_preexec=true
@@ -1151,8 +1434,11 @@ function set-bash-session-id() {
     export BASH_SESSION_ID="\${new_session_id}"
 }
 
+# Function for generating a session identifier
+$(print-function generate-session-id _generate_session_id)
+
 # Set a session identifier
-export BASH_SESSION_ID=\$(((RANDOM<<15|RANDOM)<<15|RANDOM))
+export BASH_SESSION_ID=\$(_generate_session_id)
 EOF
     )
     if ${show_rc_lines}; then
@@ -1164,7 +1450,7 @@ EOF
     local preexec_installed=false
     echo -n "* checking for bash-preexec ... "
     if [[ -n "${bash_preexec_imported}" ]]; then
-        echo -e "\033[0;32minstalled\033[0m"
+        echo -e "\033[0;32minstalled, skipping\033[0m"
         preexec_installed=true
     else
         echo -e "\033[0;31mnot installed\033[0m"
@@ -1172,31 +1458,83 @@ EOF
 
     # Write the rc lines to the hook script
     echo -n "* updating hook script '${hook_script}' ... "
-    printf "%s\n" "${rc_lines}" >"${hook_script}" 2>/dev/null
-    if [[ ${?} -ne 0 ]]; then
+    ## check to see if the hook script exists and is writable
+    if [[ -e "${hook_script}" && ! -w "${hook_script}" ]]; then
         echo -e "\033[0;31mfailed\033[0m"
-        echo "error: failed to write to hook script: ${hook_script}" >&2
+        echo "error: hook script is not writable: ${hook_script}" >&2
         return ${E_RC_FILE_NOT_WRITABLE}
     fi
-    echo -e "\033[0;32mdone\033[0m"
-
-    # Ensure the rc file is sourced in the rc install file
-    echo -n "* adding hook script to config file '${config_file}' ... "
-    local source_str="[[ -f \"${hook_script}\" ]] && . \"${hook_script}\""
-    if ! grep -qF "${source_str}" "${config_file}" &>/dev/null; then
-        echo >> "${config_file}"
-        echo "# Enable SQLite database history" >> "${config_file}"
-        echo "${source_str}" >>"${config_file}" 2>/dev/null
-        if [[ ${?} -ne 0 ]]; then
+    ## check to see if the hookscript would be unchanged
+    if diff -q "${hook_script}" <(echo "${rc_lines}") &>/dev/null; then
+        # The hook script is already up to date
+        echo -e "\033[0;32munchanged\033[0m"
+    else
+        # The hook script needs to be updated
+        if printf "%s\n" "${rc_lines}" >"${hook_script}" 2>/dev/null; then
+            echo -e "\033[0;32mdone\033[0m"
+        else
             echo -e "\033[0;31mfailed\033[0m"
-            echo "error: failed to write to config file: ${config_file}" >&2
+            echo "error: failed to write to hook script: ${hook_script}" >&2
+            return ${E_RC_FILE_NOT_WRITABLE}
+        fi
+    fi
+
+    # Ensure the hook script sourced in the config file
+    echo -n "* adding hook script to config file '${config_file}' ... "
+    ## Generate a regex that allows for '.' or 'source' and the hook script path
+    ## to use '~', '$HOME', '${HOME}', or the full path
+    local source_regex
+    source_regex='(\.|source)\s+'
+    ### if the hook script is in the home directory, look for a path using
+    ### '(~|$HOME|${HOME}|/home/user)'
+    local regex_hook_path
+    regex_hook_path=$(realpath --no-symlinks "${hook_script}")
+    if [[ "${regex_hook_path}" == "${HOME}"* ]]; then
+        regex_hook_path="(~|\$HOME|\${HOME}|${HOME})/"
+        regex_hook_path+=$(
+            realpath --no-symlinks --relative-to="${HOME}" "${hook_script}"
+        )
+    fi
+    source_regex+="${regex_hook_path}"
+    debug "checking if config file is sourced using: /${source_regex//\//\/}/"
+    debug-vars config_file hook_script source_regex
+    ## Check to see if the config file sources the hook script using the regex
+    local is_sourced=false
+    debug \
+        && debug "$(tr -d "\"'" <"${config_file}" | grep -HbnE "${source_regex}")"
+    tr -d "\"'" <"${config_file}" | sed 's/#.*//' | grep -qE "${source_regex}" \
+        && is_sourced=true
+
+    if ! ${is_sourced}; then
+        # Check to see if the config file is writable
+        if [[ ! -w "${config_file}" ]]; then
+            echo -e "\033[0;31mfailed\033[0m"
+            echo "error: config file is not writable: ${config_file}" >&2
             return ${E_RC_FILE_NOT_WRITABLE}
         else
+            local source_str source_str_hook_path
+            # For portability, generate a version of the hook script using
+            # ${HOME} if the requested path is in the user's home directory
+            if [[ "${hook_script}" == "${HOME}"* ]]; then
+                source_str_hook_path="\${HOME}/"
+                source_str_hook_path+=$(
+                    realpath --no-symlinks --relative-to="${HOME}" \
+                        "${hook_script}"
+                )
+            else
+                source_str_hook_path="${hook_script}"
+            fi
+            source_str=". \"${source_str_hook_path//\"/\\\"}\""
+            {
+                echo
+                echo "# Enable SQLite database history"
+                echo "${source_str}"
+            } >>"${config_file}" 2>/dev/null
             echo -e "\033[0;32mdone\033[0m"
         fi
     else
         # The hook script is already sourced in the config file
-        echo -e "\033[0;33malready added, skipping\033[0m"
+        echo -e "\033[0;32malready added, skipping\033[0m"
     fi
 
     # If bash-preexec is not installed, prompt the user now to install it
@@ -1260,7 +1598,8 @@ function __action-help() {
 }
 
 function __help-_test() {
-    echo "usage: $(basename "${0}") _test [-h]"
+    # echo "usage: $(basename "${0}") _test [-h]"
+    _print-usage "[-h] [-m/--message <msg>] [-f/--foo <bar>] <arg1> [<arg2> [<arg3> [<anotherarg>]]]"
     echo
     echo "Do stuff."
     echo
@@ -1329,7 +1668,7 @@ function main() {
     # Verify the action function exists
     if type -t "${action_func}" &>/dev/null; then
         # Call the action function
-        "${action_func}" "${ACTION_ARGS[@]}" | autopage
+        "${action_func}" "${ACTION_ARGS[@]}" | _autopage
         exit_code=${PIPESTATUS[0]}
     else
         echo "error: no such action function found: ${ACTION}" >&2
