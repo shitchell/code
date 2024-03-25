@@ -1527,7 +1527,7 @@ EOF
     ## check to see if the hookscript would be unchanged
     if diff -q "${hook_script}" <(echo "${rc_lines}") &>/dev/null; then
         # The hook script is already up to date
-        echo -e "\033[0;32munchanged\033[0m"
+        echo -e "\033[0;32munchanged, skipping\033[0m"
     else
         # The hook script needs to be updated
         if printf "%s\n" "${rc_lines}" >"${hook_script}" 2>/dev/null; then
