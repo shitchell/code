@@ -30,14 +30,14 @@ function help-full() {
     --help                         display this help message
     --color WHEN                   colorize the output (WHEN is 'always', 'never',
                                    or 'auto')
+    --no-color                     don't colorize the output
     -O/--show-opts                 show the options that are passed to \`diff\` on
                                    each invocation
-    --no-color                     don't colorize the output
     *-r/--reverse                  reverse the order of the output
     *-R/--no-reverse               don't reverse the order of the output
     --show-timestamps              show timestamps in the output
     --git-timestamps               if either directory is a git repo, use git to
-                                   determine the timestamps
+                                   determine its timestamps
     *--strftime <format>           use <format> as the timestamp format
     --exclude-empty-dirs           exclude empty dirs from the output
     -p/--filepath-prefix <prefix>  prefix filepaths with <prefix> in the output
@@ -66,6 +66,7 @@ EOF
     -f REGEXP / --filter REGEXP    filter files matching REGEXP
    *-F FILE / --filter-from FILE   filter files matching any file pattern from
                                    FILE
+    --label LABEL                  use LABEL as the directory name in the output
 EOF
 }
 
@@ -144,6 +145,9 @@ function parse-args() {
             FILEPATH_PREFIX=${2}
             shift 2
             ;;
+
+        ## Diff options
+
         # -c | -u | \
         -t | --expand-tabs | \
         -T | --initial-tab | \
@@ -153,8 +157,8 @@ function parse-args() {
         -b | --ignore-space-change | \
         -w | --ignore-all-space | \
         -B | --ignore-blank-lines | \
-        -s | --report-identical-files)
-            # These diff options are allowed
+        -s | --report-identical-files | \
+        --no-dereference)
             DIFF_OPTS+=("${1}")
             shift 1
             ;;
@@ -166,7 +170,7 @@ function parse-args() {
         # -C | --context | \
         # -U | --unified | \
         -I | --ignore-matching-lines | \
-        --strip-trailing-cr | --color | \
+        --strip-trailing-cr | \
         -x | --exclude | \
         -X | --exclude-from)
             # These diff options are allowed, but require an argument
