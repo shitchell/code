@@ -265,7 +265,7 @@ function db-setup() {
     fi
 
     # Create the commands table
-    sqlite3 "${db_path}" '
+    <. sqlite3 "${db_path}" '
         CREATE TABLE IF NOT EXISTS commands (
             id INTEGER PRIMARY KEY,
             cmd_id TEXT UNIQUE,
@@ -277,10 +277,14 @@ function db-setup() {
             dir TEXT,
             timestamp TEXT,
             tty TEXT,
-            session TEXT,
-            session_idx INTEGER
+            session TEXT
         );
-    ' <.
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY,
+            session TEXT UNIQUE
+        );
+    '
 }
 
 # @description Insert values into the command table
@@ -299,7 +303,6 @@ function db-insert() {
     local cmd_timestamp=""
     local cmd_tty=""
     local cmd_session=""
-    local cmd_session_idx=""
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -351,10 +354,6 @@ function db-insert() {
                 cmd_session="${2}"
                 shift 1
                 ;;
-            -I | --session-idx)
-                cmd_session_idx="${2}"
-                shift 1
-                ;;
             --)
                 shift 1
                 break
@@ -396,8 +395,8 @@ function db-insert() {
         cmd_timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     fi
 
-    # Prefix the cmd_id the session index
-    local cmd_id_prefix="${cmd_session_idx:-$(get-session-index "${cmd_session}")}-"
+    # Prefix the cmd_id with the session index
+    local cmd_id_prefix="$(get-session-index "${cmd_session}")-"
     if [[ -z "${cmd_id}" ]]; then
         # If no cmd_id is provided, generate a random one
         cmd_id="${cmd_id_prefix}${RANDOM}"
@@ -427,8 +426,7 @@ function db-insert() {
             dir,
             timestamp,
             tty,
-            session,
-            session_idx
+            session
         )
         VALUES (
             '${cmd_id}',
@@ -440,8 +438,7 @@ function db-insert() {
             '${cmd_dir//\'/\'\'}',
             '${cmd_timestamp}',
             '${cmd_tty}',
-            '${cmd_session//\'/\'\'}',
-            '${cmd_session_idx}'
+            '${cmd_session//\'/\'\'}'
         );
 EOF
     return ${?}
@@ -555,15 +552,21 @@ function _print-usage() {
 }
 
 # @description Generate a random session identifier based on the tty and time
-# @usage generate-session-id
+# @usage generate-session-id [<tty>] [<timestamp>]
 function generate-session-id() {
-    local tty timestamp
-    # Get the tty, converting it from /dev/xyz(/abc) to xyzabc
-    tty=$(tty)
+    local tty="${1}"
+    local timestamp="${2}"
+    local date_format='%Y%m%d.%H%M%S'
+
+    [[ -z "${tty}" ]] && tty=$(tty)
+    [[ -z "${timestamp}" ]] \
+        && timestamp=$(date +"${date_format}") \
+        || timestamp=$(date -d "${timestamp}" +"${date_format}")
+
+    # Convert the tty from /dev/xyz(/abc) to xyzabc
     tty="${tty:5}"
     tty="${tty//\//}"
-    # Get the current timestamp from the year to the second
-    timestamp=$(date '+%Y%m%d.%H%M%S')
+
     # Put 'em together and whaddaya got...
     echo "${tty}:${timestamp}" # ...bippity boppity pts32.20210819123456
 }
@@ -572,34 +575,48 @@ function generate-session-id() {
 # @usage get-session-index [<session id>]
 function get-session-index() {
     local session_id="${1:-${BASH_SESSION_ID}}"
-    local session_idx="${BASH_SESSION_IDX}"
+    # local session_idx="${BASH_SESSION_IDX}"
     local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
 
     # If the session index is already set, return it
-    [[ -n "${session_idx}" ]] && echo "${session_idx}" && return
+    # if [[ -n "${session_idx}" ]]; then
+    #     debug "using existing session index: ${session_idx}"
+    #     echo "${session_idx}"
+    #     return
+    # fi
 
     # Get the session index for the session
     session_idx=$(
-        <. sqlite3 -noheader "${db_path}" "
-            SELECT MAX(session_idx) FROM commands WHERE session = '${session_id}';
+        <. sqlite3 -noheader -csv "${db_path}" "
+            SELECT id FROM sessions WHERE session = '${session_id}';
         "
     )
 
-    # If there is no session index for the session, get the most recent session
-    # index and increment it
+    # If there is no session index for the session, create one
     if ! [[ "${session_idx}" =~ ^[0-9]+$ ]]; then
+        debug "generating new session index for session: ${session_id}"
+        # Insert the session into the sessions table and return its new index
         session_idx=$(
-            <. sqlite3 -noheader "${db_path}" "
-                SELECT MAX(session_idx + 0) + 1 FROM commands;
+            <. sqlite3 -noheader -csv "${db_path}" "
+                INSERT INTO sessions (session) VALUES ('${session_id}');
+                SELECT id FROM sessions WHERE session = '${session_id}';
             "
         )
-        # Update any rows with the session id to the new session index
-        <. sqlite3 "${db_path}" "
-            UPDATE commands SET session_idx = ${session_idx} WHERE session = '${session_id}';
-        "
     fi
 
     echo "${session_idx}"
+}
+
+# @description Get a list of all unique sessions from the database
+# @usage get-sessions
+function get-sessions() {
+    local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
+
+    <. sqlite3 -noheader -csv "${db_path}" "
+        SELECT session FROM commands
+        UNION
+        SELECT session FROM sessions;
+    "
 }
 
 # @description Print a function definition all pretty-like
@@ -780,7 +797,6 @@ function __action-store() {
     [[ -z "${cmd_dir}" ]] && cmd_dir=$(pwd)
     [[ -z "${cmd_tty}" ]] && cmd_tty=$(tty)
     [[ -z "${cmd_session}" ]] && cmd_session="${BASH_SESSION_ID}"
-    [[ -z "${cmd_session_idx}" ]] && cmd_session_idx=$(get-session-index "${cmd_session}")
 
     # Store the command in the database
     db-insert -f "${DB_PATH}" \
@@ -793,7 +809,6 @@ function __action-store() {
         -t "${cmd_timestamp}" \
         -T "${cmd_tty}" \
         -S "${cmd_session}" \
-        -I "${cmd_session_idx}" \
         -- "${cmd_args[@]}"
     return ${?}
 }
@@ -1498,7 +1513,7 @@ $(print-function get-session-index _get_session_index)
 
 # Set a session identifier
 export BASH_SESSION_ID=\$(_generate_session_id)
-export BASH_SESSION_IDX=\$(_get_session_index "\${BASH_SESSION_ID}")
+#export BASH_SESSION_IDX=\$(_get_session_index "\${BASH_SESSION_ID}")
 EOF
     )
     if ${show_rc_lines}; then
@@ -1629,6 +1644,9 @@ EOF
     echo -e "Run \`\033[0;32msource '${hook_script}'\033[0m\` to enable the history hook for this session."
 }
 
+## Subcommands to fix stuff since we keep changing all the things
+################################################################################
+
 function __help-reset-idx() {
     _print-usage "[-h]"
     echo
@@ -1637,30 +1655,321 @@ function __help-reset-idx() {
 
 function __action-reset-idx() {
     local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
-    local update_sql
+    local insert_sql
 
-    # Get a list of all the sessions
-    readarray -t sessions < <(
-        <. sqlite3 -noheader -csv "${db_path}" '
-            SELECT DISTINCT session FROM commands
-        '
-    )
+    # Get a list of all the sessions from both the commands and sessions tables,
+    # sorted by the date in the session id (if present)
+    echo -n "* getting list of all sessions ... "
+    readarray -t sessions < <(get-sessions | sort -t ':' -k 2)
+    echo -e "\033[0;32mdone\033[0m"
 
-    debug "Updating ${#sessions[@]} session IDs in '${db_path}'"
-
-    # Loop over each, updating its session index
-    update_sql=$(
-        ((s_idx=1))
-        local r=$'\r'
+    # Reset the sessions table
+    echo -n "* resetting ${#sessions[@]} session indexes ... "
+    ## Build a list of INSERT statements for the sessions
+    insert_sql=$(
         for s in "${sessions[@]}"; do
-            echo "UPDATE commands SET session_idx = '$((s_idx++))' WHERE session = '${s}';"
+            echo "INSERT INTO sessions (session) VALUES ('${s}');"
         done
     )
-    if [[ -n "${DEBUG_LOG}" ]]; then
-        # It's gonna be a lot, so only show it if using a debug file log
-        debug "${update_sql}"
+    ## Delete all the sessions and re-insert them
+    <. sqlite3 "${db_path}" "
+        DROP TABLE IF EXISTS sessions;
+        CREATE TABLE sessions (
+            id INTEGER PRIMARY KEY,
+            session TEXT UNIQUE
+        );
+        ${insert_sql}
+    "
+    echo -e "\033[0;32mdone\033[0m"
+}
+
+function __help-fix-session-ids() {
+    _print-usage "[-h]"
+    echo
+    echo "Update all session IDs to be based off the tty and timestamp of the first command in the session."
+}
+
+function __action-fix-session-ids() {
+    local session sessions
+    local tty timestamp session_id
+
+    # Get a list of all the sessions
+    echo -n "* getting list of command sessions ... "
+    readarray -t sessions < <(
+        <. sqlite3 -noheader -csv "${DB_PATH}" "
+            SELECT DISTINCT session
+            FROM commands;
+        "
+    )
+    echo -e "\033[0;32mdone\033[0m"
+
+    # Loop over each session determine what the new session id should be
+    echo -n "* updating ${#sessions[@]} session IDs ... "
+    for session in "${sessions[@]}"; do
+        # If this session matches the desired format, skip it
+        [[ "${session}" =~ ^("tty"|"pts")[0-9]+":"[0-9]+"."[0-9]+$ ]] && continue
+
+        # Get the tty and timestamp of the first command in the session
+        IFS=$'\x1f' read -r tty timestamp < <(
+            <. sqlite3 -noheader -csv -separator $'\x1f' "${DB_PATH}" "
+                SELECT tty, timestamp
+                FROM commands
+                WHERE session = '${session}'
+                ORDER BY id ASC
+                LIMIT 1;
+            "
+        )
+        tty="${tty//\"/}"
+        timestamp="${timestamp//\"/}"
+
+        # Create a new session id
+        session_id=$(generate-session-id "${tty}" "${timestamp}")
+
+        # Update the session id in the database
+        <. sqlite3 "${DB_PATH}" "
+            UPDATE commands
+            SET session = '${session_id}'
+            WHERE session = '${session}';
+            UPDATE sessions
+            SET session = '${session_id}'
+            WHERE session = '${session}';
+        "
+    done
+    echo -e "\033[0;32mdone\033[0m"
+
+    # Reset the session indexes
+    __action-reset-idx
+}
+
+function __help-fix-tables() {
+    _print-usage "[-h] [-d/--drop-backups]"
+    echo
+    echo "Ensure the latest table schemas are in use."
+}
+
+function __action-fix-tables() {
+    local db_path="${DB_PATH:-${HOME}/.bash_history.sqlite3}"
+    local do_drop=false
+    local insert_sql
+    local commands_table_exists=false
+    local sessions_table_exists=false
+    local columns columns_backup columns_common
+    local columns_uncommon_sessions=() columns_uncommon_commands=()
+    local error
+    local s
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -d | --drop-backups)
+                do_drop=true
+                ;;
+            -h | --help)
+                __help-fix-tables
+                return 0
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_INVALID_OPTION}
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return ${E_INVALID_OPTION}
+                ;;
+        esac
+        shift 1
+    done
+
+    # Drop any backup tables that might be lingering
+    if ${do_drop}; then
+        <. sqlite3 "${db_path}" "DROP TABLE commands_backup;" 2>/dev/null
+        <. sqlite3 "${db_path}" "DROP TABLE sessions_backup;" 2>/dev/null
     fi
-    <. sqlite3 "${db_path}" "${update_sql}"
+
+
+    # Backup both tables if they exist
+    echo -n "* backing up tables ... "
+    error=$(
+        <. sqlite3 "${db_path}" "
+            ALTER TABLE commands RENAME TO commands_backup;
+        " 2>&1
+    )
+    if [[ ${?} -eq 0 ]]; then
+        commands_table_exists=true
+    elif [[ "${error}" =~ "there is already another table" ]]; then
+        stdbuf -oL echo -e "\033[31mfailed\033[0m"
+        echo "error: backup table already exists: commands_backup" >&2
+        echo "error: please remove the backup table before running this command" >&2
+        return ${E_TABLE_EXISTS}
+    fi
+    error=$(
+        <. sqlite3 "${db_path}" "
+            ALTER TABLE sessions RENAME TO sessions_backup;
+        " 2>&1
+    )
+    if [[ ${?} -eq 0 ]]; then
+        sessions_table_exists=true
+    elif [[ "${error}" =~ "there is already another table" ]]; then
+        stdbuf -oL echo -e "\033[31mfailed\033[0m"
+        echo "error: backup table already exists: sessions_backup" >&2
+        echo "error: please remove the backup table before running this command" >&2
+        return ${E_TABLE_EXISTS}
+    fi
+    echo -e "\033[0;32mdone\033[0m"
+
+    # Recreate both tables
+    db-setup
+
+    # Restore data from the backup tables
+    ## If a commands backup table was created, restore its data
+    if ${commands_table_exists}; then
+        echo -n "* restoring commands data ... "
+        ### Get the current columns
+        columns=$(
+            <. sqlite3 -noheader -csv "${db_path}" "
+                PRAGMA table_info(commands);
+            " | awk -F, '$2 != "id" {print $2}' | sort -u
+        )
+        ### Get backup table columns
+        columns_backup=$(
+            <. sqlite3 -noheader -csv "${db_path}" "
+                PRAGMA table_info(commands_backup);
+            " | awk -F, '$2 != "id" {print $2}' | sort -u
+        )
+        ### Determine the shared/unique columns
+        columns_common=$(
+            comm -12 <(echo "${columns}") <(echo "${columns_backup}") \
+                | xargs | tr ' ' ','
+        )
+        readarray -t columns_uncommon_commands < <(
+            comm -13 <(echo "${columns}") <(echo "${columns_backup}")
+        )
+        debug-vars columns_common columns_uncommon_commands
+        ### Copy the common columns from the backup table to the new table
+        if [[ -n "${columns_common}" ]]; then
+            <. sqlite3 "${db_path}" "
+                INSERT INTO commands (${columns_common})
+                SELECT ${columns_common}
+                FROM commands_backup;
+            " \
+                && echo -e "\033[0;32mdone\033[0m" \
+                || echo -e "\033[0;31mfailed\033[0m"
+        else
+            echo -e "\033[0;33mno common columns\033[0m"
+        fi
+    fi
+
+    ## If a sessions backup table was created, restore its data
+    if ${sessions_table_exists}; then
+        echo -n "* restoring sessions data ... "
+        ### Get the current columns
+        columns=$(
+            <. sqlite3 -noheader -csv "${db_path}" "
+                PRAGMA table_info(sessions);
+            " | awk -F, '$2 != "id" {print $2}' | sort -u
+        )
+        ### Get backup table columns
+        columns_backup=$(
+            <. sqlite3 -noheader -csv "${db_path}" "
+                PRAGMA table_info(sessions_backup);
+            " | awk -F, '$2 != "id" {print $2}' | sort -u
+        )
+        ### Determine the shared/unique columns
+        columns_common=$(
+            comm -12 <(echo "${columns}") <(echo "${columns_backup}") \
+                | xargs | tr ' ' ','
+        )
+        readarray -t columns_uncommon_sessions < <(
+            comm -13 <(echo "${columns}") <(echo "${columns_backup}")
+        )
+        debug-vars columns_common columns_uncommon_sessions
+        ### Copy the common columns from the backup table to the new table
+        if [[ -n "${columns_common}" ]]; then
+            <. sqlite3 "${db_path}" "
+                INSERT INTO sessions (${columns_common})
+                SELECT ${columns_common}
+                FROM sessions_backup;
+            " \
+                && echo -e "\033[0;32mdone\033[0m" \
+                || echo -e "\033[0;31mfailed\033[0m"
+        else
+            echo -e "\033[0;33mno common columns\033[0m"
+        fi
+    fi
+
+    ## Drop the tables if requested
+    if ${do_drop}; then
+        echo -n "* dropping backup tables ... "
+        if ${commands_table_exists}; then
+            <. sqlite3 "${db_path}" "DROP TABLE commands_backup;" \
+                || {
+                    echo -e "\033[0;31mfailed\033[0m"
+                    return ${E_ERROR}
+                }
+        fi
+        if ${sessions_table_exists}; then
+            <. sqlite3 "${db_path}" "DROP TABLE sessions_backup;" \
+                || {
+                    echo -e "\033[0;31mfailed\033[0m"
+                    return ${E_ERROR}
+                }
+        fi
+        echo -e "\033[0;32mdone\033[0m"
+    fi
+
+    # If the backup tables were created, display any removed columns and the SQL
+    # to remove the backup tables
+    ## Determine which of the steps we're going to perform
+    local show_columns=false
+    local show_commands=false
+    (
+        (${commands_table_exists} || ${sessions_table_exists}) \
+        && ! ${do_drop}
+    ) && show_commands=true
+    [[
+        ${#columns_uncommon_commands[@]} -gt 0 \
+        || ${#columns_uncommon_sessions[@]} -gt 0
+    ]]  && show_columns=true
+
+    ## If we're going to do either, print a newline
+    (${show_columns} || ${show_commands}) && echo
+
+    ## Show any removed columns
+    if [[ ${#columns_uncommon_commands[@]} -gt 0 ]]; then
+        echo "The following column${s} were removed from the commands table:"
+        printf "    "
+        for ((i=0; i<${#columns_uncommon_commands[@]}; i++)); do
+            local c="${columns_uncommon_commands[i]}"
+            ((i > 0)) && printf ", "
+            printf "\033[36m%s\033[0m" "${c}"
+        done
+        echo
+    fi
+    if [[ ${#columns_uncommon_sessions[@]} -gt 0 ]]; then
+        echo "The following column${s} were removed from the sessions table:"
+        printf "    "
+        for ((i=0; i<${#columns_uncommon_sessions[@]}; i++)); do
+            local c="${columns_uncommon_sessions[i]}"
+            ((i > 0)) && printf ", "
+            printf "\033[36m%s\033[0m" "${c}"
+        done
+        echo
+    fi
+
+    ## If we're doing both, print another newline
+    ${show_columns} && ${show_commands} && echo
+    
+    ## Show the SQL to remove the backup tables
+    s=$(${commands_table_exists} && ${sessions_table_exists} && echo "s")
+    if ${show_commands}; then
+        echo "To remove the backup table${s}, run:"
+        if ${commands_table_exists}; then
+            echo -e "    \033[32msqlite3 \"${db_path}\" \"DROP TABLE commands_backup;\"\033[0m"
+        fi
+        if ${sessions_table_exists}; then
+            echo -e "    \033[32msqlite3 \"${db_path}\" \"DROP TABLE sessions_backup;\"\033[0m"
+        fi
+    fi
 }
 
 # Just show the help
