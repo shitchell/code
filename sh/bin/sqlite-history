@@ -642,7 +642,9 @@ function print-function() {
 
 # @description Custom autopage to allow an action to disable autopaging
 function _autopage() {
-    if [[ "${__AUTOPAGE:-true}" == "false" ]]; then
+    local __autopage="${__AUTOPAGE:-true}"
+    debug "_autopage: ${__autopage}"
+    if [[ "${__autopage}" == "true" ]]; then
         autopage
     else
         cat
