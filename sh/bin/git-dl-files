@@ -111,12 +111,12 @@ function parse-args() {
     SUFFIX=""
     SED_PATTERN=""
     TAR_FILE=""
-    DO_PRESERVE_PATH=false
+    DO_PRESERVE_PATH=true
     DO_COMPRESS=false
     DO_MD5=false
     DO_OVERWRITE=false
     DO_PRESERVE_SYMLINKS=true
-    DO_UPDATE_TIMESTAMPS=false
+    DO_UPDATE_TIMESTAMPS=true
 
     # Loop over the arguments
     declare -ga FILEPATHS
