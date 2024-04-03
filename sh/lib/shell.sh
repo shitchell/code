@@ -1040,3 +1040,24 @@ function benchmark() {
     # Restore the output
     exec 9>&- 8>&- 3>&- 4>&-
 }
+
+# @description Print a function definition all pretty-like
+# @usage print-function <function name> [<new name>]
+function print-function() {
+    local f_name="${1}"
+    local f_name_new="${2:-${f_name}}"
+    local f_declare
+
+    # Ensure a function was given
+    [[ -z "${f_name}" ]] && return
+
+    # Get the function declaration and exit with an error if it doesn't exist
+    f_declare=$(declare -f "${1}" 2>/dev/null)
+    [[ -z "${f_declare}" ]] && return 1
+
+    # Print the function source, optionally renaming the function
+    awk -v name="${f_name_new}" '
+        NR == 1 { printf("function %s() {\n", name) }
+        NR > 2
+    ' <<< "${f_declare}"
+}
