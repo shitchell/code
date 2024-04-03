@@ -122,7 +122,7 @@ function ls-opts() {
                     | xargs
             )
         )
-        ls_opts+=( "${ls_file_opts[@]}" )
+        ls_opts+=( ${ls_file_opts[@]} )
     fi
 
     debug "${ls_file}: ${ls_file_opts[*]}"
@@ -137,6 +137,7 @@ function ls-opts() {
 function main() {
     parse-args "${@}" || return ${?}
 
+    debug "LS WRAPPER: $(realpath ${0})"
     debug-vars "DIRPATHS" "FILEPATHS" "LS_ALIAS_OPTS" "LS_OPTS" "DO_RECURSIVE"
 
     # Loop over the filepaths first, grouping them by directory and then running
@@ -148,6 +149,7 @@ function main() {
     local dir_files=()
 
     for filepath in "${FILEPATHS[@]}"; do
+        filepath="${filepath%/}"
         dir="${filepath%/*}"
         if [[ -n "${last_dir}" && "${dir}" != "${last_dir}" ]]; then
             dir_ls_opts=( $(ls-opts "${last_dir}") )
@@ -195,4 +197,12 @@ function main() {
 ## run #########################################################################
 ################################################################################
 
-[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # If the script is being called in a pipe, just use the default `ls` command
+    if  [[ ! -t 0 ]]; then
+        /bin/ls "${@}"
+        exit ${?}
+    else
+        main "${@}"
+    fi
+fi
