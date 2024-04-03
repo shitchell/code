@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# Fix the tmux resurrect symbolic link paths
+
+REALPATHS=(
+    /mnt/c/Users/smitchell/AppData
+    /mnt/c/Users/smitchell/code
+    /mnt/c/Users/smitchell/Customers
+    /mnt/c/Users/smitchell/Delivery
+    /mnt/c/Users/smitchell/Desktop
+    /mnt/c/Users/smitchell/Documents
+    /mnt/c/Users/smitchell/Downloads
+    /mnt/c/Users/smitchell/Movies
+    /mnt/c/Users/smitchell/Music
+    /mnt/c/Users/smitchell/Pictures
+    /mnt/c/Users/smitchell/Share
+    /mnt/c/Users/smitchell/Videos
+)
+
+# Build the sed command
+sed_command=$(
+    for path in "${REALPATHS[@]}"; do
+        name="${path##*/}"
+        echo "s|${path}|/home/guy/${name}|g"
+    done
+)
+
+RES_BEFORE=$(<~/.tmux/resurrect/last)
+sed -i "${sed_command}" ~/.tmux/resurrect/last
+RES_AFTER=$(<~/.tmux/resurrect/last)
+diff --color=always <(echo "${RES_BEFORE}") <(echo "${RES_AFTER}")
