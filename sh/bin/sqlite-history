@@ -97,6 +97,8 @@ function help-full() {
     delete                    delete database history
     clear                     clear database history
     reset-idx                 reset all session indexes
+    fix-session-ids           update all session IDs based on tty and timestamp
+    fix-tables                update tables with the latest schema
     install                   install the bash history hook
     help                      display this help message
 EOF
