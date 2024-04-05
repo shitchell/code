@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+#
+# Colorize output using git formatting / colors
+#
+# NOTE: This will only work inside of a git repo and is intended to allow for
+#       colorized output inside of custom git-scripts that make use of the
+#       built-in git colorization and current colorization settings
+
+include-source 'debug.sh'
+
+# Replace any % signs with %% to escape them, EXCEPT for the formatting escapes:
+# %C, %n, %x, %m, %w
+STRING=$(sed -E 's/%([^Cnxmlw])/%%\1/g' <<< "${*}")
+
+# Add these escape characters:
+# - %r: repo name
+# - %R: repo full path
+# - %A: git rev-parse --abbrev-ref HEAD
+# - %H: HEAD commit hash
+if [[ "${STRING}" == *"%r"* ]]; then
+    REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+    STRING="${STRING//%%r/${REPO_NAME}}"
+fi
+if [[ "${STRING}" == *"%R"* ]]; then
+    REPO_PATH=$(git rev-parse --show-toplevel)
+    STRING="${STRING//%%R/${REPO_PATH}}"
+fi
+if [[ "${STRING}" == *"%A"* ]]; then
+    ABBREV_REF=$(git rev-parse --abbrev-ref HEAD)
+    STRING="${STRING//%%A/${ABBREV_REF}}"
+fi
+if [[ "${STRING}" == *"%H"* ]]; then
+    COMMIT_HASH=$(git rev-parse --short HEAD)
+    STRING="${STRING//%%H/${COMMIT_HASH}}"
+fi
+
+debug-vars STRING
+
+git log -1 --pretty=format:"${STRING}"

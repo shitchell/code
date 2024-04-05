@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# Get the base git directory
+
+# Look for the directory in order of:
+# - GIT_BASEDIR environment variable
+# - 'git.gitDirectory' git configuration
+# - ${HOME}/code/git
+GIT_DIRECTORY="${GIT_BASEDIR}"
+if [[ -z "${GIT_DIRECTORY}" ]]; then
+    GIT_DIRECTORY=$(git config git.gitDirectory)
+fi
+if [[ -z "${GIT_DIRECTORY}" ]]; then
+    # Just use the default
+    GIT_DIRECTORY="${HOME}/code/git"
+fi
+
+# Check that the git directory exists
+if [[ ! -d "${GIT_DIRECTORY}" ]]; then
+    output=(
+        "error: could not determine git directory"
+        "try running one of the following:"
+        "    ${C_GREEN}export GIT_DIRECTORY=\${HOME}/path/to/git/dir${S_RESET}"
+        "    ${C_GREEN}git config --set git.gitDirectory \${HOME}/path/to/git/dir${S_RESET}"
+    )
+    printf "%s\n" "${output[@]}" >&2
+    exit 1
+fi
+
+echo "${GIT_DIRECTORY}"
