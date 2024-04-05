@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#
+# Pull the dotfiles repo
+
+# Check that the dotfiles repo exists
+DOTFILES_REPO=$(git base-directory)/github.com/shitchell/dotfiles
+if [[ ! -d "${DOTFILES_REPO}" ]]; then
+    echo "error: dotfiles repo does not exist at '${DOTFILES_REPO}'" >&2
+    exit 1
+fi
+
+# Pull the dotfiles repo
+cd "${DOTFILES_REPO}" || exit 1
+git echo "%C(dim)${DOTFILES_REPO}%C(reset)"
+./update.sh
+./make install

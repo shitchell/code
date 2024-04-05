@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# Pull the code repo
+
+CODE_REPO="${HOME}/code"
+if ! [[ -d "${CODE_REPO}/.git" ]]; then
+    echo "error: code repo does not exist at '${CODE_REPO}'" >&2
+    exit 1
+fi
+
+cd "${CODE_REPO}" || {
+    echo "error: could not cd to '${CODE_REPO}'" >&2
+    exit 1
+}
+
+git echo "%C(dim)${CODE_REPO}%C(reset)"
+git echo '$ %C(green)git pull%C(reset)'
+git pull || {
+    git echo '$ %C(green)git pull --rebase%C(reset)'
+    git pull --rebase || {
+        git echo '$ %C(red)git pull failed%C(reset)'
+        exit 1
+    }
+}
