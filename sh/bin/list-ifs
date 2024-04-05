@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # Determine if column is installed and, if so, if it's from util-linux or not
-column_cmd=("cat")
+column_cmd=(cat)
 if command -v column >/dev/null 2>&1; then
     if column --version 2>&1 | grep -q 'util-linux'; then
-        column_cmd=("column" "-s" $'\t' "-t")
+        column_cmd=(column -s $'\t' -t)
     else
-        column_cmd=("column" "-s" $'\t' "-t" "-n")
+        column_cmd=(column -s $'\t' -t -n)
     fi
 fi
 if command -v ip >/dev/null 2>&1; then
