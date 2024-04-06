@@ -15,6 +15,12 @@ require --is-set "QUERY" --failure-message 'usage: wordsearch <regex>'
 ! [[ "${QUERY}" =~ ^"^"  ]] && QUERY="^${QUERY}"
 ! [[ "${QUERY}" =~ "$"$ ]] && QUERY="${QUERY}$"
 
+# Try to make sure we have a value for COLUMNS
+[[ -z "${COLUMNS}" ]] && COLUMNS=$(tput cols)
+[[ -z "${COLUMNS}" ]] \
+    && echo "warning: could not detect width, defaulting to 80" >&2 \
+    && COLUMNS=80
+
 debug-vars "QUERY"
 
 readarray -t WORDS < <(
@@ -57,22 +63,65 @@ WORDS_PER_ROW=$(( (COLUMNS / (LONGEST_WORD + 2)) + 1 ))
 
 debug-vars "COLUMNS" "WORDS_PER_ROW" "LONGEST_WORD"
 
-printf '%s\n' "${WORDS[@]}" \
-    | awk -v wpr="${WORDS_PER_ROW}" '
-        {
-            if (NR % wpr == 0) {
-                print line;
-                line = "";
-            } else {
-                if (line == "") {
-                    line = $0;
-                } else {
-                    line = line "\t" $0;
+# I don't trust myself, so capture the output that way we can validate it
+# printed the correct number of words
+RESULTS=$(
+    printf '%s\n' "${WORDS[@]}" \
+        | awk -v wpr="${WORDS_PER_ROW}" \
+            -v DEBUG="${DEBUG}" -v DEBUG_LOG="${DEBUG_LOG}" '
+            # a debug function
+            function debug(msg) {
+                if (DEBUG == "true" || DEBUG == 1 || DEBUG_LOG) {
+                    # Determine the log file
+                    logfile="/dev/stderr"
+                    if (DEBUG_LOG) {
+                    logfile=DEBUG_LOG
+                    }
+
+                    # Print a timestamp, the file line number, and the message
+                    printf("[%s] (LN%03d)  %s\n", strftime("%Y-%m-%d %H:%M:%S"), NR, msg) > logfile
                 }
             }
-        }
-        END {
-            print line;
-        }    
-    ' \
-    | column -t -s $'\t'
+            BEGIN {
+                if (DEBUG || DEBUG_LOG) {
+                    debug("Starting wordsearch")
+                    debug("  wpr: " wpr)
+                }
+            }
+            {
+                debug("[NR] " NR "  [word] " $0 "  [line] " line);
+                if (NR % wpr == 0) {
+                    debug("  [mod0:print] " line);
+                    if (line) {
+                        print line "\t" $0;
+                        line = "";
+                    } else {
+                        print $0;
+                    }
+                } else {
+                    debug("  [modX]");
+                    if (line == "") {
+                        debug("    [modX:create] setting new line -- " $0);
+                        line = $0;
+                    } else {
+                        debug("    [modX:append] appending " $0 " -- " line);
+                        line = line "\t" $0;
+                    }
+                }
+            }
+            END {
+                print line;
+            }
+        '
+)
+
+# Print the results
+column -t -s $'\t' <<< "${RESULTS}"
+
+# Validate the number of words
+readarray -t PRINTED_WORDS < <(tr '\t' '\n' <<< "${RESULTS}")
+PRINTED_WORD_COUNT=${#PRINTED_WORDS[@]}
+if (( PRINTED_WORD_COUNT != ${#WORDS[@]} )); then
+    echo "error: printed ${PRINTED_WORD_COUNT} words, expected ${#WORDS[@]}" >&2
+    exit 1
+fi
