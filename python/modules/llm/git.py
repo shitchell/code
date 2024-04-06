@@ -169,20 +169,43 @@ def review_diff(
         )
     ]
 
+    # Create an *bad* response to correct
+    bad_example_diff: str = (
+        "diff --git a/foo.py b/foo.py\n"
+        "index 0123456..abcdef 100644\n"
+        "--- a/foo.py\n"
+        "+++ b/foo.py\n"
+        "@@ -11,0 +12,1 @@\n"
+        # Debug example
+        "+print('Line 1 -- Debugging code')\n"
+    )
+    bad_example_response: str = (
+        'success'
+    )
+    bad_example_correction: str = (
+        "INVALID RESPONSE. The response should have been:\n"
+        "[-11,0 +12,1] warning: debugging code found: `print('Line 1 -- "
+        "Debugging code')`\n"
+    )
+
     # Create a direct set of instructions for the model
     system_message: str = (
         "The user will provide a `git diff` output, and you are to review the "
         "diff for common issues. These include:\n"
         "* Passwords included\n"
         "* Syntax errors\n"
-        "* Hardcoded values\n"
+        "* Hardcoded integers\n"
         "* Debugging code left in (without using appropriate log/debugging "
         "functions)\n"
         "\n"
         "Each issue detected should be in the format:\n"
         "* `[diff location] error: <error message>`\n"
         "\n"
-        "There should be no commentary and no additional information provided "
+        "Tips:\n"
+        "* Uses of `pprint` or printing to stderr are often debug code.\n"
+        "* Some values must be hardcoded. Only look for integers that seem like"
+        " they should be variables.\n\n"
+        "There should be NO commentary and NO additional information provided "
         "except for the specific error messages.\n"
         "If there are no issues detected, respond with 'success'."
     )
@@ -198,10 +221,16 @@ def review_diff(
             {"role": "user", "content": example_diff},
             {"role": "assistant", "content": example_response}
         ])
+    # Add the bad example
+    messages.extend([
+        {"role": "user", "content": bad_example_diff},
+        {"role": "assistant", "content": bad_example_correction},
+        {"role": "system", "content": bad_example_response}
+    ])
     # Add the user's diff
     messages.append({"role": "user", "content": diff})
 
-    _pprint(messages, stream=_sys.stderr, width=120)
+    # _pprint(messages, width=120, stream=_sys.stderr)
 
     # Generate the review message
     response = client.chat.completions.create(
@@ -327,17 +356,17 @@ def describe_diff(
         {"role": "user", "content": diff},
     ]
 
-    # Debug the messages
-    # print("Messages:\n----", _json.dumps(messages, indent=2), "----", file=_sys.stderr)
-    print(f"SYSTEM MESSAGE\n----\n{system_message}\n\n", file=_sys.stderr)
-    print(f"EXAMPLE BASIC\n----\n{example_basic_diff}\n\n", file=_sys.stderr)
-    print(f"EXAMPLE BASIC RESPONSE\n----\n{example_basic_response}\n\n", file=_sys.stderr)
-    print(f"EXAMPLE EXTENDED\n----\n{example_extended_diff}\n\n", file=_sys.stderr)
-    print(f"EXAMPLE EXTENDED RESPONSE\n----\n{example_extended_response}\n\n", file=_sys.stderr)
-    # _pprint(messages, stream=_sys.stderr, width=120)
-    print("----", file=_sys.stderr)
-    print(diff, file=_sys.stderr)
-    return
+    # # Debug the messages
+    # # print("Messages:\n----", _json.dumps(messages, indent=2), "----", file=_sys.stderr)
+    # print(f"SYSTEM MESSAGE\n----\n{system_message}\n\n", file=_sys.stderr)
+    # print(f"EXAMPLE BASIC\n----\n{example_basic_diff}\n\n", file=_sys.stderr)
+    # print(f"EXAMPLE BASIC RESPONSE\n----\n{example_basic_response}\n\n", file=_sys.stderr)
+    # print(f"EXAMPLE EXTENDED\n----\n{example_extended_diff}\n\n", file=_sys.stderr)
+    # print(f"EXAMPLE EXTENDED RESPONSE\n----\n{example_extended_response}\n\n", file=_sys.stderr)
+    # # _pprint(messages, stream=_sys.stderr, width=120)
+    # print("----", file=_sys.stderr)
+    # print(diff, file=_sys.stderr)
+    # return
 
     # Generate the commit message
     response = client.chat.completions.create(
