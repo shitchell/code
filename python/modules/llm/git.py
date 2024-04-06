@@ -56,8 +56,6 @@ def review_diff(
     # Do the bare minimum before anything else
     if not diff:
         return False, "error: diff is empty"
-    elif len(diff) > max_size:
-        return False, f"error: diff is more than {max_size} characters"
 
     # Check that we have a key
     if not key:
@@ -236,9 +234,20 @@ def review_diff(
     response = client.chat.completions.create(
         model="gpt-4-turbo-preview",
         messages=messages,
-        temperature=0.5,
+        temperature=0.1,
     )
-    return True, response.choices[0].message.content
+    message: str = response.choices[0].message.content
+    success: bool = message == "success"
+
+    # If the diff is too large, add a warning
+    if len(diff) > max_size:
+        success = False
+        message = (
+            f"warning: diff is too large ({len(diff)} > {max_size} bytes)\n"
+            f"{message}"
+        )
+
+    return success, message
 
 def describe_diff(
     diff: str, key: str = _os.environ.get(_core.OPENAI_ENVIRON_KEY)
@@ -372,7 +381,7 @@ def describe_diff(
     response = client.chat.completions.create(
         model="gpt-4-turbo-preview",
         messages=messages,
-        temperature=0.5,
+        temperature=0.25,
     )
     return response.choices[0].message.content
 
@@ -419,6 +428,9 @@ if __name__ == "__main__":
     if args.subcommand == "diff-msg":
         print(describe_diff(args.diff))
     elif args.subcommand == "diff-review":
-        print(review_diff(args.diff, args.max_size))
+        success, response = review_diff(args.diff, args.max_size)
+        print(response)
+        if not success:
+            _sys.exit(1)
     else:
         raise ValueError(f"Invalid subcommand: {args.subcommand}")
