@@ -1,3 +1,37 @@
 #!/usr/bin/env bash
 
-tmux list-panes -a -F $'#{pane_tty}\t#{pane_id}\t#{session_name} > #{window_index}:#{window_name} > #{pane_index} (#{pane_title})'
+include-source 'debug.sh'
+include-source 'simple-argparse.sh'
+
+# Parse the arguments, providing default values
+parse-args \
+    --separator=$'\t' \
+    --show-command \
+    --show-pid \
+    --no-columns \
+    "${@}"
+
+debug-vars OPTS ARGS POSARGS
+
+# Build the command section of the format string
+COMMAND_SECTION=""
+if ${OPTS[show-pid]} || ${OPTS[show-command]}; then
+    COMMAND_SECTION+="${ARGS[separator]}"
+
+    # Add the pid and command identifiers
+    ${OPTS[show-pid]} && COMMAND_SECTION+="#{pane_pid}"
+    ${OPTS[show-pid]} && ${OPTS[show-command]} && COMMAND_SECTION+=":"
+    ${OPTS[show-command]} && COMMAND_SECTION+="#{pane_current_command}"
+fi
+
+# Build the formatting string
+FORMAT_STRING=""
+FORMAT_STRING+="#{pane_tty}${ARGS[separator]}"
+FORMAT_STRING+="#{pane_id}${ARGS[separator]}"
+FORMAT_STRING+="#{session_name} > #{window_index}:#{window_name} > "
+FORMAT_STRING+="#{pane_index}:#{pane_title}"
+FORMAT_STRING+="${COMMAND_SECTION}"
+
+# Run the tmux command
+tmux list-panes -a -F "${FORMAT_STRING}" \
+    | { ${OPTS[columns]} && column -s $'\t' -t || cat; }
