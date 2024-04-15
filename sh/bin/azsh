@@ -1522,6 +1522,22 @@ function _subcommand_list-releases() {
     echo "${releases_json}" | python -m json.tool
 }
 
+# @description List all tags in a repo
+# @usage list-tags
+function _subcommand_list-tags() {
+    local repo="${1:-${REPO}}"
+
+    local url="https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/refs?filter=tags/&api-version=6.0"
+    # use the annotatedtags url
+    # local url="https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/annotatedtags?api-version=6.0"
+    local tags_json=$(
+        curl "${url}" \
+            --silent \
+            --user ":${TOKEN}"
+    )
+    echo "${tags_json}" | python -m json.tool
+}
+
 ## main ########################################################################
 ################################################################################
 
@@ -1546,4 +1562,4 @@ function main() {
 ## run #########################################################################
 ################################################################################
 
-[ "${BASH_SOURCE[0]}" == "${0}" ] && main "${@}"
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
