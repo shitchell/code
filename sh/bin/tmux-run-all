@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# Run a command on all tmux panes that are simply running a shell
+
+include-source 'colors.sh'
+
+SHELLS=(bash zsh fish ksh xonsh)
+
+if [[ ${#} -eq 0 ]]; then
+    echo "usage: $(basename "${0}") <command> [<args> ...]" >&2
+    exit 1
+fi
+
+# Build the command string
+COMMAND_STR="${1}"
+shift 1
+[[ ${#} -gt 0 ]] && COMMAND_STR+=$(printf ' %q' "${@}")
+
+echo "> ${C_GREEN}${COMMAND_STR}${S_RESET}"
+
+# Loop over all of the panes, running the command on those with a shell
+SKIPPED=()
+TMUX_FORMAT_STR=$'#{session_name}:#{window_index}.#{pane_index}\t'
+TMUX_FORMAT_STR+='#{pane_current_command}'
+while read -r pane_id command; do
+    echo -n "- ${pane_id}"
+    for shell in "${SHELLS[@]}"; do
+        if [[ "${command}" == "${shell}" ]]; then
+        # if [[ "${command}" == "zsh" ]]; then
+            tmux send-keys -t "${pane_id}" "${COMMAND_STR}" Enter
+            echo
+            continue 2
+        fi
+    done
+    echo " ${S_DIM}(skipped: ${C_GREEN}${command}${S_RESET}${S_DIM})${S_RESET}"
+    SKIPPED+=("${pane_id}")
+done < <(tmux list-panes -a -F "${TMUX_FORMAT_STR}")
+
+if [[ ${#SKIPPED[@]} -gt 0 ]]; then
+    echo
+    echo "${S_BOLD}Skipped${S_RESET}"
+    printf -- "- %s\n" "${SKIPPED[@]}"
+fi
