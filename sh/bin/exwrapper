@@ -324,8 +324,8 @@ function get-config-sections() {
 }
 
 # Get a configuration setting for a command
-# usage: get-option [--config=<config_file>] <option> [--default=<default>] <command> <option>
-function get-option() {
+# usage: exw-option [--config=<config_file>] <option> [--default=<default>] <command> <option>
+function exw-option() {
     # Default values
     local config_file="${EXW_CONFIG}"
     local command=""
@@ -430,7 +430,7 @@ function get-option() {
 
 # Get a configuration option for the wrapped command
 function wrapper-option() {
-    get-option "${WRAPPED_COMMAND}" "${@}"
+    exw-option "${WRAPPED_COMMAND}" "${@}"
 }
 
 
