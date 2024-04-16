@@ -160,11 +160,8 @@ function debug() {
 # @description Print a string with non-printable characters escaped
 # @usage print-escaped <string>
 function print-escaped() {
-    if [[ -n "${1}" ]]; then
-        printf '%s\n' "${1}"
-    elif [[ -t 2 && ! -t 0 ]]; then
-        cat -
-    fi | awk '
+    local string="${1}"
+    awk '
         BEGIN {
             # Create a character map for non-printable characters
             for (n=0; n<256; n++) ord[sprintf("%c",n)] = n;
@@ -191,7 +188,7 @@ function print-escaped() {
                 }
             }
         }
-    '
+    ' <<< "${string}"
 }
 
 # @description Print the values of a list of variables given their names
@@ -200,7 +197,7 @@ function print-escaped() {
 function debug-vars() {
     local verbosity=${DEBUG_VERBOSITY:-1}
     local var_names=()
-    local var_name var_type var_value var_length is_set
+    local var_char var_name var_type var_value var_length is_set
     local display_type display_value
     local debug_message declare_str
     declare -n __ref
@@ -229,7 +226,9 @@ function debug-vars() {
                 esac
                 ;;
             -*)
-                while read -r -N 1 arg_char; do
+                local short_opts="${1#-}" arg_char
+                for ((i = 0; i < ${#short_opts}; i++)); do
+                    arg_char="${short_opts:i:1}"
                     case "${arg_char}" in
                         $'\n') break ;;
                         v)
@@ -240,7 +239,7 @@ function debug-vars() {
                             return 1
                             ;;
                     esac
-                done <<< "${1#-}"
+                done
                 ;;
             *)
                 var_names+=("${1}")
@@ -310,7 +309,9 @@ function debug-vars() {
                     if ((verbosity > 2)); then
                         # Expand the var_type to a more human-readable form
                         local expanded_type="" var_char
-                        while read -r -N 1 var_char; do
+                        # while read -r -N 1 var_char; do
+                        for ((i = 0; i < ${#var_type}; i++)); do
+                            var_char="${var_type:i:1}"
                             case "${var_char}" in
                                 $'\n') break ;;
                                 a) expanded_type+=",arr" ;;
@@ -325,7 +326,7 @@ function debug-vars() {
                                 -) expanded_type+=",str" ;;
                                 *) expanded_type+=",unknown" ;;
                             esac
-                        done <<< "${var_type}"
+                        done
                         display_type="${expanded_type#,}"
                     fi
                     var_info=" (${display_type}${var_length:+:${var_length}})"
