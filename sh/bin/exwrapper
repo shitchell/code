@@ -1,0 +1,456 @@
+#!/usr/bin/env bash
+#
+# A custom wrapper around shell commands that allows for custom functionality
+# via extensions.
+#
+# Setup:
+# 1. Place this script in a directory that is in your PATH.
+# 2. Create a symlink to this script with the name of a shell command you want
+#    to wrap. e.g.: `ln -s exwrapper ls` to create a wrapper around the `ls`
+#    command.
+# 3. Create extensions for the command by creating scripts in one of the
+#    EXTENSION_DIRS directories (see below)
+# 4. Ensure that the symlink is in your PATH with a higher precedence than the
+#    original command.
+#
+# Configuration:
+# - Set the EXW_CONFIG environment variable to the path of a configuration file
+#   to use. Default: $HOME/.exwrc
+# - Set the EXW_PATH environment variable to a colon separated list of
+#   directories to search for the symlinked command. Default: $HOME/.exw.d
+# - For any wrapped commands, create a directory with the name of the command in
+#   a directory specified by the EXW_PATH environment variable. e.g.:
+#     $HOME/.exw.d/ls
+# - For each command directory, create subdirectories for pre-process and
+#   post-process scripts. e.g.:
+#     $HOME/.exw.d/ls/pre-process.d
+#     $HOME/.exw.d/ls/post-process.d
+# - Create scripts in the pre-process and post-process directories with the
+#   executable bit set. Pre-process scripts will be run in alphabetical order
+#   prior to the symlinked command, and post-process scripts will be run in
+#   alphabetical order after the symlinked command. Any language can be used to
+#   write the scripts as long as the executable bit is set, but if a shell
+#   script is used, it will be sourced (i.e.: it will run in the same shell and
+#   have access to modify the environment and command arguments before it is
+#   executed).
+#
+# Environment Variables:
+# - EXW_CONFIG: the path to the configuration file. Default: $HOME/.exwrc
+# - EXW_PATH: a colon separated list of directories to search for the symlinked
+#   command. Default: $HOME/.exw.d
+#
+# Exit codes:
+# - 0: success
+# - 1000: pre-process extension failed
+# - 2000: post-process extension failed
+# - *: wrapped command exit code
+#
+#
+# Extension Environment Variables
+# -------------------------------
+#
+# Pre- and post-process extensions will have access to the following environment
+# variables and functions:
+#
+# - WRAPPED_COMMAND: the name of the command being wrapped
+# - COMMAND_ARGS: an array of arguments to be passed to the command
+# - RUN_COMMAND: a boolean that can be set to false to prevent the command from
+#   being run
+# - debug: a function that can be used to print debug messages
+# - run-cmd: a function that can be used to run the command (will set
+#   RUN_COMMAND=false to prevent the command from being run again)
+# - cmd-option: a function that can be used to get a configuration setting for
+#   the command
+#
+#
+# EXAMPLE EXTENSION
+# -----------------
+#
+# Wrap the `ls` command, and create an extension that reads a `.ls` file in the
+# current directory and applies its contents as arguments whenever `ls` is run.
+# This extension will allow you to, for example, always show invisible files on
+# a per-directory basis.
+#
+# `$HOME/.bashrc`
+#    export EXW_PATH="$HOME/.exw.d"
+#    export EXW_CONFIG="$HOME/.exwrc"
+#
+# `$HOME/.exw.d/ls/pre-process.d/00-read-dot-ls.sh`
+#    #!/usr/bin/env bash
+#    #
+#    # Read a `.ls` file in the current directory and apply its contents as args
+#
+#    if [[ -f ".ls" ]]; then
+#        readarray -t LS_ARGS < .ls
+#        if [[ ${#LS_ARGS[@]} -gt 0 ]]; then
+#            echo "[ls-wrapper] applying .ls args: ${LS_ARGS[*]}"
+#            COMMAND_ARGS+=( "${LS_ARGS[@]}" )
+#        fi
+#    fi
+#
+# $ ln -s exwrapper ls
+# $ echo "\-a" > .ls
+# $ ls
+# [ls-wrapper] applying .ls args: -a
+# .  ..  .ls  normal_file.txt
+#
+#
+# EXAMPLE SETUP
+# -------------
+#
+# Recommended directory structure is an nginx/apache style with all extensions
+# in a single directory and symlinked to the appropriate `pre-process.d` and
+# `post-process.d` directories. This allows the extensions to be checked into
+# version control and shared across multiple machines while only enabling the
+# desired extensions on a per-machine basis.
+#
+# This setup places the `exwrapper` script in the user's `bin` directory,
+# creates a symlink to it via `ln -s exwrapper ls`, and creates a directory
+# structure in the user's home directory for extensions.
+#
+# Environment:
+#   PATH="$HOME/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+#   EXW_PATH="$HOME/.exw.d:/etc/exw.d"
+#
+# File structure:
+#   $HOME/bin/ls -> exwrapper
+#   - $HOME/.exw.d/
+#     - extensions-available/
+#       - 10-read-dot-ls.sh
+#       - 20-apply-colors.sh
+#       - 00-log-command.sh
+#     - ls/
+#       - pre-process.d/
+#         - 10-read-dot-ls -> ../../extensions-available/10-read-dot-ls.sh
+#       - post-process.d/
+#        - 00-log-command -> ../../extensions-available/00-log-command.sh
+
+
+## Version #####################################################################
+
+__EXWRAPPER_VERSION="0.1.0"
+__EXWRAPPER_PATH=$(realpath "${0}")
+__EXWRAPPER_SYMLINK_PATH=$(realpath --no-symlinks "${0}")
+WRAPPED_COMMAND=$(basename "${0}")
+
+
+## Helpful Functions ###########################################################
+
+# Debug function if not already defined
+if ! declare -f debug &>/dev/null; then
+    function debug() {
+        if [[ "${DEBUG}" =~ ^"true"|"1"$ ]]; then
+            if [[ ${#} -gt 0 ]]; then
+                echo ${@} >&2
+            fi
+            return 0
+        fi
+        return 1
+    }
+fi
+
+# Function to run the specified command
+function run-cmd() {
+    if debug; then
+        # Build the command string
+        local command_str
+        command_str+=$'\033[1m'"${WRAPPED_COMMAND}"$'\033[0m '
+        if [[ ${#COMMAND_ARGS[@]} -gt 0 ]]; then
+            command_str+=$'\033[0;36m'
+            command_str+=$(printf "%q " "${COMMAND_ARGS[@]}")
+            command_str+=$'\033[0m'
+        fi
+        command_str+=$'\033[0m'
+        debug -e "running: ${command_str}"
+    fi
+    "${GIT}" "${GIT_ARGS[@]}" "${GIT_SUBCOMMAND}" "${GIT_SUBCOMMAND_ARGS[@]}"
+}
+
+# Function to get a configuration setting
+function git-option() {
+    local type
+    local option
+    local default
+    local do_wrapper=false
+    local config_args=()
+    local value
+    local exit_code=0
+
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            --type=* | --as=*)
+                type="${1#*=}"
+                ;;
+            --type | --as)
+                type="${2}"
+                shift 1
+                ;;
+            --bool | --int | --bool-or-int | --path | --expiry-date | --color)
+                type="${1#--}"
+                ;;
+            --default=* | --if-empty=*)
+                default="${1#*=}"
+                ;;
+            --default | --if-empty)
+                default="${2}"
+                shift 1
+                ;;
+            --wrapper)
+                do_wrapper=true
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                if [[ -z "${option}" ]]; then
+                    option="${1}"
+                elif [[ -z "${default}" ]]; then
+                    default="${1}"
+                else
+                    echo "error: too many arguments: ${1}" >&2
+                    return 1
+                fi
+                ;;
+        esac
+        shift 1
+    done
+
+    if [[ -z "${option}" ]]; then
+        echo "error: no option specified" >&2
+        return 1
+    fi
+
+    # Restrict the function to only "wrapper.*" options
+    if ${do_wrapper} && [[ ! "${option}" == "wrapper."* ]]; then
+        option="wrapper.${option}"
+        debug "added wrapper prefix: ${option}"
+    fi
+
+    [[ -n "${type}" ]] && config_args+=(--type="${type}")
+    config_args+=("${option}")
+
+    debug "config_args: >>> ${config_args[@]} <<<"
+
+    value=$(
+        "${GIT}" "${GIT_ARGS[@]}" config --get "${config_args[@]}" 2>/dev/null
+    )
+    exit_code=${?}
+
+    if [[ ${exit_code} -ne 0 && -n "${default}" ]]; then
+        echo "${default}"
+    elif [[ -n "${value}" ]]; then
+        echo "${value}"
+    fi
+    return ${exit_code}
+}
+
+# alias for `git-option --wrapper`
+function wrapper-option() {
+    git-option --wrapper "${@}"
+}
+
+## Find `git` ##################################################################
+
+# Find the first git executable that isn't this script
+while read -r filepath; do
+    # Get the real path to the executable
+    filepath_real=$(realpath "${filepath}")
+    # Ensure the file isn't this script
+    [[ "${filepath_real}" == "${__GIT_WRAPPER_PATH}" ]] && continue
+    GIT="${filepath_real}"
+    break
+done <<<$( which -a git)
+
+# If git is not found, we can't do shit
+if [[ -z "${GIT}" ]]; then
+    echo "error: no git binary found"
+    exit 1
+fi
+
+## Session Information #########################################################
+
+# Are we in a pipe?
+[[ -t 1 ]] && _IN_TERMINAL=true || _IN_TERMINAL=false
+debug "_IN_TERMINAL = ${_IN_TERMINAL}"
+
+# Are we in a script?
+## get the calling process arguments
+__PARENT_ARGS=$(ps -o args= "${PPID}")
+## if it contains a space, e.g. `-bash ./script.sh`, then we're in a script
+if [[ "${__PARENT_ARGS}" =~ " " ]]; then
+    _IN_SCRIPT=true
+else
+    _IN_SCRIPT=false
+fi
+debug "_IN_SCRIPT = ${_IN_SCRIPT}"
+
+## Parse Arguments #############################################################
+
+# Parse the git args, subcommand, and subcommand args
+declare -ga GIT_ARGS
+declare -ga GIT_SUBCOMMAND_ARGS
+RUN_GIT_CMD=true  # used by hooks to disable running the requested git command
+GIT_SUBCOMMAND=""
+
+# Determine the git arguments, subcommand, and subcommand arguments
+while [[ ${#} -gt 0 ]]; do
+    case ${1} in
+        # Handle all options that take no arguments
+        -h | --help | --version | --html-path | --man-path | --info-path | \
+            -p | --paginate | -P | --no-pager | --no-replace-objects | --bare | \
+            --literal-pathspecs | --glob-pathspecs | --noglob-pathspecs | \
+            --icase-pathspecs | --no-optional-locks | --no-renames | --exec-path*)
+            debug "no arg: ${1}"
+            GIT_ARGS+=("${1}")
+            shift 1
+            ;;
+
+        # Handle all options that optionally take an argument
+        --git-dir* | --work-tree* | --namespace* | --super-prefix* | \
+            --config-env* | --list-cmds*)
+            debug "arg optional: ${1}"
+            # Determine if the argument contains an equals sign
+            if [[ "${1}" =~ = ]]; then
+                # If it does, then there is no 2nd argument
+                GIT_ARGS+=("${1}")
+                shift 1
+            else
+                # If it doesn't, then there is a 2nd argument to store
+                GIT_ARGS+=("${1}" "${2}")
+                shift 2
+            fi
+            ;;
+
+        # Handle all options that require an argument
+        -C | -c)
+            debug "arg required: ${1}"
+            GIT_ARGS+=("${1}" "${2}")
+            shift 2
+            ;;
+
+        *)
+            # This is the subcommand -- store it and the rest of the args
+            GIT_SUBCOMMAND="${1}"
+            shift 1
+            GIT_SUBCOMMAND_ARGS=("${@}")
+            debug "subcommand: ${GIT_SUBCOMMAND}"
+            debug "subcommand args (${#@}):$(printf " '%s'" "${GIT_SUBCOMMAND_ARGS[@]}")"
+            break
+            ;;
+    esac
+    debug "git args (${#@}):$(printf " '%s'" "${GIT_ARGS[@]}")"
+done
+
+## Behavior ####################################################################
+
+# Determine if we should exit on pre-hook failure
+EXIT_ON_FAILURE=$(wrapper-option --as=bool --default=false exitOnFailure)
+debug "exit on failure: ${EXIT_ON_FAILURE}"
+
+# Determine if we should show pre-/post-process script names
+SHOW_SCRIPT_NAME=$(wrapper-option --as=bool --default=false showScriptName)
+debug "show script name: ${SHOW_SCRIPT_NAME}"
+
+# Determine if we should use colors
+COLOR_CONFIG=$(git-option --default=auto ui.color)
+debug "color config: ${COLOR_CONFIG}"
+case "${COLOR_CONFIG}" in
+    always | true)
+        USE_COLOR="true"
+        ;;
+    never | false)
+        USE_COLOR="false"
+        ;;
+    auto)
+        ${_IN_TERMINAL} && USE_COLOR="true" || USE_COLOR="false"
+        ;;
+    *)
+        USE_COLOR="false"
+        ;;
+esac
+debug "use color: ${USE_COLOR}"
+
+## Var Setup ###################################################################
+
+GIT_EXIT_CODE=0
+PRE_EXIT_CODE=0
+POST_EXIT_CODE=0
+
+## Pre-process #################################################################
+
+# Do stuff before running the git command
+debug "begin pre-processing"
+shopt -s nullglob  # don't fail if glob patterns don't match anything
+for filepath in "${HOME}/.git.d/pre-process.d/${GIT_SUBCOMMAND,,}"[_.-]*sh "${HOME}/.git.d/pre-process.d/"[0-9]*.sh; do
+    debug "sourcing pre-process script: ${filepath}"
+    if [[ "${SHOW_SCRIPT_NAME}" == "true" ]]; then
+        filename=$(basename "${filepath}" | sed -E 's/\.[^.]+$//')
+        # Run the script and print output in the format:
+        #   <filename>: error: <stderr>
+        #   <filename>: <stdout>
+        source "${filepath}" \
+            1> >(awk -v filename="${filename}" '{print filename ": " $0}') \
+            2> >(awk -v filename="${filename}" '{print filename ": error: " $0}')
+        PRE_EXIT_CODE=${?}
+    else
+        source "${filepath}"
+        PRE_EXIT_CODE=${?}
+    fi
+
+    if [[ ${PRE_EXIT_CODE} -ne 0 ]]; then
+        echo "pre-process script '$(dirname ${filepath})' failed with exit code ${PRE_EXIT_CODE}" >&2
+        if ${EXIT_ON_FAILURE}; then
+            exit ${PRE_EXIT_CODE}
+        fi
+    fi
+done
+shopt -u nullglob
+
+## Run git #####################################################################
+
+# Run the git command if requested
+if [[ "${RUN_GIT_CMD}" == "true" ]]; then
+    run-git-cmd
+    GIT_EXIT_CODE=${?}
+    debug "git command exited with ${GIT_EXIT_CODE}"
+    if [[ ${GIT_EXIT_CODE} -ne 0 ]]; then
+        debug "git command failed"
+        if ${EXIT_ON_FAILURE}; then
+            exit ${GIT_EXIT_CODE}
+        fi
+    fi
+fi
+
+## Post-process ################################################################
+
+# Do other stuff after running the git command
+debug "begin post-processing"
+shopt -s nullglob  # don't fail if glob patterns don't match anything
+for filepath in "${HOME}/.git.d/post-process.d/${GIT_SUBCOMMAND,,}"[_.-]*sh "${HOME}/.git.d/post-process.d/"[0-9]*.sh; do
+    debug "sourcing post-process script: ${filepath}"
+    script_name=$(basename "${filepath}" | sed -E 's/\.[^.]+$//')
+    if [[ "${SHOW_SCRIPT_NAME}" == "true" ]]; then
+        # Run the script and print output in the format:
+        #   <filename>: error: <stderr>
+        #   <filename>: <stdout>
+        {
+            source "${filepath}" 2>&3 \
+                | awk -v script_name="${script_name}" '{print script_name ": error: " $0}' >&2
+        } 3>&1 1>&2 \
+            | awk -v script_name="${script_name}" '{print script_name ": " $0}'
+    else
+        source "${filepath}"
+    fi
+
+    POST_EXIT_CODE=${?}
+    if [[ ${POST_EXIT_CODE} -ne 0 ]]; then
+        echo "post-process script '${script_name}' failed with exit code ${POST_EXIT_CODE}" >&2
+        if ${EXIT_ON_FAILURE}; then
+            exit ${POST_EXIT_CODE}
+        fi
+    fi
+done
+shopt -u nullglob
+
+exit ${GIT_EXIT_CODE}
