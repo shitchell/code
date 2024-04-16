@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#
+# Show video info using ffprobe
+
+ffprobe -v quiet -print_format csv=p=1:nk=0:s='|' -show_format -show_streams "${1}"

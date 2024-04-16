@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# Show video info using ffprobe
+
+KEY_SEPARATOR="__"
+
+ffprobe -v quiet -print_format flat=s=. -show_format -show_streams "${1}" \
+    | awk -v sep="${KEY_SEPARATOR}" '{
+        key = $0;
+        sub(/=.*/, "", key);
+        gsub(/\./, sep, key);
+
+        value = $0;
+        sub(/^[^=]+=/, "", value);
+
+        print key "=" value;
+    }'
