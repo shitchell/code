@@ -253,6 +253,9 @@ function get-config-sections() {
         echo "error: no sections specified" >&2
         return 1
     fi
+    if [[ ! -r "${config_file}" ]]; then
+        return 1
+    fi
 
     debug-vars config_file sections do_unique do_show_sections
 
