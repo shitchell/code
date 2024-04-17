@@ -2,17 +2,22 @@
 #
 # Get the base git directory
 
+DEFAULT_GIT_DIRECTORY="${HOME}/code/git"
+
 # Look for the directory in order of:
 # - GIT_BASEDIR environment variable
 # - 'git.gitDirectory' git configuration
 # - ${HOME}/code/git
+## env
 GIT_DIRECTORY="${GIT_BASEDIR}"
+## git config
 if [[ -z "${GIT_DIRECTORY}" ]]; then
     GIT_DIRECTORY=$(git config git.gitDirectory)
 fi
+## default
 if [[ -z "${GIT_DIRECTORY}" ]]; then
     # Just use the default
-    GIT_DIRECTORY="${HOME}/code/git"
+    GIT_DIRECTORY="${DEFAULT_GIT_DIRECTORY}"
 fi
 
 # Check that the git directory exists
