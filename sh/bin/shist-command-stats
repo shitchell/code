@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#
+# Show `shist` command stats
+
+shist --since "6 months ago" --format "%c" "${@}" \
+    | sort \
+    | sed -E 's/^[^ ]+=[^ ]+ //; s/ .*//' \
+    | sort \
+    | uniq -c \
+    | sort -rn \
+    | less
