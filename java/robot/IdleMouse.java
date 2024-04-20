@@ -49,6 +49,7 @@ public class IdleMouse
         int xOffset = 1;
         int yOffset = 1;
         int loopDuration = -1;
+        boolean runForever = true;
         int remainingTime = 0;
         String remainingTimeStr = "";
         long startTime = System.currentTimeMillis();
@@ -212,6 +213,9 @@ public class IdleMouse
             )
         );
 
+        // Set `runForever` to true if loopDuration is -1
+        runForever = (loopDuration == -1) ? true : false;
+
         // Create an instance of the IdleMouse class
         idleMouse = new IdleMouse(idleTime, xOffset, yOffset);
 
@@ -236,6 +240,14 @@ public class IdleMouse
             // mouse.
             pointerInfo = IdleMouse.waitForMouseMovement(idleTime);
 
+            // If this is the first run, lastPointerInfo will be null, so set it
+            // to the current pointer info and continue
+            if (lastPointerInfo == null)
+            {
+                lastPointerInfo = pointerInfo;
+                continue;
+            }
+
             // Check if we got mouse coordinates or if the mouse was idle for
             // the entire idleTime
             remainingTime = (int) (loopDuration - (System.currentTimeMillis() - startTime) / 1000);
@@ -243,17 +255,23 @@ public class IdleMouse
             if (pointerInfo == null)
             {
                 // Mouse is idle! Print a message and do the jiggle wiggle
+                if (!runForever) {
+                    System.out.printf("[%s]  ", remainingTimeStr);
+                }
                 System.out.printf(
-                    "[%s]  %sMouse is idle, jiggling%s%n",
-                    remainingTimeStr, C_IDLE, S_RESET
+                    "%sMouse is idle, jiggling%s%n",
+                    C_IDLE, S_RESET
                 );
                 idleMouse.jiggleMouse(xOffset, yOffset);
             } else {
                 // The mouse moved! Print the coordinates and continue
                 StringBuilder mouseMovementStr = new StringBuilder();
-                mouseMovementStr.append("[");
-                mouseMovementStr.append(remainingTimeStr);
-                mouseMovementStr.append("]  ");
+                if (!runForever) {
+                    // Add some info about the remaining time
+                    mouseMovementStr.append("[");
+                    mouseMovementStr.append(remainingTimeStr);
+                    mouseMovementStr.append("]  ");
+                }
                 mouseMovementStr.append(C_MOVE);
                 mouseMovementStr.append("Mouse moved ");
                 // If we have old pointer info, add a "from" location
@@ -310,7 +328,7 @@ public class IdleMouse
             {
                 remainingTime = (int) (loopDuration - (System.currentTimeMillis() - startTime) / 1000);
             }
-        } while (loopDuration == -1 || remainingTime > 0);
+        } while (runForever || remainingTime > 0);
     }
 
     public static PointerInfo waitForMouseMovement(int timeout)
@@ -386,9 +404,7 @@ public class IdleMouse
             try
             {
                 Thread.sleep(250);
-            }
-            catch (InterruptedException e)
-            {
+            } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         } while (System.currentTimeMillis() - lastTime < idleTime);
@@ -406,6 +422,8 @@ public class IdleMouse
         int x = MouseInfo.getPointerInfo().getLocation().x;
         int y = MouseInfo.getPointerInfo().getLocation().y;
         this.robot.mouseMove(x + xOffset, y + yOffset);
+        this.robot.mouseMove(x - xOffset, y - yOffset);
+        this.robot.mouseMove(x, y);
     }
 
     public void jiggleMouse(int offset)
