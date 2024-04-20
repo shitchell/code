@@ -2,7 +2,7 @@
 
 UNAME=$(uname -a)
 
-case "${unameOut}" in
+case "${UNAME}" in
     *Microsoft*)  OS="WSL";; # WSL must be first since it includes Linux, too
     *microsoft*)  OS="WSL2";; 
     Linux*)       OS="Linux";;
@@ -10,7 +10,7 @@ case "${unameOut}" in
     CYGWIN*)      OS="Cygwin";;
     MINGW*)       OS="Windows";; 
     *Msys)        OS="Windows";;
-    *)            OS="UNKNOWN:${unameOut}"
+    *)            OS="UNKNOWN:${UNAME}"
 esac
 
 if [[ "${OS}" == "Mac" ]] && sysctl -n machdep.cpu.brand_string | grep -q 'Apple M1'; then
