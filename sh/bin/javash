@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+#
+# Compile and run a java program. Allows writing java classes with a shebang so
+# that they can be run as normal shell scripts.
 
 # require javac
 if ! command -v javac >/dev/null 2>&1; then
