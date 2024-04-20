@@ -312,12 +312,9 @@ function __action-_test() {
 function main() {
     parse-args "${@}" || return ${?}
 
-    local exit_code=${E_SUCCESS}
+    debug-vars ACTION ACTION_ARGS DO_COLORS DO_SILENT
 
-    # Set up colors if requested
-    if ${DO_COLORS}; then
-        setup-colors
-    fi
+    local exit_code=${E_SUCCESS}
 
     # Find the action function
     local action_func="__action-${ACTION}"
