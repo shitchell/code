@@ -1,4 +1,5 @@
-awk -v DEBUG="${DEBUG}" -v DEBUG_LOG="${DEBUG_LOG}" '
+awk -v pipe=$([[ -t 1 ]] && echo y) -v dim=$'\033[2m' -v rst=$'\033[0m' \
+    -v DEBUG="${DEBUG}" -v DEBUG_LOG="${DEBUG_LOG}" '
     # a debug function
     function debug(msg) {
         if (DEBUG == "true" || DEBUG == 1 || DEBUG_LOG) {
@@ -9,7 +10,13 @@ awk -v DEBUG="${DEBUG}" -v DEBUG_LOG="${DEBUG_LOG}" '
             }
 
             # Print a timestamp, the file line number, and the message
-            printf("[%s] (LN%03d)  %s\n", strftime("%Y-%m-%d %H:%M:%S"), NR, msg) > logfile
+            printf("%s[%s] (%s:LN%03d)  %s%s\n",
+                   dim, strftime("%Y-%m-%d %H:%M:%S"), FILENAME, NR, msg, rst) > logfile
+            fflush();
         }
     }
-'
+    {
+        debug("this is a debug statement");
+        print;
+    }
+' "${@}"
