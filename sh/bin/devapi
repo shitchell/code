@@ -336,7 +336,8 @@ function api-request() {
     [[ -z "${method}" ]] && method="GET"
 
     # Build the URL
-    local url="${URL_PROTOCOL}://${URL_DOMAIN}:${URL_PORT}/api/${VERSION}"
+    local url="${URL_PROTOCOL}://${URL_DOMAIN}:${URL_PORT}"
+    [[ -n "${VERSION}" ]] && url+="/api/${VERSION}"
     if [[ -n "${endpoint}" ]]; then
         endpoint="${endpoint#/}"
         url+="/${endpoint}"
