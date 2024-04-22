@@ -134,7 +134,7 @@ __EXWRAPPER_NAME=$(basename "${__EXWRAPPER_PATH}")
 __EXWRAPPER_SYMLINK_PATH=$(realpath --no-symlinks "${0}")
 WRAPPED_COMMAND=$(basename "${0}")
 WRAPPED_COMMAND_ARGS=( "${@}" )
-COMMAND_PATH=""
+WRAPPED_COMMAND_PATH=""
 EXW_CONFIG="${EXW_CONFIG:-$HOME/.exwrc}"
 EXW_PATH="${EXW_PATH:-$HOME/.exw.d:/etc/exw.d}"
 IFS=: read -r -a EXW_PATHS <<< "${EXW_PATH}"
@@ -174,7 +174,7 @@ fi
 function run-cmd() {
     local command command_args
     if [[ ${#} -eq 0 ]]; then
-        command="${COMMAND_PATH}"
+        command="${WRAPPED_COMMAND_PATH}"
         command_args=( "${WRAPPED_COMMAND_ARGS[@]}" )
     else
         command="${1}"
@@ -457,17 +457,17 @@ while read -r filepath; do
     # Ensure the file isn't this script
     [[ "${filepath_real}" == "${__EXWRAPPER_SYMLINK_PATH}" ]] && continue
     [[ "${filepath_real}" == "${__EXWRAPPER_PATH}" ]] && continue
-    COMMAND_PATH="${filepath_real}"
+    WRAPPED_COMMAND_PATH="${filepath_real}"
     break
 done <<< $(which -a "${WRAPPED_COMMAND}")
 
 # If an original command was not found, we can't do shit
-if [[ -z "${COMMAND_PATH}" ]]; then
+if [[ -z "${WRAPPED_COMMAND_PATH}" ]]; then
     echo "${__EXWRAPPER_NAME}: error: no executable found for '${WRAPPED_COMMAND}'" >&2
     exit 1
 fi
 
-debug-vars COMMAND_PATH
+debug-vars WRAPPED_COMMAND_PATH
 
 
 ## Session Information #########################################################
