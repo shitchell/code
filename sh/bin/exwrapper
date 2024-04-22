@@ -140,6 +140,16 @@ EXW_PATH="${EXW_PATH:-$HOME/.exw.d:/etc/exw.d}"
 IFS=: read -r -a EXW_PATHS <<< "${EXW_PATH}"
 
 
+## Validation ##################################################################
+
+# Ensure this is being run as a symlink
+if [[ "${__EXWRAPPER_PATH}" == "${__EXWRAPPER_SYMLINK_PATH}" ]]; then
+    echo "${__EXWRAPPER_NAME}: error: this script must be run via a symlink" >&2
+    echo "eg: \`ln -s ${__EXWRAPPER_PATH} ~/bin/comm\`" >&2
+    exit 1
+fi
+
+
 ## Helpful Functions ###########################################################
 
 # Debug function if not already defined
@@ -572,8 +582,8 @@ for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
         # we'll be sourcing it or running it as a command
         hook_cmd=()
 
-        # Check if the file is a bash script
-        verb="running"
+        # If the file is a bash script, source it, else run it
+        verb=""
         if [[ "${filepath}" == *.sh ]]; then
             verb="sourcing"
             hook_cmd=(source "${filepath}")
@@ -592,15 +602,15 @@ for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
             #   <filename>: <stdout>
             debug "${verb} pre-process script: ${filepath}"
             run-cmd "${hook_cmd[@]}" \
-                1> >(awk -v filename="${filename}" '{print filename ": " $0}') \
-                2> >(awk -v filename="${filename}" '{print filename ": error: " $0}')
+                1> >(awk -v fn="${pretty_name}" '{print fn ": " $0}') \
+                2> >(awk -v fn="${pretty_name}" '{print fn ": error: " $0}')
             PRE_EXIT_CODE=${?}
         else
             run-cmd "${hook_cmd[@]}"
         fi
 
         if [[ ${PRE_EXIT_CODE} -ne 0 ]]; then
-            echo "pre-process script '$(dirname ${filepath})' failed with exit code ${PRE_EXIT_CODE}" >&2
+            echo "pre-process script '$(dirname "${filepath}")' failed with exit code ${PRE_EXIT_CODE}" >&2
             if ${EXIT_ON_FAILURE}; then
                 exit ${PRE_EXIT_CODE}
             fi
@@ -662,15 +672,15 @@ for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
             #   <filename>: <stdout>
             debug "${verb} post-process script: ${filepath}"
             run-cmd "${hook_cmd[@]}" \
-                1> >(awk -v filename="${filename}" '{print filename ": " $0}') \
-                2> >(awk -v filename="${filename}" '{print filename ": error: " $0}')
+                1> >(awk -v fn="${pretty_name}" '{print fn ": " $0}') \
+                2> >(awk -v fn="${pretty_name}" '{print fn ": error: " $0}')
             POST_EXIT_CODE=${?}
         else
             run-cmd "${hook_cmd[@]}"
         fi
 
         if [[ ${POST_EXIT_CODE} -ne 0 ]]; then
-            echo "post-process script '$(dirname ${filepath})' failed with exit code ${POST_EXIT_CODE}" >&2
+            echo "post-process script '$(dirname "${filepath}")' failed with exit code ${POST_EXIT_CODE}" >&2
             if ${EXIT_ON_FAILURE}; then
                 exit ${POST_EXIT_CODE}
             fi
