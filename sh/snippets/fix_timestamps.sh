@@ -36,6 +36,8 @@ echo $'1:23:40\n1:23' \
         }
     }'
 
+# convert seconds to HH:MM:SS
+echo '500' | date -d@34 -u +"%H:%M:%S"
 
 # fix YT timestamps
 echo $'1:23:40\nfoo bar\n1:23\nanother line' \
