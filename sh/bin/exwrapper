@@ -517,6 +517,14 @@ case "${COLOR_CONFIG}" in
 esac
 debug "use color: ${USE_COLOR}"
 
+# Check whether we should search the current directory for .exw.d directories
+SEARCH_CURRENT_DIR=$(wrapper-option --as=bool --default=true searchCurrentDir)
+debug "search current dir: ${SEARCH_CURRENT_DIR}"
+if ${SEARCH_CURRENT_DIR}; then
+    EXW_PATHS=("./.exw.d" "${EXW_PATHS[@]}")
+fi
+debug-vars EXW_PATHS
+
 
 ## Colors ######################################################################
 
@@ -553,6 +561,12 @@ if ${USE_COLOR}; then
     S_HIDDEN=$'\033[8m'  # not widely supported
     S_STRIKETHROUGH=$'\033[9m'  # not widely supported
     S_DEFAULT=$'\033[10m'
+else
+    unset C_BLACK C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE C_RGB \
+          C_DEFAULT_FG C_BLACK_BG C_RED_BG C_GREEN_BG C_YELLOW_BG C_BLUE_BG \
+          C_MAGENTA_BG C_CYAN_BG C_WHITE_BG C_RGB_BG C_DEFAULT_BG S_RESET \
+          S_BOLD S_DIM S_ITALIC S_UNDERLINE S_BLINK S_BLINK_FAST S_REVERSE \
+          S_HIDDEN S_STRIKETHROUGH S_DEFAULT
 fi
 
 
@@ -570,6 +584,11 @@ RUN_COMMAND=true
 debug "begin pre-processing"
 shopt -s nullglob  # don't fail if glob patterns don't match anything
 for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
+    if ! [[ -d "${EXW_PATH_PART}/${WRAPPED_COMMAND}" ]]; then
+        debug "skipping non-existent directory: ${EXW_PATH_PART}/${WRAPPED_COMMAND}"
+        continue
+    fi
+
     pre_process_dir="${EXW_PATH_PART}/${WRAPPED_COMMAND}/pre-process.d"
     for filepath in "${pre_process_dir}"/*; do
         # Check if the file is executable
