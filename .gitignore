@@ -1,3 +1,11 @@
+# backups and suchness
+*.bak
+*.orig
+*.ORIG
+
+# local code folders
+/*/local
+
 # folders
 /tutor/*
 /gitish/
@@ -135,7 +143,6 @@ dist/
 *.msm
 *.msp
 *.txz
-
 
 ### KEEP
 # .keep files
