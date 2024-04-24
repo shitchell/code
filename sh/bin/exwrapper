@@ -135,8 +135,8 @@ __EXWRAPPER_SYMLINK_PATH=$(realpath --no-symlinks "${0}")
 WRAPPED_COMMAND=$(basename "${0}")
 WRAPPED_COMMAND_ARGS=( "${@}" )
 WRAPPED_COMMAND_PATH=""
-EXW_CONFIG="${EXW_CONFIG:-$HOME/.exwrc}"
-EXW_PATH="${EXW_PATH:-$HOME/.exw.d:/etc/exw.d}"
+EXW_CONFIG="${EXW_CONFIG:-${HOME}/.exwrc}"
+EXW_PATH="${EXW_PATH:-${HOME}/.exw.d:/etc/exw.d}"
 IFS=: read -r -a EXW_PATHS <<< "${EXW_PATH}"
 
 
@@ -241,7 +241,7 @@ function get-config-sections() {
             -s | --show-sections)
                 do_show_sections=true
                 ;;
-            -SS | --no-show-sections)
+            -S | --no-show-sections)
                 do_show_sections=false
                 ;;
             -*)
@@ -423,7 +423,7 @@ function exw-option() {
             return 1
         fi
     elif [[ "${type}" == "bool" ]]; then
-        # Allow 0, 1, true, false, yes, no and normalize it to "true" or "false"
+        # Allow 0, 1, true, false, yes, no / normalize it to "true" or "false"
         case "${value,,}" in
             0 | false | no)
                 value="false"
@@ -459,7 +459,7 @@ while read -r filepath; do
     [[ "${filepath_real}" == "${__EXWRAPPER_PATH}" ]] && continue
     WRAPPED_COMMAND_PATH="${filepath_real}"
     break
-done <<< $(which -a "${WRAPPED_COMMAND}")
+done < <(which -a "${WRAPPED_COMMAND}")
 
 # If an original command was not found, we can't do shit
 if [[ -z "${WRAPPED_COMMAND_PATH}" ]]; then
@@ -553,6 +553,12 @@ if ${USE_COLOR}; then
     S_HIDDEN=$'\033[8m'  # not widely supported
     S_STRIKETHROUGH=$'\033[9m'  # not widely supported
     S_DEFAULT=$'\033[10m'
+else
+    unset C_BLACK C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE C_RGB \
+          C_DEFAULT_FG C_BLACK_BG C_RED_BG C_GREEN_BG C_YELLOW_BG C_BLUE_BG \
+          C_MAGENTA_BG C_CYAN_BG C_WHITE_BG C_RGB_BG C_DEFAULT_BG S_RESET \
+          S_BOLD S_DIM S_ITALIC S_UNDERLINE S_BLINK S_BLINK_FAST S_REVERSE \
+          S_HIDDEN S_STRIKETHROUGH S_DEFAULT
 fi
 
 
