@@ -22,7 +22,7 @@
 #   DEBUG=1   debug error "foo bar" // will print in red
 #   DEBUG=1   debug 2 error "foo bar" // will not print
 #   DEBUG=2   debug 2 error "foo bar" // will print in red
-function debug() {
+function debug() (
     local debug_file  # the file to write messages to
     local debug_level  # the debug level of this message
     local timestamp  # the timestamp of this message
@@ -31,6 +31,9 @@ function debug() {
     local line_number  # the line number of the debug call in the calling script
     local line_loc  # the script, function, and line number of the debug call
     local text_color  # the color to use for the debug message
+
+    ## Ensure stdin is never tampered with or damaged
+    exec 0</dev/null # close stdin
 
     # if DEBUG and DEBUG_LOG are not set, return
     if [[ -z "${DEBUG}" && -z "${DEBUG_LOG}" ]]; then
@@ -149,17 +152,18 @@ function debug() {
                 '{
                     printf "%s %s -- %s%s%s\n", timestamp, line_loc, text_color, $0, text_color_end;
                 }' \
-            | dd of="${debug_file}" conv=notrunc oflag=append status=none
+            >>"${debug_file}"
+            # | dd of="${debug_file}" conv=notrunc oflag=append status=none
             # ^^^ this is a hack to avoid redirect errors where `debug` consumes
             # and obliterates the output of the command it is called from
     else
         return 1
     fi
-}
+)
 
 # @description Print a string with non-printable characters escaped
 # @usage print-escaped <string>
-function print-escaped() {
+function print-escaped() (
     local string="${1}"
     awk '
         BEGIN {
@@ -189,7 +193,7 @@ function print-escaped() {
             }
         }
     ' <<< "${string}"
-}
+)
 
 # @description Print the values of a list of variables given their names
 # @usage debug-vars <var1> <var2> ...
