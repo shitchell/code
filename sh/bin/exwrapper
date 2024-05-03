@@ -179,10 +179,11 @@ function is-bash() {
 
     # Check the shebang
     shebang=$(head -n 1 "${filepath}")
+    shebang_regex='^#!.*[ /]bash(" ".*)?$'
     if [[ 
         "${shebang}" == "#!/bin/bash"
         || "${shebang}" == "#!/usr/bin/env bash"
-        || "${shebang}" =~ ^"#!".*[ /]bash(" ".*)?$
+        || "${shebang}" =~ ${shebang_regex}
     ]]; then
         is_bash=true
     else
