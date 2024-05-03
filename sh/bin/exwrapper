@@ -854,4 +854,4 @@ for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
 done
 shopt -u nullglob
 
-exit ${GIT_EXIT_CODE}
+exit ${COMMAND_EXIT_CODE}
