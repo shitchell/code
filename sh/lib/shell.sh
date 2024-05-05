@@ -1061,3 +1061,40 @@ function print-function() {
         NR > 2
     ' <<< "${f_declare}"
 }
+
+# @description Split a quoted string into an array (xargs quoting applies)
+# @usage split-quoted <quoted string> [<array name>]
+# @example
+#     $ split-quoted "one two 'three four' five" NUMBER_ARRAY
+#     $ declare -p NUMBER_ARRAY
+#     declare -a NUMBER_ARRAY=([0]="one" [1]="two" [2]="three four" [3]="five")
+function split-quoted() {
+    local quoted="${1}"
+    local varname="${2:-SPLIT_ARRAY}"
+    local lines
+    local err_msg exit_code=0
+
+    # Link the local `arr` to the specified variable name
+    declare -n arr="${varname}"
+
+    # Split the quoted string into lines
+    if lines=$(xargs -n1 printf '%s\n' <<< "${quoted}" 2>&1); then
+        # Read the lines into the array
+        readarray -t arr <<< "${lines}"
+
+        # Print the array
+        printf '%s\n' "${arr[@]}"
+    else
+        exit_code=1
+        # Look for the error
+        err_msg=$(grep '^xargs: .*' <<< "${lines}")
+        err_msg="${err_msg#xargs: }"
+        err_msg="${err_msg%%;*}"
+        echo "error: ${err_msg}" >&2
+    fi
+
+    # Unlink the local `arr`
+    unset -n arr
+
+    return ${exit_code}
+}
