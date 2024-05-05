@@ -224,7 +224,7 @@ fi
 
 ## Helpful Functions ###########################################################
 
-# Debug function if not already defined
+# Debug functions if not already defined
 if ! declare -f debug &>/dev/null; then
     function debug() {
         if [[ "${DEBUG}" =~ ^"true"|"1"$ ]]; then
