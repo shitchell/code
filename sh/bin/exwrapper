@@ -46,6 +46,45 @@
 # - *: wrapped command exit code
 #
 #
+# Configuration File
+# ------------------
+#
+# The configuration file is in the format:
+#  [*]
+#    global_setting_1 = value
+#  [command]
+#    # a comment
+#    command_setting_1 = value
+#
+# Extensions can use the `wrapper-option` function to get configuration settings
+# that alter their behavior.
+# - usage: wrapper-option [--as=bool|int|string] [--default=<default>] <option>
+#
+# Built-in configuration options:
+# - color (string | bool)
+#   - always | on: always use colors
+#   - never | off: never use colors
+#   - auto: use colors if the output is a terminal
+# - disabled (bool)
+#   - true: disable extensions, only run the wrapped command
+#   - false: run extensions and the wrapped command
+# - errorsOnly (bool)
+#   - true: only show stderr from extensions
+#   - false: show both stdout and stderr from extensions
+# - exitOnFailure (bool)
+#   - true: if any extension fails, exit immediately with its exit code
+#   - false: continue running extensions and the wrapped command
+# - searchCurrentDir (bool)
+#   - true: search the current directory for .exw.d directories
+#   - false: only search the directories specified in EXW_PATH
+# - showScriptName (bool)
+#   - true: prefix extension output with the name of the script
+#   - false: do not prefix extension output with the name of the script
+# - silent (bool)
+#   - true: suppress all output from extensions
+#   - false: show output from extensions
+#
+#
 # Extension Environment Variables
 # -------------------------------
 #
@@ -53,14 +92,19 @@
 # variables and functions:
 #
 # - WRAPPED_COMMAND: the name of the command being wrapped
-# - COMMAND_ARGS: an array of arguments to be passed to the command
+# - WRAPPED_COMMAND_PATH: the path to the command being wrapped
+# - WRAPPED_COMMAND_ARGS: an array of arguments to be passed to the command
 # - RUN_COMMAND: a boolean that can be set to false to prevent the command from
-#   being run
+#   being run (pre-process only)
+# - COMMAND_EXIT_CODE: the exit code of the wrapped command (post-process only)
 # - debug: a function that can be used to print debug messages
 # - run-cmd: a function that can be used to run the command (will set
-#   RUN_COMMAND=false to prevent the command from being run again)
-# - cmd-option: a function that can be used to get a configuration setting for
-#   the command
+# - wrapper-option: a function that can be used to get a configuration setting
+#   for the wrapped command
+#
+# The $WRAPPED_COMMAND_PATH and $WRAPPED_COMMAND_ARGS variables can be modified
+# by pre-process scripts to change the command that is run and/or the arguments
+# that are passed to it.
 #
 #
 # EXAMPLE EXTENSION
@@ -68,8 +112,8 @@
 #
 # Wrap the `ls` command, and create an extension that reads a `.ls` file in the
 # current directory and applies its contents as arguments whenever `ls` is run.
-# This extension will allow you to, for example, always show invisible files on
-# a per-directory basis.
+# This extension will allow you to, for example, always show invisible files in
+# a specific directory.
 #
 # `$HOME/.bashrc`
 #    export EXW_PATH="$HOME/.exw.d"
@@ -83,15 +127,15 @@
 #    if [[ -f ".ls" ]]; then
 #        readarray -t LS_ARGS < .ls
 #        if [[ ${#LS_ARGS[@]} -gt 0 ]]; then
-#            echo "[ls-wrapper] applying .ls args: ${LS_ARGS[*]}"
-#            COMMAND_ARGS+=( "${LS_ARGS[@]}" )
+#            echo "${S_DIM}applying .ls args: ${LS_ARGS[*]}${S_RESET}"
+#            WRAPPED_COMMAND_ARGS+=( "${LS_ARGS[@]}" )
 #        fi
 #    fi
 #
 # $ ln -s exwrapper ls
 # $ echo "\-a" > .ls
 # $ ls
-# [ls-wrapper] applying .ls args: -a
+# (plugin) read dot ls: applying .ls args: -a
 # .  ..  .ls  normal_file.txt
 #
 #
@@ -124,11 +168,39 @@
 #         - 10-read-dot-ls -> ../../extensions-available/10-read-dot-ls.sh
 #       - post-process.d/
 #        - 00-log-command -> ../../extensions-available/00-log-command.sh
+#
+# TODO
+# - [ ] search current dir for .exwrc files
+# - [ ] restructure .exw.d:
+#   - .exw.d/
+#     - exwrc
+#     - extensions-available/
+#       - 00-foo.sh
+#       - 10-bar.sh
+#       - 00-baz.sh
+#     - pre-process.d/
+#       - ls/
+#         - 00-foo -> ../../extensions-available/00-foo.sh
+#     - post-process.d/
+#       - ls/
+#         - 00-bar -> ../../extensions-available/00-bar.sh
+#     - global/
+#       - pre-process.d/
+#         - 00-baz -> ../../extensions-available/00-baz.sh
+#       - post-process.d/
+#         - 00-baz -> ../../extensions-available/00-baz.sh
+# - [ ] add a `--dry-run` option to show what would be run
+# - [ ] add a `--list-extensions` option to show what extensions would be run
+# - [ ] rather than exiting if run directly:
+#   - [ ] show a help message
+#   - [ ] show a list of wrapped commands / extensions
+#   - [ ] show the configuration
+#   - [ ] idk do some shit
 
 
 ## Environment #################################################################
 
-__EXWRAPPER_VERSION="0.1.0"
+__EXWRAPPER_VERSION="0.1.14"
 __EXWRAPPER_PATH=$(realpath "${0}")
 __EXWRAPPER_NAME=$(basename "${__EXWRAPPER_PATH}")
 __EXWRAPPER_SYMLINK_PATH=$(realpath --no-symlinks "${0}")
@@ -644,6 +716,17 @@ fi
 debug-vars WRAPPED_COMMAND_PATH
 
 
+## Disable #####################################################################
+
+# Check if we should even do anything
+_IS_DISABLED=$(wrapper-option --as=bool --default=false disabled)
+
+if ${_IS_DISABLED}; then
+    run-cmd
+    exit ${?}
+fi
+
+
 ## Session Information #########################################################
 
 # Are we in a pipe?
@@ -817,7 +900,8 @@ for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
 done
 shopt -u nullglob
 
-## Run git #####################################################################
+
+## Run the command #############################################################
 
 # Run the git command if requested
 if [[ "${RUN_COMMAND}" == "true" ]]; then
@@ -831,6 +915,7 @@ if [[ "${RUN_COMMAND}" == "true" ]]; then
         fi
     fi
 fi
+
 
 ## Post-process ################################################################
 
