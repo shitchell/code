@@ -512,7 +512,7 @@ function get-config-sections() {
         return 1
     fi
 
-    debug-vars config_file sections do_unique do_show_sections
+    # debug-vars config_file sections do_unique do_show_sections
 
     # Read the config file line by line:
     # * excluding comments
@@ -521,7 +521,7 @@ function get-config-sections() {
     # * normalizing option lines to `option = value`
     # * printing lines that match the specified sections
     while IFS=$'\n' read -r  line; do
-        debug-vars line
+        # debug-vars line
 
         # Skip comments and empty lines
         if [[ "${line}" =~ ^[[:space:]]*(#.*)?$ ]]; then
@@ -541,12 +541,12 @@ function get-config-sections() {
                     break
                 fi
             done
-            debug-vars section_name in_section
+            # debug-vars section_name in_section
 
             continue
         fi
 
-        debug-vars in_section section_name
+        # debug-vars in_section section_name
 
         # If we're in a matching section, print the line
         if ${in_section}; then
@@ -565,7 +565,8 @@ function get-config-sections() {
                     values["${key}"]="${display_key} ${value}"
                 fi
             else
-                debug "skipping line: ${line}"
+                :
+                # debug "skipping line: ${line}"
             fi
         fi
     done < "${config_file}"
@@ -632,7 +633,7 @@ function exw-option() {
         shift 1
     done
 
-    debug-vars config_file command option default
+    # debug-vars config_file command option default
 
     config=$(
         get-config-sections \
@@ -642,7 +643,7 @@ function exw-option() {
             "${command}"
     )
 
-    debug-vars config
+    # debug-vars config
 
     # Find the matching option
     while read -r line; do
@@ -683,6 +684,8 @@ function exw-option() {
                 ;;
         esac
     fi
+
+    debug  "exw-option \`${option}\` => ${value}"
 
     printf "%b\n" "${value}"
 }
@@ -734,13 +737,6 @@ if [[ -t 1 ]]; then
     declare -r _IS_PIPED=false
 else
     declare -r _IS_PIPED=true
-fi
-
-# Is this an interactive session?
-if [[ "${-}" == *i* ]]; then
-    declare -r _IS_INTERACTIVE=true
-else
-    declare -r _IS_INTERACTIVE=false
 fi
 
 # Are we in a script?
