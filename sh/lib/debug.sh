@@ -47,9 +47,11 @@ function debug() (
             DEBUG=1
         fi
         debug_file="${DEBUG_LOG}"
+        # Point file descriptor 3 to the debug file
+        exec 3>>"${debug_file}"
     else
-        # by default, print to /dev/stderr
-        debug_file="/dev/stderr"
+        # Point file descriptor 3 to stderr
+        exec 3>&2
     fi
 
     # determine if the first arg is an integer
@@ -152,7 +154,8 @@ function debug() (
                 '{
                     printf "%s %s -- %s%s%s\n", timestamp, line_loc, text_color, $0, text_color_end;
                 }' \
-            >>"${debug_file}"
+            >&3
+            # >>"${debug_file}"
             # | dd of="${debug_file}" conv=notrunc oflag=append status=none
             # ^^^ this is a hack to avoid redirect errors where `debug` consumes
             # and obliterates the output of the command it is called from
@@ -374,9 +377,12 @@ function _debug() {
             DEBUG=1
         fi
         debug_file="${DEBUG_LOG}"
+        # Point file descriptor 3 to the debug file
+        exec 3>>"${DEBUG_LOG}"
     else
         # duplicate stderr to fd 3
-        debug_file="/dev/stderr"
+        # debug_file="/dev/stderr"
+        exec 3>&2
     fi
 
     # determine if the first arg is an integer
@@ -413,7 +419,8 @@ function _debug() {
                         "\033[32m:" lineno "\033[0m" \
                         " -- " $0;
                 }' \
-            | dd of="${debug_file}" conv=notrunc oflag=append status=none
+            >&3
+            # | dd of="${debug_file}" conv=notrunc oflag=append status=none
         # for arg in "${@}"; do
         #     printf "\e[36m[%s]\e[0m \e[1;35m%s:%s\e[0m -- %s\n" \
         #         "${timestamp}" "${FUNCNAME[1]}" "${BASH_LINENO[0]}" "${arg}" \
@@ -427,6 +434,7 @@ function _debug() {
 function _mini_debug() {
     local prefix timestamp
     if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
+        [[ -n "${DEBUG_LOG}" ]] && exec 3>>"${DEBUG_LOG}" || exec 3>&2
         timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
         prefix="\033[36m[${timestamp}]\033[0m "
         prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
@@ -434,7 +442,8 @@ function _mini_debug() {
         prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
         printf "%s\n" "${@}" \
             | awk -v prefix="${prefix}" '{print prefix $0}' \
-            | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
+            >&3
+            # | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
     fi
 }
 
