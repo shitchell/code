@@ -56,7 +56,7 @@ function parse-args() {
                 exit 0
                 ;;
             -m|--maxdepth)
-                if ! [[ "${2}" =~ ^[0-9]+$ ]] then
+                if ! [[ "${2}" =~ ^[0-9]+$ ]]; then
                     echo "error: maxdepth must be an integer" >&2
                     exit 1
                 fi
