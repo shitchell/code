@@ -22,11 +22,17 @@ echo "> ${C_GREEN}${COMMAND_STR}${S_RESET}"
 SKIPPED=()
 TMUX_FORMAT_STR=$'#{session_name}:#{window_index}.#{pane_index}\t'
 TMUX_FORMAT_STR+='#{pane_current_command}'
+THIS_PANE_ID=$(tmux display-message -p "${TMUX_FORMAT_STR%$'\t'*}")
 while read -r pane_id command; do
     echo -n "- ${pane_id}"
     for shell in "${SHELLS[@]}"; do
         if [[ "${command}" == "${shell}" ]]; then
         # if [[ "${command}" == "zsh" ]]; then
+            # Skip (and save for last) the current pane
+            if [[ "${pane_id}" == "${THIS_PANE_ID}" ]]; then
+                echo " ${S_DIM}(skipped: current pane)${S_RESET}"
+                continue 2
+            fi
             tmux send-keys -t "${pane_id}" "${COMMAND_STR}" Enter
             echo
             continue 2
@@ -41,3 +47,9 @@ if [[ ${#SKIPPED[@]} -gt 0 ]]; then
     echo "${S_BOLD}Skipped${S_RESET}"
     printf -- "- %s\n" "${SKIPPED[@]}"
 fi
+
+# Run the command on the current pane
+echo
+echo "${S_BOLD}Running in Current Pane${S_RESET}"
+echo "> ${C_GREEN}${COMMAND_STR}${S_RESET}"
+tmux send-keys -t "${THIS_PANE_ID}" "${COMMAND_STR}" Enter
