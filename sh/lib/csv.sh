@@ -1,11 +1,30 @@
-# @description Print an array as a comma-separated list with quotes as needed
-# @arg+ $@ The array to print
-# @opt -n|--no-newline Do not print a newline at the end of the list
-# @opgarg -d|--delimiter The delimiter to use between elements
-# @stdout The array as a csv quoted, delimeted list
-# @exit 0
-# @exit 1 If the array is empty
+#!/usr/bin/env bash
+
 function csv-echo {
+    :  'Print an array as a comma-separated list with quotes as needed
+
+        @usage
+            <arg1> [<arg2> ...]
+
+        @arg+
+            The array to csv-quote and echo
+
+        @option -n/--no-newline
+            Do not print a newline at the end of the list
+
+        @option -d/--delimiter <delimiter>
+            Use <delimiter> as the field separator (default: ,)
+
+        @stdout
+            The array as a csv quoted, delimeted list
+
+        @return 0
+            Successful completion
+
+        @return 1
+            If the array is empty
+    '
+
     # Parse the arguments
     local no_newline=0
     local delimiter=","
@@ -44,13 +63,28 @@ function csv-echo {
     fi
 }
 
-# @description Quote a string for use in a CSV file
-# @arg $@ The string to quote
-# @opgarg -d|--delimiter The CSV delimiter used
-# @stdout The quoted string
-# @exit 0
-# @exit 1 If the string is empty
 function csv-quote {
+    :  'Quote a string for use in a CSV file
+
+        @usage
+            <string>
+
+        @arg string
+            The string to quote
+
+        @option -d/--delimiter <delimiter>
+            Use <delimiter> as the field separator (default: ,)
+
+        @stdout
+            The quoted string
+
+        @return 0
+            Successful completion
+
+        @return 1
+            If the string is empty
+    '
+
     # Parse the arguments
     local delimiter=","
     local item

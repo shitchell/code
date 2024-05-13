@@ -1,30 +1,99 @@
-# This module contains function for debugging bash scripts.
+: '
+This module contains functions for debugging bash scripts.
 
-# Prints debug information if:
-#   - DEBUG is set to "true", "all", or "*"
-#   - OR DEBUG is set to an integer and <= the first argument
-#
-# If `debug` is called without a debug level as the first argument, 1 is assumed
-# DEBUG_LOG can be used to print debug messages to a file instead of stderr
-# A debug message can be labeled by passing one of the following as the first
-# argument:
-#   - "error" (prints in red)
-#   - "success" (prints in green)
-#   - "warn" (prints in yellow)
-#   - "info" (prints in cyan)
-#
-# Examples:
-#   DEBUG=1   debug "foo bar" // will print
-#   DEBUG=1   debug 2 "foo bar" // will not print
-#   DEBUG=2   debug 1 "foo bar" // will print
-#   DEBUG=all debug "foo bar" // will print
-#   DEBUG=all debug 2 "foo bar" // will print
-#   DEBUG=1   debug error "foo bar" // will print in red
-#   DEBUG=1   debug 2 error "foo bar" // will not print
-#   DEBUG=2   debug 2 error "foo bar" // will print in red
+TODO:
+    - [ ] We recently implemented a breaking change to make debug_labels
+          inherit a debug_level. This should consider whether or not a
+          debug_level was manually specified and, if so, use that level.
+    - [ ] We should consider adding a DEBUG_COLOR environment variable to
+          enable or disable color output for debug messages.
+    - [ ] We should consider a DEBUG_FORMAT environment variable to allow
+          users to customize the format of debug messages.
+    - [ ] Fix the debug examples to be on separate lines OR change the docs
+          library to interpret examples on separate lines.
+'
+
 function debug() (
+    # shellcheck disable=SC2016
+    :  'Print debug information if either $DEBUG or $DEBUG_LOG are set
+
+        `debug` calls are typically used to display a message. They can
+        optionally be empty (i.e. `debug`) to simply return a 0 or 1 indicating
+        whether debugging is enabled, e.g.: `if debug; then ...; fi`. If a
+        message is provided, it will be printed conditionally based on its log
+        level (default: 1) and the value of the $DEBUG environment variable.
+
+        If the first argument to `debug` is an integer, it is treated as the log
+        level for that debug statement. This is used in conjunction with the
+        $DEBUG environment variable to determine if the message should be
+        printed. If the $DEBUG level is less than the debug statement log
+        level, the message will not be printed. If a `debug` statement does not
+        specify a log level, it defaults to 1.
+
+        For simplicity, the $DEBUG environment variable can be set to "true",
+        "all", or "*" to enable all debug messages. If $DEBUG is set to an
+        integer, then only debug messages with a log level less than or equal to
+        that integer will be printed.
+
+        The first argument can also be one of the following strings to indicate
+        a specific category of debug message:
+            - "error" (prints in red)
+            - "warn" (prints in yellow)
+            - "info" (prints in cyan)
+            - "success" (prints in green)
+
+        The $DEBUG_LOG environment variable can also be set to enable debugging.
+        When it is set, all debug messages will be written to the file specified
+        by $DEBUG_LOG. If $DEBUG_LOG is set and $DEBUG is not, then $DEBUG will
+        default to 1.
+
+        If $DEBUG is set to an integer, it is treated as the maximum debug level
+        to be printed.
+
+        Each line of the debug output is prefixed with a timestamp, the path to
+        the script, the function name (if applicable), and line number where the
+        debug statement was called from. If multiple messages are passed as
+        multiple arguments to the `debug` statement, they will be printed on
+        separate lines. If a single debug message includes multiple lines of
+        output, each line will include the same prefix.
+
+        @usage
+            [<level>] [<label>] [<message>]
+
+        @optarg level
+            The log level of the debug message. Must be an integer.
+            Default: 1
+
+        @optarg label
+            The category of the debug message. If provided, it should be one of
+            the following strings: "error", "warn", "info", or "success". If
+            provided, the message will be printed in a specific color.
+
+        @optarg message
+            The debug message to print.
+
+        @example
+            DEBUG=1   debug "foo bar"         # will print
+            DEBUG=1   debug 2 "foo bar"       # will not print
+            DEBUG=2   debug 1 "foo bar"       # will print
+            DEBUG=all debug "foo bar"         # will print
+            DEBUG=all debug 2 "foo bar"       # will print
+            DEBUG=1   debug error "foo bar"   # will print in red
+            DEBUG=1   debug 2 error "foo bar" # will not print
+            DEBUG=2   debug 2 error "foo bar" # will print in red
+        
+        @stderr
+            A timestamped debug message.
+
+        @return 0
+            Debugging is enabled
+        
+        @return 1
+            Debugging is not enabled
+        '
     local debug_file  # the file to write messages to
     local debug_level  # the debug level of this message
+    local debug_label  # the label for this debug message (error, warn, info, success)
     local timestamp  # the timestamp of this message
     local function_name  # the name of the calling function
     local script_name  # the name of the calling script
@@ -60,7 +129,37 @@ function debug() (
         debug_level=${1}
         shift
     else
-        debug_level=1
+        case "${1}" in
+            scs | success)
+                debug_level=0
+                debug_label="success"
+                shift
+                ;;
+            err | error)
+                debug_level=0
+                debug_label="error"
+                shift
+                ;;
+            wrn | warn)
+                debug_level=10
+                debug_label="warn"
+                shift
+                ;;
+            inf | info)
+                debug_level=20
+                debug_label="info"
+                shift
+                ;;
+            dbg | debug)
+                debug_level=30
+                debug_label="debug"
+                shift
+                ;;
+            *)
+                debug_level=1
+                debug_label=""
+                ;;
+        esac
     fi
 
     # print the debug message if:
@@ -112,9 +211,8 @@ function debug() (
             [[ -n "${line_number}" ]] && line_loc+=":${line_number}"
 
             # handle specific categories of debug messages
-            if [[ "${1}" =~ ^("error"|"warn"|"info"|"success")$ ]]; then
+            if [[ "${debug_label}" =~ ^("error"|"warn"|"info"|"success")$ ]]; then
                 text_color=""
-                shift
             fi
             text_color_end=""
         else
@@ -127,21 +225,23 @@ function debug() (
             [[ -n "${line_number}" ]] && line_loc+=$'\033[32m:'"${line_number}"$'\033[0m'
 
             # handle specific categories of debug messages
-            if [[ "${1}" == "error" ]]; then
-                text_color=$'\033[31;1m'
-                # text_color=$'\033[41;30m'
-                shift
-            elif [[ "${1}" == "warn" ]]; then
-                text_color=$'\033[33;1m'
-                shift
-            elif [[ "${1}" == "info" ]]; then
-                text_color=$'\033[36;1m'
-                shift
-            elif [[ "${1}" == "success" ]]; then
-                text_color=$'\033[32;1m'
-                shift
+            if [[ -n "${debug_label}" ]]; then
+                case "${debug_label}" in
+                    err | error)
+                        text_color=$'\033[31;1m'
+                        ;;
+                    wrn | warn)
+                        text_color=$'\033[33;1m'
+                        ;;
+                    inf | info)
+                        text_color=$'\033[36;1m'
+                        ;;
+                    scs | success)
+                        text_color=$'\033[32;1m'
+                        ;;
+                esac
+                text_color_end=$'\033[0m'
             fi
-            text_color_end=$'\033[0m'
         fi
 
         # print all the things
@@ -149,10 +249,22 @@ function debug() (
             | awk \
                 -v timestamp="${timestamp}" \
                 -v line_loc="${line_loc}" \
+                -v log_level="${debug_level}" \
                 -v text_color="${text_color}" \
                 -v text_color_end="${text_color_end}" \
                 '{
-                    printf "%s %s -- %s%s%s\n", timestamp, line_loc, text_color, $0, text_color_end;
+                    # TODO: determine if we want log_level included
+                    # This print statement prints the log level
+                    printf("%s %s -- [%02d] %s%s%s\n",
+                           timestamp, line_loc, log_level,
+                           text_color, $0, text_color_end);
+
+                    # TODO: determine if we want log_level included
+                    # This print statement does not print the log level
+                    # printf("%s %s -- %s%s%s\n",
+                    #        timestamp, line_loc,
+                    #        text_color, $0, text_color_end);
+
                 }' \
             >&3
             # >>"${debug_file}"
@@ -167,6 +279,29 @@ function debug() (
 # @description Print a string with non-printable characters escaped
 # @usage print-escaped <string>
 function print-escaped() (
+    :  '
+        Print a string with non-printable characters escaped
+
+        This function takes a string as input and prints it to stdout with
+        non-printable characters escaped. The escape sequences used are:
+            - \a: alert (bell)
+            - \b: backspace
+            - \f: form feed
+            - \n: newline
+            - \r: carriage return
+            - \t: horizontal tab
+            - \v: vertical tab
+            - \xHH: hexadecimal representation of the character
+
+        @usage
+            <string>
+
+        @arg <string>
+            The string to print with non-printable characters escaped
+
+        @stdout
+            The input string with non-printable characters escaped
+        '
     local string="${1}"
     awk '
         BEGIN {
@@ -202,6 +337,33 @@ function print-escaped() (
 # @usage debug-vars <var1> <var2> ...
 # @example foo=bar bar=baz debug-vars "foo" "bar"
 function debug-vars() {
+    :  '
+        Print the values of a list of variables given their names
+
+        This function takes a list of variable names as input and prints the
+        values of those variables to stdout. If a variable is an array, the
+        entire array is printed. If a variable is a reference, the value of the
+        reference is printed. If a variable is an associative array, the entire
+        associative array is printed. If a variable is unset, "<unset>" is
+        printed. If a variable is not found, "<not found>" is printed.
+
+        @usage
+            [-v/--verbosity <level>] <varname1> <varname2> ...
+
+        @option -v/--verbosity <level>
+            Control the verbosity of the output. 1: print only the value of the
+            variable, 2: print the type of the variable and its length, 3: print
+            the expanded type of the variable. Default: 1.
+
+        @arg+
+            The names of the variables to print
+        
+        @example
+            foo=bar bar=baz debug-vars "foo" "bar"
+
+        @stderr
+            The names and values of the specified variable names
+        '
     local verbosity=${DEBUG_VERBOSITY:-1}
     local var_names=()
     local var_char var_name var_type var_value var_length is_set

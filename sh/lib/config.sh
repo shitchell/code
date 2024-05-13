@@ -1,3 +1,5 @@
+# WIP: should probably borrow the config reading functions from `exwrapper`
+#
 # A library for parsing and reading configuration files.
 #
 # Example configuration file:

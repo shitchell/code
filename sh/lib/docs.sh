@@ -35,6 +35,9 @@ Docstrings will take the following format:
             @optarg <arg3>
                 This is an optional string that indicates one last thing
 
+            @setenv FOO
+                This will set the FOO environment variable to 'bar'
+
             @other-label
                 This is a label that does a thing
 
@@ -78,7 +81,11 @@ library when generating documentation:
 - @arg: Describes a required positional argument. Order matters! The first
   occurence of '@arg' will be interpreted as the first positional argument, the
   second will be interpreted as the second, etc...
+- @arg+: Describes 1 or more required positional arguments.
+- @arg*: Describes 0 or more required positional arguments.
 - @optarg: Describes an optional positional argument.
+- @setenv: Describes an environment variable that the function will set.
+- @example: Provides a single example of how to use the function.
 - @stdin: Describes what the function will read from stdin.
 - @stdout: Describes what the function will output to stdout.
 - @stderr: Describes what the function will output to stderr.

@@ -1,22 +1,71 @@
+#!/usr/bin/env bash
+: '
+A collection of commands for printing to the console
+'
+
 include-source 'colors.sh'
 include-source 'shell.sh'
 include-source 'text.sh'
 
-# echos each argument based on the preceding argument:
-#   -g: green
-#   -r: red
-#   -b: blue
-#   -p: purple
-#   -c: cyan
-#   -B: bold
-#   -R: reverse
-#   -U: underline
-#   -K: blinking
-#   --: reset to default color
-# other options:
-#   -n: do not echo a newline
-#   -V <level>: only echo if the global VERBOSITY is >= <level>
 function echo-formatted() {
+    :  'Echo with option based ANSI formatting
+
+        Colors are specified using options. The text following that option will
+        be styled accordingly. Use "--" to reset the color to the default. If
+        any color options are specified, a reset ANSI sequence will be appended
+        to the end of the output.
+
+        @usage
+            [-n] [-V <level] [-grbpcBRUK] [--] <text>
+
+        @option -n
+            Do not echo a newline
+        
+        @option -V <level>
+            Only echo if the global VERBOSITY is >= <level>
+        
+        @option -g
+            Green foreground
+        
+        @option -r
+            Red foreground
+
+        @option -b
+            Blue foreground
+
+        @option -p
+            Purple foreground
+
+        @option -c
+            Cyan foreground
+
+        @option -m
+            Magenta foreground
+
+        @option -B
+            Bold text
+
+        @option -D
+            Dim text
+
+        @option -R
+            Reverse text
+
+        @option -U
+            Underline text (not widely supported)
+
+        @option -K
+            Blinking text
+
+        @option --
+            Reset to default color
+        
+        @arg <text>
+            The text to echo
+        
+        @stdout
+            The formatted text
+    '
     local code_r="${C_RED}"
     local code_g="${C_GREEN}"
     local code_y="${C_YELLOW}"
@@ -158,10 +207,23 @@ function echo-formatted() {
     fi
 }
 
-# echo a command before running it, printing an error message if it exited with
-# a non-zero status
-# echo a command before running it
 function echo-run() {
+    :  'Echo a command before running it
+
+        This function will echo the command to stdout before running it. The
+        command stdout and stderr are both printed to stdout prefixed with a
+        vertical bar. If the command exits with a non-zero status, it will print
+        an error message.
+
+        @usage
+            <command>
+
+        @arg <command>
+            The command to run
+
+        @stdout
+            The command and its output, prefixed with a vertical bar
+    '
     local cmd=("${@}")
     local exit_code
 
@@ -190,33 +252,106 @@ function echo-run() {
     return ${exit_code}
 }
 
-# echo something to stdout in cyan
 function echo-comment() {
+    :  'Echo a comment to stdout
+
+        This function will echo a comment to stdout.
+
+        @usage
+            <comment>
+
+        @arg <comment>
+            The comment to echo
+
+        @stdout
+            The comment
+    '
     echo-formatted -cB "${@}"
 }
 
-# echo something to stdout in green
 function echo-command() {
-    echo-formatted "\$" -g "$(echo ${@})"
+    :  'Echo a command to stdout
+
+        This function will echo a command to stdout. The command is prefixed
+        with a "$".
+
+        @usage
+            <command>
+
+        @arg <command>
+            The command to echo
+
+        @stdout
+            The command
+    '
+    echo-formatted "\$" -g "${@}"
 }
 
-# echo something to stdout in yellow
 function echo-warning() {
+    :  'Echo a warning to stdout
+
+        This function will echo a warning to stdout.
+
+        @usage
+            <warning>
+
+        @arg <warning>
+            The warning to echo
+
+        @stdout
+            The warning
+    '
     echo-formatted -y "${@}"
 }
 
-# echo something to stdout in red
 function echo-error() {
+    :  'Echo an error to stdout
+
+        This function will echo an error to stdout.
+
+        @usage
+            <error>
+
+        @arg <error>
+            The error to echo
+
+        @stdout
+            The error
+    '
     echo-formatted -r "${@}"
 }
 
-# echo something to stderr in red
 function echo-stderr() {
+    :  'Echo to stderr
+
+        This function will echo to stderr in red.
+
+        @usage
+            <message>
+
+        @arg <message>
+            The message to echo
+
+        @stdout
+            The message
+    '
     echo-formatted -r "${@}" >&2
 }
 
-# echo something to stdout in blue
 function echo-success() {
+    :  'Echo a success message to stdout
+
+        This function will echo a success message to stdout.
+
+        @usage
+            <message>
+
+        @arg <message>
+            The message to echo
+
+        @stdout
+            The message
+    '
     echo-formatted -b "${@}"
 }
 
@@ -226,6 +361,38 @@ function echo-success() {
 # Prints "${message} ... ", runs ${command}, prints "Done" or "Error" based on
 # the exit code of the command. Stores the output ${command} in ${output_var}
 function check-command() {
+    :  'Check a command for success
+
+        This function will run a command and print a message based on the exit
+        code of the command. If the command exits with a non-zero status, it
+        will print an error message. Useful for scripts using the output style:
+           * doing this ... done
+           * doing that ... done
+           * checking this ... error
+
+        @usage
+            <command> [<message>]
+            <command> <message> <output_var>
+            <command> <message> <stdout_var> <stderr_var>
+
+        @arg <command>
+            The command to run
+
+        @arg <message>
+            The message to print
+
+        @arg <output_var>
+            The variable to store the output (stdout & stderr) of the command
+
+        @arg <stdout_var>
+            The variable to store the stdout of the command
+
+        @arg <stderr_var>
+            The variable to store the stderr of the command
+
+        @stdout
+            The message and the output of the command
+    '
     local command="${1}"
     local message="${2}"
     local stdout_var="${3}"
@@ -280,6 +447,28 @@ function check-command() {
 #   echo-managed -n 2 "this will be displayed only if the verbosity is 2 or higher"
 #   echo-managed -n "this will be displayed only if the verbosity is 1 or higher"
 function echo-managed() {
+    :  '(deprecated) Print a message based on the VERBOSITY level
+
+        This function will print a message based on the environment VERBOSITY
+        level. If the verbosity level is less than the specified level, the
+        message will not be printed.
+
+        @usage
+            [-n] [<verbosity-level>] <message>
+
+        @option -n
+            Do not echo a newline
+
+        @arg <verbosity-level>
+            The verbosity level at which to print the message
+
+        @arg <message>
+            The message to print
+
+        @stdout
+            The message
+    '
+
     local echo_args=()
     local verbosity_level=1
     local message
@@ -312,44 +501,78 @@ function echo-managed() {
     fi
 }
 
-function repeat-char_printf() {
-    local char="${1:-=}"
-    local count="${2:-10}"
+function repeat-char() {
+    :  'Repeat a character a given number of times
 
-    printf '%s' `eval echo "'${char}'\\$__{1..${count}}"`
-}
+        This function will print a character a given number of times.
 
-function repeat-char_forprintf() {
-    local char="${1:-=}"
-    local count="${2:-10}"
+        @usage
+            <char> [<count>]
 
-    for ((i=0; i<${count}; i++)); do
+        @arg <char>
+            The character to print
+
+        @arg <count>
+            The number of times to print the character. Default: 1
+
+        @stdout
+            The character repeated the given number of times
+    '
+    local char="${1}"
+    local count="${2:-1}"
+
+    [[ -z "${char}" ]] && return
+
+    for ((i=0; i<count; i++)); do
         printf '%s' "${char}"
     done
 }
 
-function repeat-char_forstring() {
-    local char="${1:-=}"
-    local count="${2:-10}"
-
-    local string=""
-
-    for ((i=0; i<${count}; i++)); do
-        string="${string}${char}"
-    done
-
-    printf '%s' "${string}"
-}
-
-
-
-# @description Print a header to the console
-# @arg $@ string The text to print in the header
-# @example print-header This is a header
-# @example print-header -B 1 This is a header with a 1 line margin before it
-# @example print-header -M 2 This is a header with a 2 line margin
-# @example print-header --markdown --level 3 This is a markdown header
 function print-header() {
+    :  'Print a header to the console
+
+        This function will print a header to the console. The header can be
+        styled as a bordered header, an underlined header, or a markdown header.
+
+        @usage
+            [-B/--before <n>] [-A/--after <n>] [-M/--margin <n>] [--markdown]
+            [--level <level>] [--underline] [--border] [--border-width <width>]
+            [--border-character <char>] <text>
+
+        @option -B/--before <n>
+            Print <n> empty lines before the header
+
+        @option -A/--after <n>
+            Print <n> empty lines after the header
+
+        @option -M/--margin <n>
+            Print <n> empty lines before and after the header
+
+        @option --markdown
+            Style the header as a markdown header
+
+        @option --level
+            The level of the markdown header
+
+        @option --underline
+            Style the header as an underlined header
+
+        @option --border/--bordered
+            Style the header as a bordered header
+
+        @option --border-width <width>
+            The width of the border. Default: 80
+
+        @option --border-character <char>
+            The character to use for the border. Default: "="
+
+        @arg <text>
+            The text to print in the header
+
+        @stdout
+            The header
+    '
+
     local args=()
     local header_text=""
     local style="bordered" # "bordered", "markdown", "underlined"

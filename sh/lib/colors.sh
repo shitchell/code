@@ -1,4 +1,6 @@
-# Colors!
+# ANSI escape codes, using ANSI-C syntax to facilitate using them anywhere, even
+# in `echo` commands without needing to use `echo -e`
+
 C_BLACK=$'\033[30m'
 C_RED=$'\033[31m'
 C_GREEN=$'\033[32m'

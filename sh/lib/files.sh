@@ -1,6 +1,19 @@
-# @description Given a filename, create an unique filename by appending a number
-# @usage mkuniq filename
 function mkuniq() {
+    :  'Create a unique filename
+
+        Given a filename, create a unique filename by appending a number to the
+        end of the filename. If the filename already exists, increment the
+        number until a unique filename is found.
+
+        @usage
+            <filename>
+
+        @arg filename
+            The filename to make unique
+
+        @stdout
+            The unique filename
+    '
     local filename="${1}"
 
     if [ -f "${filename}" ]; then
@@ -14,9 +27,28 @@ function mkuniq() {
     echo "${filename}"
 }
 
-# @description Given two directories, generate a name-status changelog
-# @usage generate-changelog [-x/--exclude <regex>] <source-dir> <target-dir>
 function generate-changelog() {
+    :  'Generate a name-status changelog
+
+        Given two directories, generate a name-status changelog that describes
+        the changes between the two directories. The changelog is sorted by
+        filename.
+
+        @usage
+            [-x/--exclude <regex>] <source-dir> <target-dir>
+
+        @arg -x/--exclude <regex>
+            A regex pattern to exclude files from the comparison
+
+        @arg <source-dir>
+            The source directory to compare
+
+        @arg <target-dir>
+            The target directory to compare
+
+        @stdout
+            The name-status changelog
+    '
     local source_dir
     local target_dir
     local exclude_patterns=()

@@ -1,20 +1,48 @@
+#!/usr/bin/env bash
+: '
+Git bash functions
+'
+
 include-source 'debug.sh'
 include-source 'echo.sh'
 include-source 'shell.sh'
 include-source 'text.sh'
+include-source 'exit-codes.sh'
 
-# @description
-#     Given a `git` command, parse out the git arguments, subcommand, and
-#     subcommand arguments. These will be stored into the following variables:
-#     - GIT_ARGS: the arguments to the `git` command
-#     - GIT_SUBCOMMAND: the `git` subcommand
-#     - GIT_SUBCOMMAND_ARGS: the arguments to the `git` subcommand
-# @usage parse-git-command <git command>
-# @example parse-git-command git log --oneline
 function parse-git-command() {
+    :  'Parse a git command into its parts
+
+        Parses out a git command and stores them in the variables:
+        - GIT_ARGS: the arguments to the git command
+        - GIT_SUBCOMMAND: the git subcommand
+        - GIT_SUBCOMMAND_ARGS: the arguments to the git subcommand
+
+        @usage
+            <git command>
+        
+        @arg+
+            The git command to parse, separated as individual arguments
+        
+        @setenv GIT_ARGS
+            An array of the arguments to the git command
+        
+        @setenv GIT_SUBCOMMAND
+            The git subcommand
+        
+        @setenv GIT_SUBCOMMAND_ARGS
+            An array of the arguments to the git subcommand
+        
+        @example
+            parse-git-command git log --oneline
+    '
     declare -ga GIT_ARGS=()
     declare -g  GIT_SUBCOMMAND=""
     declare -ga GIT_SUBCOMMAND_ARGS=()
+
+    # If the first argument is git, remove it
+    if [[ "${1}" = "git" || "${1}" == *"/git" ]]; then
+        shift 1
+    fi
 
     while [[ ${#} -gt 0 ]]; do
         debug "parsing: ${1}"
@@ -66,21 +94,55 @@ function parse-git-command() {
     done
 }
 
-# Return the path to the git repository root
+# shellcheck disable=SC2120
+# SC2120: this function references arguments that are never passed, but this is
+#         a library, and other scripts will call this and pass arguments
 function git-root() {
-    git rev-parse --show-toplevel
+    :  'Get the root of the git repository
+
+        @usage
+            [path]
+        
+        @optarg path
+            The path to the git repository. Default: .
+
+        @stdout
+            The path to the root of the git repository
+        
+        @return 0
+            The path to the root of the git repository was found
+        
+        @return 128
+            Not in a git repository
+    '
+    git -C "${1:-.}" rev-parse --show-toplevel
 }
 
-# Return the path of a file relative to the git repository root
 function git-relpath() {
+    :  'Get the relative path of a file to the git repository root
+
+        @usage
+            <filepath>
+        
+        @arg filepath
+            The path to the file
+        
+        @stdout
+            The relative path of the file to the git repository root
+    '
     local filepath="${1}"
-    local git_root=$(git-root)
-    local rel_path=$(realpath -m "${filepath}" --relative-to="${git_root}")
+    local git_root rel_path
+
+    git_root=$(git-root)
+    rel_path=$(
+        realpath -m "${filepath}" --relative-to="${git_root}" --no-symlinks
+    )
     echo "${rel_path}"
 }
 
 # Return the current git branch. If the current branch is detached, return the
 # commit hash instead.
+# TODO: build proper documentation for this
 function git-branch-name() {
     local usage="usage: $(functionname) [-h|--help] [-n|--detached-name] [-c|--detached-commit] [-b|--detached-both]"
     local branch
@@ -147,15 +209,40 @@ function git-branch-name() {
     echo "${branch}"
 }
 
-# Determine if the specified commit exists in the current repo
 function git-commit-exists() {
+    :  'Determine if the specified commit exists in the current repo
+
+        @usage
+            <commit>
+        
+        @arg commit
+            The commit to check
+        
+        @return 0
+            The commit exists in the current repo
+        
+        @return 1
+            The commit does not exist in the current repo
+        
+        @return 2
+            The commit is not a valid hash
+        
+        @return 3
+            No commit was given
+    '
     local commit="${1}"
+
+    # ensure a commit was given
+    if [ -z "${commit}" ]; then
+        echo "fatal: no commit given" >&2
+        return 3
+    fi
 
     # verify that the given commit is at least a valid hash
     if ! is-hex "${commit}" || [ "${#commit}" -lt 4 ]; then
         debug "'${commit}' is not formatted as a valid hash"
         echo "fatal: invalid commit hash" >&2
-        return 1
+        return 2
     else
         debug "'${commit}' is a valid commit hash"
     fi
@@ -175,15 +262,37 @@ function git-commit-exists() {
 
 # Find which merge commit a specific commit is part of
 function get-parent-merge-commit() {
+    :  'Given a commit and a ref, find the merge that brought the commit into
+        the ref history.
+
+        @usage
+            <commit> [ref]
+
+        @arg commit
+            The commit to find the merge commit for
+
+        @optarg ref
+            The ref to search for the merge commit in. Default: HEAD
+
+        @stdout
+            The merge commit that the specified commit is part of
+        
+        @return 0
+            The merge commit was found
+        
+        @return 1
+
+    '
     local commit="${1}"
     local ref="${2:-HEAD}"
+    local ancestry_path first_parent merge_commit
 
     debug "commit: ${commit}"
     debug "ref: ${ref}"
 
     if ! git-commit-exists "${commit}"; then
         echo "fatal: invalid commit '${commit}'" >&2
-        return 1
+        return ${E_INVALID_COMMIT}
     fi
 
     # verify the ref exists
@@ -192,9 +301,9 @@ function get-parent-merge-commit() {
         return 1
     fi
 
-    local ancestry_path=$(git rev-list --ancestry-path "${commit}".."${ref}" | cat -n)
-    local first_parent=$(git rev-list --first-parent "${commit}".."${ref}" | cat -n)
-    local merge_commit=$(
+    ancestry_path=$(git rev-list --ancestry-path "${commit}".."${ref}" | cat -n)
+    first_parent=$(git rev-list --first-parent "${commit}".."${ref}" | cat -n)
+    merge_commit=$(
         echo "${ancestry_path}"$'\n'"${first_parent}" \
         | sort -k2 -s \
         | uniq -f1 -d \
@@ -203,7 +312,7 @@ function get-parent-merge-commit() {
         | cut -f2
     )
 
-    git show "${merge_commit}"
+    git log -1 "${merge_commit}"
 }
 
 # returns 0 if the specified commit is a merge commit, 1 otherwise
