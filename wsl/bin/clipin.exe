@@ -63,7 +63,7 @@ function parse-args() {
                 exit 1
                 ;;
             *)
-                CONTENT+=("${@1}")
+                CONTENT+=("${1}")
                 shift 1
                 ;;
         esac
@@ -110,6 +110,7 @@ function main() {
     local quoted_content="$(quote-powershell "${CONTENT[@]}")"
 
     # Set the clipboard
+    # powershell.exe -Command "Set-Clipboard ${clipboard_args[*]} '${content//\'/\'\'}'"
     powershell.exe -Command "Set-Clipboard ${clipboard_args[*]} ${quoted_content}"
 
     # Echo the clipboard
