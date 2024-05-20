@@ -388,6 +388,8 @@ def describe_diff(
 
 if __name__ == "__main__":
     import argparse
+    import sys
+    from pathlib import Path
 
     # Right now we only support generating diffs, but we might want to add more
     # functionality later. With that in mind, the usage will be:
@@ -399,6 +401,14 @@ if __name__ == "__main__":
     # Set up the argument parser
     parser = argparse.ArgumentParser(description="do git stuff with an LLM")
 
+    # Set up global options
+    parser.add_argument(
+        "-f",
+        "--file",
+        type=Path,
+        help="Use FILE for input rather than command line arguments"
+    )
+
     # Add the subparsers
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -406,7 +416,7 @@ if __name__ == "__main__":
     diff_parser = subparsers.add_parser(
         "diff-msg", help="Generate a commit message from a diff"
     )
-    diff_parser.add_argument("diff", help="The diff of changes")
+    diff_parser.add_argument("diff", nargs="?", help="The diff of changes")
 
     # Add the diff review subcommand
     review_parser = subparsers.add_parser(
@@ -416,19 +426,34 @@ if __name__ == "__main__":
         "-m",
         "--max-size",
         type=int,
-        default=100000,
+        default=300000,
         help="The maximum size of the diff"
     )
-    review_parser.add_argument("diff", help="The diff of changes")
+    review_parser.add_argument("diff", nargs="?", help="The diff of changes")
 
     # Parse the arguments
     args = parser.parse_args()
 
+    content: str = None
+    if args.file:
+        # If "/dev/stdin" or "-" is passed, read from stdin
+        if args.file == "/dev/stdin" or args.file == "-":
+            content = sys.stdin.read()
+        else:
+            content = args.file.read_text()
+    elif args.diff:
+        content = args.diff
+    else:
+        print("error: no input provided", file=sys.stderr)
+        sys.exit(1)
+
+    # print(f"using {content=}", file=sys.stderr)
+
     # Run the appropriate subcommand
     if args.subcommand == "diff-msg":
-        print(describe_diff(args.diff))
+        print(describe_diff(content))
     elif args.subcommand == "diff-review":
-        success, response = review_diff(args.diff, args.max_size)
+        success, response = review_diff(content, args.max_size)
         print(response)
         if not success:
             _sys.exit(1)
