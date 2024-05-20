@@ -28,7 +28,7 @@ function mkuniq() {
 }
 
 function generate-changelog() {
-    :  'Generate a name-status changelog
+    :  'Generate a git-style name-status changelog between two directories
 
         Given two directories, generate a name-status changelog that describes
         the changes between the two directories. The changelog is sorted by

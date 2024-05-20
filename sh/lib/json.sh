@@ -1,9 +1,31 @@
 include-source 'text.sh'
 
-# @description Escape a string for use in JSON, e.g. as a key or value
-# @usage json-escape [--(no-)quotes] <string>
-# @attribution https://stackoverflow.com/a/29653643 https://stackoverflow.com/a/74426351/794241
+# @attribution https://stackoverflow.com/a/29653643
+# @attribution https://stackoverflow.com/a/74426351/794241
 function json-escape() {
+    :  'Escape a string for use in JSON, e.g. as a key or value
+
+        @usage
+            [q/--quotes] [-Q/--no-quotes] <string>
+
+        @arg -q/--quotes
+            Wrap the escaped string in double quotes
+        
+        @arg -Q/--no-quotes
+            Do not wrap the escaped string in double quotes
+
+        @optarg string
+            The string to escape. If none is provided, will read from stdin
+
+        @stdin
+            The string to escape
+
+        @stdout
+            The escaped string
+
+        @return 0
+            Successful completion
+    '
     local text=()
     local do_quotes="" # false if empty
 
@@ -70,11 +92,24 @@ function json-escape() {
     ' "${text[@]}"
 }
 
-# @description Parse a JSON-formatted string
-# @arg $1 The string to parse
-# @stdin A string to parse
-# @stdout The parsed string
 function json-parse() {
+    :  'Parse a JSON-formatted string
+
+        Convert a JSON-escaped string (e.g. with "\n" for newlines) to a
+        formatted string with newlines, tabs, and quotes
+
+        @usage
+            [<string>]
+
+        @optarg string
+            The string to parse. If none is provided, will read from stdin
+
+        @stdin
+            The string to parse
+
+        @stdout
+            The parsed string
+    '
     local str="${1}"
 
     if [ -z "${str}" ]; then
@@ -92,9 +127,28 @@ function json-parse() {
         | printf "%b" "$(cat)"
 }
 
-# @description determine the type of a JSON value
-# @usage json-type <value>
 function json-type() {
+    :  'Determine the type of a JSON value
+
+        Will return the type of the value as one of the following:
+        - null
+        - boolean
+        - integer
+        - float
+        - string
+        - array
+        - object
+        - unknown
+
+        @usage
+            <value>
+
+        @arg value
+            The value to check
+
+        @stdout
+            The type of the value
+    '
     # Remove leading and trailing whitespace and newlines
     local value=$(echo "${1}" | tr -d '\n' | trim "${1}" | tr -d '\n')
     local json_type

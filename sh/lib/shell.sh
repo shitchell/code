@@ -1098,3 +1098,149 @@ function split-quoted() {
 
     return ${exit_code}
 }
+
+function search-back() {
+    :  'Search for a file or directory traversing parent directories
+
+        This function searches for a file or directory by traversing parent
+        directories until (a) it finds the file or directory or (b) it reaches
+        the root directory.
+
+        @usage
+            [-d/--directory] [-f/--file] [-h/--help] [-m/--max-depth <num>]
+            [-v/--verbose] <name>
+        
+        @option -h/--help
+            Print this help message and exit.
+        
+        @option -d/--directory
+            Search for a directory.
+        
+        @option -f/--file
+            Search for a file.
+        
+        @option -m/--max-depth <num>
+            The maximum number of directories to search before giving up.
+        
+        @option -v/--verbose
+            Print the directories being searched.
+        
+        @arg name
+            The name of the file or directory to search for.
+        
+        @stdout
+            The full path to the file or directory if found.
+        
+        @return 0
+            If the file or directory is found.
+        
+        @return 1
+            If the file or directory is not found.
+    '
+    # Default values
+    local do_verbose=false
+    local do_directory=false
+    local do_file=false
+    local max_depth=-1 # -1 means no limit
+    local name
+
+    # Parse the options
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -h | --help)
+                echo "${FUNCNAME[0]}: ${1}"
+                grep -E '^\s+\#\s+' "${BASH_SOURCE[0]}" | sed 's/^\s\+#\s\+//'
+                return 0
+                ;;
+            -d | --directory)
+                do_directory=true
+                do_file=false
+                shift
+                ;;
+            -f | --file)
+                do_file=true
+                do_directory=false
+                shift
+                ;;
+            -m | --max-depth)
+                max_depth="${2}"
+                shift 2
+                ;;
+            -v | --verbose)
+                do_verbose=true
+                shift
+                ;;
+            --)
+                shift
+                name="${@}"
+                break
+                ;;
+            *)
+                name="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    # Ensure a name was given
+    [[ -z "${name}" ]] && return 1
+
+    # Disallow "." and ".."
+    if [[ "${name}" =~ ^(.*/)?\.\.?(/.*)?$ ]]; then
+        echo "error: path cannot include './' or '../'" >&2
+        return 1
+    fi
+
+    # If no file or directory option was given, search for both
+    if ! ${do_directory} && ! ${do_file}; then
+        do_directory=true
+        do_file=true
+    fi
+
+    debug-vars do_verbose do_directory do_file max_depth name
+
+    # Set up a trap to restore the current directory on function return
+    local _search_back_pwd="${PWD}"
+    restore_search_back_pwd() {
+        cd "${_search_back_pwd}"
+    }
+    trap restore_search_back_pwd RETURN
+
+    # Traverse the parent directories
+    local depth=0
+    local match=""
+    while [[ -z "${match}"  ]]; do
+        # Print the current directory if verbose mode is enabled
+        if ${do_verbose}; then
+            echo "${PWD}"
+        fi
+
+        # Search for the file or directory
+        if ${do_directory} && [[ -d "${name}" ]]; then
+            match="${PWD%/}/${name}"
+        elif ${do_file} && [[ -f "${name}" ]]; then
+            match="${PWD%/}/${name}"
+        fi
+
+        # Check if the maximum depth has been reached
+        if [[ ${max_depth} -gt 0 ]] && [[ ${depth} -ge ${max_depth} ]]; then
+            break
+        fi
+
+        # If we've just chceked the root directory, break out of the loop
+        if [[ "${PWD}" == "/" ]]; then
+            break
+        fi
+
+        # Move up a directory
+        cd ..
+        ((depth++))
+    done
+
+    # Return the result
+    if [[ -n "${match}" ]]; then
+        echo "${match}"
+        return 0
+    fi
+    return 1
+}

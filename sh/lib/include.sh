@@ -1,105 +1,148 @@
-# Module for importing functions from shell scripts.
-#
-# `include-source <filename>` will search the current directory or
-# <SHELL>_PATH_LIB (or PATH if that's not set) for <filename>, then source it
-# into the current shell. Scripts that call `include-source` can be "compiled"
-# with `compile-sources` to replace any calls to `include-source` with the
-# contents of the included script.
-#
-# I have a lot of useful utility functions that I like to reuse across my
-# scripts, but copy/pasting them is annoying, and deploying many bash scripts to
-# a client can get untidy. These functions allow me to keep all of those utility
-# functions in one place, which allows me to much more quickly employ them and
-# cut down development time, while still being able to deploy just one compiled
-# file to a client.
-#
-#
-# Setup:
-#   1. Create a <SHELL>_LIB_PATH environment var to include the directories
-#      to search for importable scripts.
-#      e.g.: BASH_LIB_PATH or ZSH_LIB_PATH
-#   2. Source this script in your shell.
-#
-#
-# Usage:
-#   include-source "<script_name|url>"
-#   compile-sources "<script_path>" ["<script_path>" ...]
-#
-#
-# Example:
-#
-#  Add these lines to your .bashrc to start using the include/compile functions:
-#   : ~/.bashrc
-#   export BASH_LIB_PATH="$HOME/bin/lib:$HOME/code/bash/lib"
-#   source "$HOME/code/bash/lib/include.sh"
-#
-#  The source for a couple of bash "libraries" that we'll import into another:
-#   : $HOME/code/bash/lib/somelib.sh
-#   function somelib_func() {
-#     echo "Hello from somelib_func!"
-#   }
-#
-#   : https://raw.githubusercontent.com/foo/bar/master/gitlib.sh
-#   function gitlib_func() {
-#     echo "[gitlib_func] $@"
-#     return 0
-#   }
-#
-#  Our actual script, which imports the above two
-#   : ./foo.sh
-#   #!/bin/bash
-#   include-source 'https://raw.githubusercontent.com/foo/bar/master/gitlib.sh'
-#   include-source 'somelib.sh'
-#   if gitlib_func "do the thing"; then
-#     somelib_func "we did the thing!"
-#   fi
-#
-#  Compiling the above script:
-#   : <shell>
-#   # compile ./foo.sh to ./foo.compiled.sh
-#   $ compile-sources ./foo.sh > foo.compiled.sh
-#
-#   # compile multiple files in place
-#   $ compile-sources -i ./foo.sh ./bar.sh
-#
-#   # remove, instead of commenting out, the `include-source` call from the
-#   # compiled file and don't include the closing tag at the end of the included
-#   # source code
-#   $ compile-sources -i -T "./foo.sh" "./bar.sh"
-#
-#  The first generated script will look like this:
-#   : ./foo.compiled.sh (generated from `compile-sources`)
-#   #!/bin/bash
-#   # include-source 'https://raw.githubusercontent.com/foo/bar/master/gitlib.sh'
-#   function gitlib_func() {
-#     echo "[gitlib_func] $@"
-#     return 0
-#   }
-#   # compile-sources: end of 'https://raw.githubusercontent.com/foo/bar/master/gitlib.sh'
-#   # include-source 'somelib.sh'
-#   function somelib_func() {
-#     echo "Hello from somelib_func!"
-#   }
-#   # compile-sources: end of 'somelib.sh'
-#   if func_from_gitlib "do the thing"; then
-#     func_from_somelib "we did the thing!"
-#   fi
-#
-#
-# TODO:
-#   - Prevent infinite recursion in include-source
-#   - Make compile-sources work for `source` calls as well
-#   - Use regex to import only functions from the included script
-#     - Allow for modifying imported function names with a prefix/suffix
+: 'Module for importing functions from bash & zsh scripts.
+
+`include-source <filename>` will search the current directory or
+<SHELL>_PATH_LIB (falls back on PATH if unset) for <filename>, then source it
+into the current shell. Scripts that call `include-source` can be "compiled"
+with `compile-sources` to replace any calls to `include-source` with the
+contents of the included script.
+
+I have a lot of useful utility functions that I like to reuse across my
+scripts, but copy/pasting them is annoying, and deploying many bash scripts to
+a client can get untidy. These functions allow me to keep all of those utility
+functions in one place, which allows me to much more quickly employ them and
+cut down development time, while still being able to deploy just one compiled
+file to a client.
+
+# Setup
+
+  1. Create a <SHELL>_LIB_PATH environment var to include the directories
+     to search for importable scripts.
+     e.g.: BASH_LIB_PATH or ZSH_LIB_PATH
+  2. Source this script in your shell.
+
+# Usage
+
+```sh
+include-source "<script_name[.sh]|url>"
+compile-sources "<script_path>" ["<script_path>" ...]
+```
+
+# Example
+
+## Add these lines to ~/.bashrc to enable the include/compile functions
+
+```sh
+# ~/.bashrc
+
+export BASH_LIB_PATH="$HOME/bin/lib:$HOME/code/bash/lib"
+source "$HOME/code/bash/lib/include.sh"
+```
+
+## Write two bash "libraries" to be imported into other scripts:
+
+```sh
+# $HOME/code/bash/lib/somelib.sh
+
+function somelib_func() {
+  echo "Hello from somelib_func!"
+}
+```
+
+```sh
+# https://raw.githubusercontent.com/foo/bar/master/gitlib.sh
+
+function gitlib_func() {
+  echo "[gitlib_func] $@"
+  return 0
+}
+```
+
+## Write a script that imports the above two libraries
+
+```sh
+# ./foo.sh
+
+#!/usr/bin/env bash
+
+include-source "https://raw.githubusercontent.com/foo/bar/master/gitlib.sh"
+include-source "somelib"
+
+if gitlib_func "do the thing"; then
+  somelib_func "we did the thing!"
+fi
+```
+
+## Run the script
+
+```sh
+$ ./foo.sh
+[gitlib_func] do the thing
+Hello from somelib_func!
+```
+
+## Optionally, compile the above script into a single file
+
+Compile ./foo.sh to ./foo.compiled.sh
+```sh
+$ compile-sources ./foo.sh > foo.compiled.sh
+$ cat ./foo.compiled.sh
+#!/usr/bin/env bash
+
+# include-source "https://raw.githubusercontent.com/foo/bar/master/gitlib.sh"
+function gitlib_func() {
+  echo "[gitlib_func] $@"
+  return 0
+}
+# compile-sources: end of "https://raw.githubusercontent.com/foo/bar/master/gitlib.sh"
+# include-source "somelib"
+function somelib_func() {
+  echo "Hello from somelib_func!"
+}
+# compile-sources: end of "somelib.sh"
+
+if func_from_gitlib "do the thing"; then
+  func_from_somelib "we did the thing!"
+fi
+```
+
+Compile multiple files in place
+```sh
+$ compile-sources -i ./foo.sh ./bar.sh
+```
+
+Remove, instead of commenting out, the `include-source` call from the compiled
+file and do not include the closing tag at the end of the included source code
+```sh
+$ compile-sources -i -T "./foo.sh" "./bar.sh"
+```
+
+# TODO
+  - Prevent infinite recursion in include-source
+  - Make compile-sources work for `source` calls as well
+  - Use regex to import only functions from the included script
+    - Allow for modifying imported function names with a prefix/suffix
+'
 
 ## helpful functions ###########################################################
 ################################################################################
 
 function __debug() {
-    : '
-    Print a debug message if DEBUG or DEBUG_LOG is set
+    :  'Print a debug message if DEBUG or DEBUG_LOG is set
 
-    @usage      [<msg> ...]
+        @usage
+            [<msg> ...]
+
+        @optarg <msg>
+            The message to print
+
+        @return 0
+            If debugging is enabled
+
+        @return 1
+            If debugging is not enabled
+
+        @stderr
+            The message to print
     '
     local prefix timestamp
     if [[
@@ -107,6 +150,7 @@ function __debug() {
             || "${INCLUDE_DEBUG}" == "true"
             || -n "${INCLUDE_DEBUG_LOG}"
         ]]; then
+        [[ ${#} -eq 0 ]] && return 0
         timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
         prefix="\033[36m[${timestamp}]\033[0m "
         prefix+="\033[35m$(basename "${BASH_SOURCE[-1]}")"
@@ -114,12 +158,16 @@ function __debug() {
         prefix+="\033[32m:${BASH_LINENO[0]}\033[0m -- "
         printf "%s\n" "${@}" \
             | awk -v prefix="${prefix}" '{print prefix $0}' >> "${INCLUDE_DEBUG_LOG:-/dev/stderr}"
+    else
+        return 1
     fi
 }
 
 function get-shell() {
-    : '
-    Reliably determine the current shell
+    :  'Reliably determine the current shell
+
+        @stdout
+            The current shell
     '
     local process_name=$(ps -p "$$" -o args= | awk '{print $1}' | sed 's/^-//')
     local shell=$(basename "${process_name}" | tr '[:upper:]' '[:lower:]')
@@ -127,10 +175,22 @@ function get-shell() {
 }
 
 function functionname() {
-    : '
-    Cross-shell function for returning the calling function name
+    :  'Cross-shell function for returning the calling function name
 
-    @usage      [<stack index>]
+        @usage
+            [<stack index>]
+    
+        @optarg <stack index>
+            The index of the function in the call stack to return
+
+        @stdout
+            The name of the calling function
+        
+        @return 0
+            If the function name was successfully returned
+        
+        @return 108
+            If the shell is not recognized
     '
     local shell=$(get-shell)
     local index=${1:- -1}
@@ -143,27 +203,37 @@ function functionname() {
             ;;
         *)
             echo "unknown shell: ${shell}" >&2
-            return 1
+            return 108
             ;;
     esac
 }
 
 function in-array() {
-    : '
-    Checks if an item is in an array.
-    
-    @usage      <item> <array-item-1> [<array-item-2> ...
-    @return     0 the item is in the array
-    @return     1 the item is not in the array
+    :  'Checks if an item is in an array.
+
+        @usage
+            <item> <array-item-1> [<array-item-2> ...
+
+        @arg <item>
+            The item to check for in the array
+        
+        @arg+
+            The array to check
+
+        @return 0
+            The item is in the array
+
+        @return 1
+            The item is not in the array
     '
     #__debug "_call(${@})"
 
-    local item=${1}
-    local array=${2}
-    local e
+    local item array el
+    item="${1}"
+    array=( "${@:2}" )
 
-    for e in ${array[@]}; do
-        if [ "${e}" = "${item}" ]; then
+    for el in ${array[@]}; do
+        if [[ "${el}" == "${item}" ]]; then
             return 0
         fi
     done

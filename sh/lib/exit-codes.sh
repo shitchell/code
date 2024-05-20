@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 : '
-A list of error codes to use across scripts for consistency. If any functions
-come to mind that might be related to errors, those will probably end up here,
-too
+A list of exit codes for use in shell scripts.
 '
 
 # General
