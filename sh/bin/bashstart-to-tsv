@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# Convert a bashstart log file to a TSV
+
+FILEPATH="${1}"
+NEW_FILEPATH="${2:-${FILEPATH}.tsv}"
+
+# If the new filepath is a directory, update it to include the filename
+if [[ -d "${NEW_FILEPATH}" ]]; then
+    filename="${FILEPATH##*/}"
+    NEW_FILEPATH="${NEW_FILEPATH%/}/${filename}"
+fi
+
+[[ -z "${FILEPATH}" ]] \
+    && echo "error: no bashstart file provided" >&2 \
+    && exit 1
+
+# Output the log filename
+echo -n "* ${FILEPATH} => "
+
+# Update the log file:
+# - separating the "++ 12345678" prefix into two tab-delimited columns
+# - condensing multi-line commands into one line
+# - stripping the whitespace around tab characters
+# sed -E $'
+#     /^\+/  s/^(\++) /\\1\t/
+#     /^\+/  s/\t /\t/g
+#     /^\+/  s/ \t/\t/g
+#     /^\+/! s/^/\t\t/
+# ' "${FILEPATH}" > "${NEW_FILEPATH}"
+awk '
+    BEGIN {
+        # Initialize the parts of the line
+        depth = ""
+        timestamp = ""
+        cmd = ""
+    }
+
+    # Handle new entries (lines starting with "+" and a timestamp)
+    /^\++ [0-9]+/ {
+        # If the command buffer is not empty, print it
+        if (cmd != "") {
+            printf "%s\t%s\t%s\n", depth, timestamp, cmd
+            cmd = ""
+        }
+        depth = $1
+        timestamp = $2
+        cmd = $0
+        sub(/^[^\t]+\t ?/, "", cmd)
+    }
+
+    # Handle multi-line commands (lines not starting with "+" and a timestamp)
+    !/^\++ [0-9]+/ && cmd != "" {
+        cmd = cmd "\\n" $0
+    }
+
+    # If the command buffer is not empty at the end, print it
+    END {
+        if (cmd != "") {
+            print cmd
+        }
+    }
+' "${FILEPATH}" > "${NEW_FILEPATH}"
+
+# Show the output path to indicate success
+echo "${NEW_FILEPATH}"
