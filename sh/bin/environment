@@ -1,19 +1,51 @@
 #!/usr/bin/env bash
+#
+# Uses `uname -a` to determine the environment. For some environments, uses
+# a little bit more datums to determine extra information.
+#
+# Possible values:
+# - Android [<name> [<version>]]
+# - Android Termux <version>
+# - Linux WSL [<name> [<version]]      (e.g.: WSL Ubuntu 20.04)
+# - Linux WSL2 [<name [<version]]      (e.g.: WSL2 Ubuntu 20.04)
+# - Linux [<name> [<version>]]         (e.g.: Linux Ubuntu 20.04)
+# - Mac
+# - MacM1
+# - Windows
+# - UNKNOWN:`uname -a`
+#
+# Where <name> and <version> appear, they will come from `/etc/os-release`. For
+# any environment except UNKNOWN, if there is an `/etc/os-release` file, it will
+# be sourced and its NAME and VERSION_ID variables appended to the resulting OS
+# string.
 
 UNAME=$(uname -a)
 
 case "${UNAME}" in
-    *Microsoft*)  OS="WSL";; # WSL must be first since it includes Linux, too
-    *microsoft*)  OS="WSL2";; 
-    Linux*)       OS="Linux";;
-    Darwin*)      OS="Mac";;
-    CYGWIN*)      OS="Cygwin";;
-    MINGW*)       OS="Windows";; 
-    *Msys)        OS="Windows";;
-    *)            OS="UNKNOWN:${UNAME}"
+    *qgki*Android*) OS="Android";;     # Starts with "Linux", so comes first
+    *Microsoft*)    OS="Linux WSL";;   # Starts with "Linux", so comes first
+    *microsoft*)    OS="Linux WSL2";;  # Starts with "Linux", so comes first
+    Linux*)         OS="Linux";;
+    Darwin*)        OS="Mac";;
+    CYGWIN*)        OS="Cygwin";;
+    MINGW*)         OS="Windows";; 
+    *Msys)          OS="Windows";;
+    *)              OS="UNKNOWN:${UNAME}"
 esac
 
-if [[ "${OS}" == "Mac" ]] && sysctl -n machdep.cpu.brand_string | grep -q 'Apple M1'; then
+if [[ -f "/etc/os-release" && ! "${OS}" == "UNKNOWN:"* ]]; then
+    . /etc/os-release
+    if [[ -n "${NAME}" ]]; then
+        OS+=" ${NAME}"
+        if [[ -n "${VERSION_ID}" ]]; then
+            OS+=" ${VERSION_ID}"
+        fi
+    fi
+fi
+
+if [[ "${OS}" == "Android" && -n "${TERMUX_VERSION}" ]]; then
+    OS="Android Termux ${TERMUX_VERSION}"
+elif [[ "${OS}" == "Mac" ]] && sysctl -n machdep.cpu.brand_string | grep -q 'Apple M1'; then
     OS="MacM1"
 fi
 

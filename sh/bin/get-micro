@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#
+# Get the latest micro binary
+
+DIRECTORY="${1:-.}"
+
+if ! [[ -d "${DIRECTORY}" ]]; then
+    echo "error: not a directory: ${DIRECTORY}" >&2
+    echo "usage: $(basename "${0}") [directory]" >&2
+    exit 1
+fi
+
+cd "${DIRECTORY}"
+
+curl https://getmic.ro | bash

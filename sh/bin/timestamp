@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# A bashisms utility for generating a %Y-%m-%d %H:%M:%S timestamp
+#
+# WAIT THIS IS STUPID BECAUSE LEAP YEARS AND IRREGULAR MONTH LENGTHS GAHHH
+
+FORMAT="${1:- %Y-%m-%d %H:%M:%S}"
+
+EPOCH= REMAINDER= YEAR= MONTH= DAY= HOURS= MINUTES= SECONDS= MILLISECONDS=
+
+# Get the epoch timestamp
+EPOCH="${EPOCHREALTIME//.}"
+MILLISECONDS="${EPOCH: -6:-3}"
+EPOCH="${EPOCH:: -6}"
+
+# Start the maths
+YEAR=$((EPOCH / 31556926 + 1970)) # 31556926 = seconds in a year
+REMAINDER=$((EPOCH % 31556926))
+
+MONTH=$((REMAINDER / 2592000))
+REMAINDER=$((REMAINDER % 2592000))
+
+DAY=$((REMAINDER / 86400))
+REMAINDER=$((REMAINDER % 86400))
+
+HOURS=$((REMAINDER / 3600))
+REMAINDER=$((REMAINDER % 3600))
+
+MINUTES=$((REMAINDER / 60))
+REMAINDER=$((REMAINDER % 60))
+
+printf "%04d-%02d-%02d %02d:%02d:%02d.%d\n" \
+    ${YEAR} ${MONTH} ${DAY} \
+    ${HOURS} ${MINUTES} ${SECONDS} ${MILLISECONDS}
