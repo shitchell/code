@@ -12,6 +12,7 @@ var DEBUG = true;
 var runningHoursArray = [];
 var weeklyHoursArray = [];
 var runningHoursTotal = 0
+const MINIMUM_HOURS_FOR_A_COUNTABLE_DAY = 5;
 
 function debug(...args) {
   if (DEBUG) {
@@ -27,6 +28,8 @@ debug("Checking calendar cells:", calendarCells);
 
 // Loop over each cell
 let cellNum = 0;
+let countableDays = 0; // Number of days that have hours greater than MINIMUM_HOURS_FOR_A_COUNTABLE_DAY
+let weeklyCountableDays = 0; // Number of countable days for each week
 for (const calendarCell of calendarCells) {
   // If this is a "NonDay" (a day from the previous/next month), then skip it
   if (calendarCell.classList.contains("NonDay")) {
@@ -73,6 +76,12 @@ for (const calendarCell of calendarCells) {
     runningHoursArray.push(hours);
     weeklyHoursArray.push(hours);
 
+    // Set up the countable days
+    if (hours > MINIMUM_HOURS_FOR_A_COUNTABLE_DAY) {
+      countableDays += 1;
+      weeklyCountableDays += 1;
+    }
+
     // Add the running hours to the cell
     const runningHoursSPAN = document.createElement("span");
     runningHoursSPAN.setAttribute("style", "display: block; font-size: 10px; font-style: italic;");
@@ -87,7 +96,12 @@ for (const calendarCell of calendarCells) {
 
     // Calculate the weekly total and average
     let weeklyHoursTotal = weeklyHoursArray.reduce((a, b) => {return a + b}, 0);
-    let weeklyAverage = weeklyHoursTotal / weeklyHoursArray.length;
+    let weeklyAverage = 0;
+    let averageDays = weeklyHoursArray.length;
+    if (weeklyCountableDays > 0) {
+      averageDays = weeklyCountableDays;
+    }
+    weeklyAverage = weeklyHoursTotal / averageDays;
 
     if (weeklyHoursArray.length > 0) {
       // Add the average daily hours for the week to the cell
@@ -102,15 +116,16 @@ for (const calendarCell of calendarCells) {
       weeklyTotalSPAN.innerText = `Weekly Total Hrs.: ${weeklyHoursTotal.toFixed(2)}`;
       textContainer.appendChild(weeklyTotalSPAN);
 
-      // Reset the weekly hours
+      // Reset the weekly hours and days
       weeklyHoursArray = [];
+      weeklyCountableDays = 0;
     }
   }
   cellNum++;
 }
 
 // Add a summary to the month title
-const averageDailyHours = (runningHoursTotal / runningHoursArray.length) || 0;
+const averageDailyHours = (runningHoursTotal / countableDays) || 0;
 const monthTitleEl = document.querySelector(".MonthTitle");
 debug("updating", monthTitleEl, "with hours", runningHoursTotal);
 const hoursPlurality = runningHoursTotal == 1 ? "" : "s";
