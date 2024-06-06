@@ -9,12 +9,34 @@ import java.awt.MouseInfo;
 import java.awt.PointerInfo;
 import java.awt.Robot;
 
+// Adding support for parsing time strings and converting them to a duration
+// in seconds
+import java.time.LocalTime;
+import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+
+// Add support for better durationString parsing
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+
 public class IdleMouse
 {
     int idleTime = 5; // Default idle time in seconds
     int xOffset = 1; // Default x offset for jiggling the mouse
     int yOffset = 1; // Default y offset for jiggling the mouse
     Robot robot;
+    private static boolean DEBUG = false;
+    private static String[] timePatterns = {
+        "HH:mm:ss[ a]",
+        "HH:mm[ a]",
+        "HH[ a]",
+        "H:mm:ss[ a]",
+        "H:mm[ a]",
+        "H[ a]",
+        "HHmm"
+    };
 
     public IdleMouse(int idleTime, int xOffset, int yOffset) throws AWTException
     {
@@ -128,7 +150,12 @@ public class IdleMouse
                 System.out.println("  -x/--x-offset <n>   Set the x offset for jiggling the mouse (default: 1)");
                 System.out.println("  -y/--y-offset <n>   Set the y offset for jiggling the mouse (default: 1)");
                 System.out.println("  -d/--duration <n>   Stop checking after <n> seconds (default: -1, forever)");
+                System.out.println("  -u/--until <time>   Stop checking after <time>");
                 System.exit(0);
+            }
+            else if (arg.equals("--debug"))
+            {
+                IdleMouse.DEBUG = true;
             }
             else if (arg.equals("-i") || arg.equals("--idle"))
             {
@@ -138,7 +165,7 @@ public class IdleMouse
                 } catch (NumberFormatException e) {
                     // Try to parse as a time string
                     try {
-                        idleTime = timeStringToSeconds(value);
+                        idleTime = durationStringToSeconds(value);
                     } catch (NumberFormatException e2) {
                         System.err.printf("%s: error: invalid number: %s%n", scriptName, value);
                         System.exit(1);
@@ -185,7 +212,7 @@ public class IdleMouse
                     } catch (NumberFormatException e) {
                         // Try to parse as a time string
                         try {
-                            loopDuration = timeStringToSeconds(value);
+                            loopDuration = durationStringToSeconds(value);
                         } catch (NumberFormatException e2) {
                             System.err.printf("%s: error: invalid number: %s%n", scriptName, value);
                             System.exit(1);
@@ -202,6 +229,16 @@ public class IdleMouse
                     );
                     System.exit(1);
                 }
+            }
+            else if (arg.equals("-u") || arg.equals("--until"))
+            {
+                value = args[++i];
+                loopDuration = timeStringToSeconds(value);
+            }
+            else
+            {
+                System.err.printf("%s: error: invalid option: %s%n", scriptName, arg);
+                System.exit(1);
             }
         }
 
@@ -230,6 +267,7 @@ public class IdleMouse
         // Loop forever or for the specified duration
         startTime = System.currentTimeMillis();
         remainingTime = loopDuration;
+        lastPointerInfo = MouseInfo.getPointerInfo();
         // System.out.printf(
         //     "%sWaiting for the mouse to be idle for %d seconds...%s%n",
         //     S_DIM, idleTime, S_RESET
@@ -245,6 +283,10 @@ public class IdleMouse
             if (lastPointerInfo == null)
             {
                 lastPointerInfo = pointerInfo;
+                debug(String.format(
+                    "Setting lastPointerInfo to: %s%n",
+                    lastPointerInfo
+                ));
                 continue;
             }
 
@@ -342,8 +384,15 @@ public class IdleMouse
         int yNew = 0;
 
         // Loop until the mouse moves or the timeout is reached
+        debug("Waiting for mouse movement until " + endTime + "...");
         while (System.currentTimeMillis() < endTime)
         {
+            debug(
+                String.format(
+                    "Waiting for mouse to move from (%d, %d) [%d < %d]...%n",
+                    x, y, System.currentTimeMillis(), endTime
+                )
+            );
             // Update pointerInfo
             pointerInfo = MouseInfo.getPointerInfo();
             if (pointerInfo != null)
@@ -438,9 +487,18 @@ public class IdleMouse
 
     public static void debug(String... args)
     {
-        // Check if the DEBUG environment variable is set to 1 or true
-        String debug = System.getenv("DEBUG");
-        if (debug != null && (debug.equals("1") || debug.equals("true")))
+        // Check if the DEBUG environment variable or the static DEBUG is set
+        // String debug = System.getenv("DEBUG");
+        boolean debug = IdleMouse.DEBUG;
+        if (!debug) {
+            // Check the DEBUG environment variable
+            String debugEnv = System.getenv("DEBUG");
+            if (debugEnv != null && (debugEnv.equals("1") || debugEnv.equals("true")))
+            {
+                debug = true;
+            }
+        }
+        if (debug)
         {
             for (String arg : args)
             {
@@ -454,7 +512,7 @@ public class IdleMouse
      * Parse a time string in the format "[[HH:]MM:]SS" or "[[1h ]2m ]3s" and
      * return the number of milliseconds.
      */
-    public static int timeStringToSeconds(String timeString)
+    public static int durationStringToSeconds(String timeString)
     {
         int seconds = 0;
         boolean isColonSeparated = timeString.contains(":");
@@ -534,6 +592,50 @@ public class IdleMouse
         int minutes = (seconds % 3600) / 60;
         int secs = seconds % 60;
         return String.format("%02dh %02dm %02ds", hours, minutes, secs);
+    }
+
+    public static int timeStringToSeconds(String string)
+    {
+        int endEpoch = 0;
+        int curEpoch = 0;
+        int duration = 0;
+
+        // Loop through the time patterns and try to parse the string
+        for (String pattern : timePatterns)
+        {
+            LocalTime time = null;
+
+            try {
+                DateTimeFormatter formatter = DateTimeFormatter.ofPattern(pattern);
+                time = LocalTime.parse(string, formatter);
+            } catch (DateTimeParseException e) {
+                continue;
+            }
+
+            // If we get here, the string was parsed successfully
+            endEpoch = time.toSecondOfDay();
+            curEpoch = LocalTime.now().toSecondOfDay();
+            duration = endEpoch - curEpoch;
+            if (duration < 0)
+            {
+                System.err.printf(
+                    "error: cannot idle into the past: %s%n",
+                    string
+                );
+                System.exit(1);
+            } else {
+                break;
+            }
+        }
+        return duration;
+    }
+
+    public static LocalTime durationToLocalTime(int duration)
+    {
+        int hours = duration / 3600;
+        int minutes = (duration % 3600) / 60;
+        int seconds = duration % 60;
+        return LocalTime.of(hours, minutes, seconds);
     }
 
     public String toString()
