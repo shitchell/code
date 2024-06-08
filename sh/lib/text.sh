@@ -258,32 +258,37 @@ function urldecode() {
     printf '%b' "${string//%/\\x}"
 }
 
+# @description If PREVIEW_LINES is set, return only the first N lines, else cat
+# @usage preview-output [--text <text>] [--label <label>] [--preview <int>] [<file>]
+function preview-output() {
+    local file=""
+    local label="line"
+    local data=""
+    local lines=0
+    local preview_lines="${PREVIEW_LINES}"
 
-## awk/sed #####################################################################
-################################################################################
-
-function awk-csv() {
-    awk -v FPAT="([^,]*)|(\"[^\"]*\")"
-}
-
-# @description Uniqueify lines based on one or more fields
-# @usage uniqueify [-d <delimiter>] [-c <column>] file
-# @usage cat file | uniqueify [-d <delimiter>] [-c <column>]
-function uniqueify() {
-    local delimiter=" "
-    local columns=()
-    local file="-"
-
-    # Parse arguments
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -d | --delimiter)
-                delimiter="${2}"
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --text)
+                data="${2}"
                 shift 2
                 ;;
-            -c | --column)
-                columns+=("${2}")
+            --label)
+                label="${2}"
                 shift 2
+                ;;
+            --preview)
+                preview_lines="${2}"
+                shift 2
+                ;;
+            -)
+                file="/dev/stdin"
+                shift 1
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_INVALID_OPTION:-1}
                 ;;
             *)
                 file="${1}"
@@ -292,192 +297,115 @@ function uniqueify() {
         esac
     done
 
-    # Use awk to uniqueify the lines
-    awk -F "${delimiter}" -v delimiter="${delimiter}" -v columns="${columns[*]}" '
-        BEGIN {
-            split(columns, columns_array, " ")
-            for (i in columns_array) {
-                column = columns_array[i]
-                if (column ~ /^[0-9]+$/) {
-                    column_array[column] = 1
-                } else {
-                    column_array[column] = 0
-                }
-                print "-- column: " column " | i: " i " | column_array[column]: " column_array[column] > "/dev/stderr";
-            }
-        }
-        {
-            key = ""
-            for (i in column_array) {
-                if (column_array[i] == 1) {
-                    key = key delimiter $i
-                } else {
-                    key = key delimiter "\"" $i "\""
-                }
-            }
-            print "-- key: " key > "/dev/stderr";
-            if (!seen[key]++) {
-                print
-            }
-            else { print "skipping: " $0 > "/dev/stderr" }
-        }
-    ' < <(cat "${file}")
+    if [[ -n "${preview_lines}" && ! "${preview_lines}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid preview line count: ${preview_lines}" >&2
+        return ${E_INVALID_OPTION:-1}
+    fi
+
+    if [[ "${file}" == "-" ]]; then
+        file="/dev/stdin"
+    elif [[ -z "${file}" && -z "${data}" ]]; then
+        echo "error: no text provided" >&2
+        return ${E_ERROR:-1}
+    fi
+
+    if [[ -n "${file}" && -z "${data}" ]]; then
+        data=$(cat "${file}" 2>/dev/null)
+    fi
+    lines=$(wc -l <<< "${data}" 2>/dev/null)
+    debug-vars preview_lines file data lines
+
+    if [[ -n "${preview_lines}" && ${preview_lines} -lt ${lines} ]]; then
+        debug "previewing ${preview_lines} lines of ${file}"
+        local remainder=$((lines - preview_lines))
+        local s=$([[ "${remainder}" != 1 ]] && echo "s")
+        local lines_to_show=${preview_lines}
+        while read -r line && ((lines_to_show > 0)); do
+            echo "${line}"
+            ((lines_to_show--))
+        done <<< "${data}"
+        echo "...and ${remainder} more ${label}${s}"
+    else
+        debug "previewing all lines of ${file}"
+        printf '%s\n' "${data}"
+    fi
 }
 
-## json ########################################################################
+
+## awk/sed #####################################################################
 ################################################################################
 
-# @description Escape a string for use in JSON, e.g. as a key or value
-# @usage json-escape [--(no-)quotes] <string>
-# @attribution https://stackoverflow.com/a/29653643 https://stackoverflow.com/a/74426351/794241
-function json-escape() {
-    local text=()
-    local do_quotes="" # false if empty
+# @description Remove ANSI escape codes from the specified string
+function rmansi() {
+    sed $'s,\x1B\[[0-9;]*[a-zA-Z],,g'
+}
 
-    # Parse arguments
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -q | --quotes)
-                do_quotes=true
-                shift
+function awk-csv() {
+    awk -v FPAT="([^,]*)|(\"[^\"]*\")"
+}
+
+# @description Uniqueify a set of strings based on a column without sorting
+# @usage uniqueify [-c <column>] [-d <delimiter>] <file>
+function uniq-column() {
+    local column=1
+    local delimiter=$'\t'
+    local filepath data
+
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -c)
+                column="${2}"
+                shift 2
                 ;;
-            -Q | --no-quotes)
-                do_quotes=""
-                shift
+            -d)
+                delimiter="${2}"
+                shift 2
+                ;;
+            -)
+                filepath="/dev/stdin"
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_INVALID_OPTION}
                 ;;
             *)
-                text+=("$1")
-                shift
+                filepath="${1}"
+                shift 1
                 ;;
         esac
     done
 
-    [[ -z "${text}" ]] && text=$(cat -)
-    [[ -z "${text}" ]] && return
+    debug-vars column delimiter filepath
 
-    awk -v do_quotes="${do_quotes}" '
-        BEGIN {
-            for ( i = 1; i <= 127; i++ ) {
-                # Handle reserved JSON characters and special characters
-                switch ( i ) {
-                    case 8:  repl[ sprintf( "%c", i) ] = "\\b"; break
-                    case 9:  repl[ sprintf( "%c", i) ] = "\\t"; break
-                    case 10: repl[ sprintf( "%c", i) ] = "\\n"; break
-                    case 12: repl[ sprintf( "%c", i) ] = "\\f"; break
-                    case 13: repl[ sprintf( "%c", i) ] = "\\r"; break
-                    case 34: repl[ sprintf( "%c", i) ] = "\\\""; break
-                    case 92: repl[ sprintf( "%c", i) ] = "\\\\"; break
-                    default: repl[ sprintf( "%c", i) ] = sprintf( "\\u%04x", i );
-                }
-            }
-
-            for ( i = 1; i < ARGC; i++ ) {
-                if (i == 1 && do_quotes) {
-                    printf("\"")
-                } else if (i > 1) {
-                    printf(" ")
-                }
-
-                s = ARGV[i]
-                while ( match( s, /[\001-\037\177"\\]/ ) ) {
-                    printf("%s%s", \
-                        substr(s,1,RSTART-1), \
-                        repl[ substr(s,RSTART,RLENGTH) ] \
-                    )
-                    s = substr(s,RSTART+RLENGTH)
-                }
-
-                printf("%s", s)
-                if (i == (ARGC - 1) && do_quotes) {
-                    printf("\"")
-                }
-            }
-            exit
+    if [[ -n "${filepath}" ]]; then
+        data=$(cat "${filepath}" 2>/dev/null) || {
+            echo "error: cannot read file: ${filepath}" >&2
+            return ${E_FILE_ERROR}
         }
-    ' "${text[@]}"
-}
-
-# @description determine the type of a JSON value
-# @usage json-type <value>
-function json-type() {
-    local value="${1}"
-    local json_type
-
-    if [[ "${value}" == "null" ]]; then
-        type="null"
-    elif [[ "${value}" == "true" || "${value}" == "false" ]]; then
-        type="boolean"
-    elif [[ "${value}" =~ ^[0-9]+$ ]]; then
-        type="integer"
-    elif [[ "${value}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        type="float"
-    elif [[ "${value}" =~ ^\".*\"$ ]]; then
-        type="string"
-    elif [[ "${value}" =~ ^\[.*\]$ ]]; then
-        type="array"
-    elif [[ "${value}" =~ ^\{.*\}$ ]]; then
-        type="object"
-    else
-        type="unknown"
     fi
 
-    echo "${type}"
-}
-
-# @description Convert an array with values in the format `key=value` to a JSON object
-# @usage json-map-from-keys [--detect-types] <key=value>...
-function json-map-from-keys() {
-    local key_value_pairs=()
-    local detect_types=true
-
-    # Parse arguments
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -d | --detect-types)
-                detect_types=true
-                shift
-                ;;
-            -D | --no-detect-types)
-                detect_types=false
-                shift
-                ;;
-            *)
-                key_value_pairs+=("$1")
-                shift
-                ;;
-        esac
-    done
-
-    # if no values given, check stdin
-    if [ ${#key_value_pairs[@]} -eq 0 ]; then
-        while read -r line; do
-            key_value_pairs+=("${line}")
-        done
+    if [[ -z "${data}" ]]; then
+        data=$(cat)
     fi
 
-    local json='{'
-    for key_value_pair in "${key_value_pairs[@]}"; do
-        local key="${key_value_pair%%=*}"
-        local value="${key_value_pair#*=}"
-        debug "key_value_pair: ${key} = ${value}"
+    debug-vars data
 
-        # Detect type if requested
-        if ${detect_types}; then
-            local json_type="$(json-type "${value}")"
-            case "${json_type}" in
-                "integer" | "float" | "boolean" | "null" | "array" | "object")
-                    value="${value}"
-                    ;;
-                "string" | "unknown")
-                    value=$(json-escape -q "${value}")
-                    ;;
-            esac
-        else
-            value=$(json-escape -q "${value}")
-        fi
-        json="${json}\"${key}\": ${value}, "
-    done
-    json="${json%, }}"
+    if [[ -z "${data}" ]]; then
+        return ${E_ERROR}
+    fi
 
-    echo "${json}"
+    awk -F "${delimiter}" -v col="${column}" '
+        {
+            value = $col
+            if (!seen[value]) {
+                seen[value] = 1
+                print $0
+            }
+        }
+    ' <<< "${data}"
 }

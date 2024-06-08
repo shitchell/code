@@ -361,69 +361,126 @@ function echo-success() {
 # Prints "${message} ... ", runs ${command}, prints "Done" or "Error" based on
 # the exit code of the command. Stores the output ${command} in ${output_var}
 function check-command() {
-    :  'Check a command for success
-
-        This function will run a command and print a message based on the exit
-        code of the command. If the command exits with a non-zero status, it
-        will print an error message. Useful for scripts using the output style:
-           * doing this ... done
-           * doing that ... done
-           * checking this ... error
-
-        @usage
-            <command> [<message>]
-            <command> <message> <output_var>
-            <command> <message> <stdout_var> <stderr_var>
-
-        @arg <command>
-            The command to run
-
-        @arg <message>
-            The message to print
-
-        @arg <output_var>
-            The variable to store the output (stdout & stderr) of the command
-
-        @arg <stdout_var>
-            The variable to store the stdout of the command
-
-        @arg <stderr_var>
-            The variable to store the stderr of the command
-
-        @stdout
-            The message and the output of the command
-    '
     local command="${1}"
-    local message="${2}"
-    local stdout_var="${3}"
-    local stderr_var="${4}"
+    local description
+    local prefix="* "
+    local success_message="done"
+    local error_message="error"
+    declare -A exit_code_messages=()
+    local attempts=1
+    local stdout_var="STDOUT"
+    local stderr_var="STDERR"
     local combine_output=0
 
-    # If the message is empty, use the command as the message
-    if [ -z "${message}" ]; then
-        message="Running \`${command}\`"
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -c | --command)
+                command="${2}"
+                shift 2
+                ;;
+            -d | --description)
+                description="${2}"
+                shift 2
+                ;;
+            -p | --prefix)
+                prefix="${2}"
+                shift 2
+                ;;
+            --no-prefix)
+                prefix=""
+                shift 1
+                ;;
+            -s | --success | --success-message)
+                success_message="${2}"
+                shift 2
+                ;;
+            -e | --failure | --failure-message | --error | --error-message)
+                error_message="${2}"
+                shift 2
+                ;;
+            --exit-code-*)
+                local exit_code_name="${1#--exit-code-}"
+                exit_code_messages["${exit_code_name}"]="${2}"
+                shift 2
+                ;;
+            -a | --attempts)
+                if [[ "${2}" =~ ^[0-9]+$ ]]; then
+                    attempts="${2}"
+                else
+                    echo "error: invalid number of attempts: ${2}" >&2
+                    return 1
+                fi
+                shift 2
+                ;;
+            -o | --stdout-var)
+                stdout_var="${2}"
+                shift 2
+                ;;
+            -e | --stderr-var)
+                stderr_var="${2}"
+                shift 2
+                ;;
+            -c | --combine-output)
+                combine_output=1
+                shift 1
+                ;;
+            *)
+                shift 1
+                ;;
+        esac
+    done
+
+    debug-vars \
+        command description prefix success_message error_message attempts \
+        stdout_var stderr_var combine_output
+    
+    # If the command is empty, return an error
+    if [[ -z "${command}" ]]; then
+        echo "error: no command provided" >&2
+        return 1
     fi
 
-    local out_dir="$(mktemp -dt ccomm.${$}.XXXX)"
+    # If the description is empty, use the command as the description
+    if [ -z "${description}" ]; then
+        description="Running \`${command}\`"
+    fi
+
+    local out_dir=$(mktemp -dt ccomm.${$}.XXXX)
     local stdout_file="${out_dir}/stdout"
-    if [ -n "${stderr_var}" ]; then
+    if [[ -n "${stderr_var}" ]]; then
         local stderr_file="${out_dir}/stderr"
     else
         # if only stdout is provided, combine stdout and stderr
         local stderr_file="${stdout_file}"
     fi
 
-    echo -n "${message} ... "
+    echo -n "${prefix}${description} ... "
 
     # run the command
-    eval "(${command})" 1>>${stdout_file} 2>>${stderr_file}
-    exit_code="$?"
+    for ((i=1; i<=${attempts}; i++)); do
+        eval "(${command};)" 1>${stdout_file} 2>${stderr_file}
+        exit_code="${?}"
+        if [[ ${exit_code} -eq 0 ]]; then
+            break
+        fi
+        if [[ ${i} -lt ${attempts} ]]; then
+            echo -n "retrying (${i}/${attempts}) ... "
+        fi
+    done
 
     # print a status message based on the exit code
-    if [ ${exit_code} -eq 0 ]; then
-        echo-success "Done"
+    local exit_message=""
+    if [[ -n "${exit_code_messages[${exit_code}]}" ]]; then
+        exit_message="${exit_code_messages[${exit_code}]}"
+    elif [ ${exit_code} -eq 0 ]; then
+        exit_message="${success_message}"
     else
-        echo-error "Error"
+        exit_message="${error_message}"
+    fi
+    if [ ${exit_code} -eq 0 ]; then
+        echo-success "${success_message}"
+    else
+        echo-error "${error_message}"
     fi
 
     # store the output in the specified variables
@@ -434,7 +491,7 @@ function check-command() {
     fi
 
     # clean up temporary files
-    rm -rf ${out_dir}
+    rm -rf "${out_dir}"
 
     return ${exit_code}
 }
@@ -673,10 +730,10 @@ function print-header() {
     ## Print the initial border or markdown header
     if [[ "${style}" == "bordered" ]]; then
         # Print the first border
-        for ((i=0; i<border_width; i++)); do printf '%s' "${border_character}"; done
+        repeat-char "${border_character}" "${border_width}"
         echo
     elif [[ "${style}" == "markdown" ]]; then
-        for ((i=0; i<markdown_level; i++)); do echo -n "#"; done
+        repeat-char "#" "${markdown_level}"
         echo -n " "
     fi
 
@@ -686,7 +743,7 @@ function print-header() {
     ## Print the final border or underline
     if [[ "${style}" == "bordered" || "${style}" == "underlined" ]]; then
         # Print the final border
-        for ((i=0; i<border_width; i++)); do printf '%s' "${border_character}"; done
+        repeat-char "${border_character}" "${border_width}"
         echo
     fi
 

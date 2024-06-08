@@ -118,6 +118,7 @@ function git-root() {
     git -C "${1:-.}" rev-parse --show-toplevel
 }
 
+# Return the path of a file relative to the git repository root
 function git-relpath() {
     :  'Get the relative path of a file to the git repository root
 
@@ -209,6 +210,7 @@ function git-branch-name() {
     echo "${branch}"
 }
 
+# Determine if the specified commit exists in the current repo
 function git-commit-exists() {
     :  'Determine if the specified commit exists in the current repo
 
@@ -337,6 +339,97 @@ function is-merge-commit() {
     fi
 }
 
+# @description Find the merge commit that merged the specified commit into the
+#              specified branch
+# @usage find-merge <commit> <branch>
+function find-merge() {
+    local commit="${1}"
+    local branch="${2:-HEAD}"
+    local candidate
+
+    [[ -z "${commit}" ]] && echo "fatal: no commit specified" >&2 && return 1
+
+    # Get the full commit hash of the specified commit
+    commit=$(git rev-parse "${commit}")
+
+    # Try to find the merge commit that contains the specified commit
+    candidate=$(
+        {
+            git rev-list "${commit}..${branch}" --ancestry-path | cat -n
+            git rev-list "${commit}..${branch}" --first-parent  | cat -n
+        } | sort -k2 -s | uniq -f1 -d | sort -n | tail -1 | cut -f2
+    )
+
+    # Ensure that the candidate merge commit actually contains the specified
+    # commit
+    if [[ -n "${candidate}" ]] && git log "${candidate}~1".."${candidate}" --format="%H" | grep -q "${commit}"; then
+        echo "${candidate}"
+    else
+        echo "fatal: could not find merge commit for ${commit} into ${branch}" >&2
+        return 1
+    fi
+}
+
+# @description Show the merge commit that merged the specified commit into the
+#              specified branch using `git log`
+# @usage show-merge [<git log options> --] <commit> [<branch>]
+# @example show-merge a1b2c3d
+# @example show-merge a1b2c3d master
+# @example show-merge --oneline -n 2 -- a1b2c3d master
+function show-merge() {
+    local git_options=()
+    local git_options_found=false
+    local commit
+    local branch
+    local merge_commit
+
+    # Parse the git options
+    while [[ $# -gt 0 ]]; do
+        if [[ "${1}" == "--" ]]; then
+            shift
+            git_options_found=true
+            break
+        fi
+        git_options+=("${1}")
+        shift
+    done
+
+    # Parse the commit and branch
+    if ! "${git_options_found}"; then
+        # if no git options were found, they'll be the first two arguments
+        commit="${git_options[0]}"
+        branch="${git_options[1]:-HEAD}"
+    else
+        # otherwise, they'll be the first and second arguments after the "--"
+        commit="${1}"
+        branch="${2:-HEAD}"
+    fi
+
+    debug "commit: ${commit}"
+    debug "branch: ${branch}"
+    debug "git options: ${git_options[@]}"
+
+    # Find the merge commit
+    merge_commit=$(find-merge "${commit}" "${branch}" 2>/dev/null)
+
+    # If a merge commit was found, show it
+    if [[ -n "${merge_commit}" ]]; then
+        git log -1 "${merge_commit}" "${git_options[@]}"
+    else
+        echo "fatal: could not find merge commit for ${commit} into ${branch}" >&2
+        return 1
+    fi
+}
+
+# @description Determine if a given commit was merged into a given branch
+# @usage is-merged-into <commit> <branch>
+function is-merged-into() {
+    local commit="${1}"
+    local branch="${2:-HEAD}"
+
+    git merge-base --is-ancestor "${commit}" "${branch}"
+}
+
 # Returns a list of commit hashes and filepaths in the ref in the format:
 #   <commit hash>:<filepath>
 # Any passed in arguments are passed along to the git log command
@@ -444,6 +537,9 @@ function git-status-name() {
         "D")
             object_mode="delete"
             ;;
+        "M")
+            object_mode="updated"
+            ;;
         "R")
             object_mode="rename"
             ;;
@@ -454,7 +550,16 @@ function git-status-name() {
             object_mode="unmerged"
             ;;
         "T")
+            object_mode="unknown"
+            ;;
+        "B")
+            object_mode="broken"
+            ;;
+        "??")
             object_mode="typechange"
+            ;;
+        "!!")
+            object_mode="ignored"
             ;;
         *)
             object_mode="???"
@@ -669,4 +774,79 @@ function git-user-stats() {
                 }
             }
     '
+}
+
+# @description Return the mode (permissions) of a filepath at a given commit
+# @usage git-file-mode <filepath> [<commit>]
+# @example git-file-mode README
+# @example git-file-mode README a1b2c3d
+function git-file-mode() {
+    local filepath="${1}"
+    local commit="${2:-HEAD}"
+
+    git ls-tree "${commit}" "${filepath}" | awk '{print substr($1, 4)}'
+}
+
+# @description Discard all local changes and sync with the remote branch if set
+# @usage git-sync [<ref>]
+# @example git-sync
+# @example git-sync origin/master
+function git-sync() {
+    local ref="${1}"
+    local remote_branch
+    local is_branch=false
+
+    # fetch all updates
+    git fetch --all --tags
+
+    # if no ref was specified, use the current branch
+    if [[ -z "${ref}" ]]; then
+        ref=$(git-branch-name)
+
+        # if the current branch is tracking a remote branch, use that
+        remote_branch=$(git-remote-tracking-branch "${ref}")
+        if [[ -n "${remote_branch}" ]]; then
+            ref="${remote_branch}"
+        fi
+
+        is_branch=true
+    fi
+
+    # reset the current branch to the specified ref
+    git reset --hard "${ref}"
+
+    # if the specified ref is a branch, pull from it
+    if ${is_branch}; then
+        git pull
+    fi
+
+    # clean up any untracked files
+    git clean -f -d
+}
+
+# @description Return the remote tracking branch for a given branch
+# @usage git-remote-tracking-branch [<branch>]
+# @example git-remote-tracking-branch
+# @example git-remote-tracking-branch master
+function git-remote-tracking-branch() {
+    local branch="${1:-HEAD}"
+    local symbolic_full_name
+    local remote_branch
+
+    symbolic_full_name=$(
+        git rev-parse --symbolic-full-name "${branch}"
+    )
+    if [[
+        ${?} -ne 0
+        || -z "${symbolic_full_name}"
+        || "${symbolic_full_name}" == "HEAD"
+    ]]; then
+        # On a detached HEAD or an otherwise invalid branch
+        return 1
+    fi
+    remote_branch=$(
+        git for-each-ref --format='%(upstream:short)' "${symbolic_full_name}"
+    )
+
+    [[ -n "${remote_branch}" ]] && echo "${remote_branch}" || return 1
 }

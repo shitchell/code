@@ -333,6 +333,19 @@ function print-escaped() (
     ' <<< "${string}"
 )
 
+# @description Find all variable names which match a glob pattern
+# @usage __find-vars <pattern>
+function __find-vars() {
+    local pattern
+    pattern="${1}"
+
+    while read -r var_name; do
+        if [[ "${var_name}" == ${pattern} ]]; then
+            echo "${var_name}"
+        fi
+    done < <(compgen -v)
+}
+
 # @description Print the values of a list of variables given their names
 # @usage debug-vars <var1> <var2> ...
 # @example foo=bar bar=baz debug-vars "foo" "bar"
@@ -365,7 +378,7 @@ function debug-vars() {
             The names and values of the specified variable names
         '
     local verbosity=${DEBUG_VERBOSITY:-1}
-    local var_names=()
+    local _var_names_tmp=() var_names=()
     local var_char var_name var_type var_value var_length is_set
     local display_type display_value
     local debug_message declare_str
@@ -385,7 +398,7 @@ function debug-vars() {
                         ;;
                     --)
                         shift
-                        [[ ${#} -gt 0 ]] && var_names+=("${@}")
+                        [[ ${#} -gt 0 ]] && _var_names_tmp+=("${@}")
                         break
                         ;;
                     *)
@@ -411,10 +424,21 @@ function debug-vars() {
                 done
                 ;;
             *)
-                var_names+=("${1}")
+                _var_names_tmp+=("${1}")
                 ;;
         esac
         shift 1
+    done
+
+    # process the var names, expanding any globs
+    for var_name in "${_var_names_tmp[@]}"; do
+        if [[ "${var_name}" =~ "*" ]]; then
+            local matching_vars
+            readarray -t matching_vars < <(__find-vars "${var_name}")
+            var_names+=("${matching_vars[@]}")
+        else
+            var_names+=("${var_name}")
+        fi
     done
 
     debug_message=$(
@@ -522,7 +546,7 @@ function debug-vars() {
 }
 
 # print debug information, test version
-function _debug() {
+function _debug() (
     local debug_file
     local debug_level
     local timestamp
@@ -582,18 +606,13 @@ function _debug() {
                         " -- " $0;
                 }' \
             >&3
-            # | dd of="${debug_file}" conv=notrunc oflag=append status=none
-        # for arg in "${@}"; do
-        #     printf "\e[36m[%s]\e[0m \e[1;35m%s:%s\e[0m -- %s\n" \
-        #         "${timestamp}" "${FUNCNAME[1]}" "${BASH_LINENO[0]}" "${arg}" \
-        #         | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
-        # done
     fi
-}
+)
 
 # @description Print debug information if $DEBUG or $DEBUG_LOG are set
 # @usage _mini_debug <message>
-function _mini_debug() {
+function _mini_debug() (
+    # use a subshell to avoid altering &3 in the calling shell
     local prefix timestamp
     if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || -n "${DEBUG_LOG}" ]]; then
         [[ -n "${DEBUG_LOG}" ]] && exec 3>>"${DEBUG_LOG}" || exec 3>&2
@@ -605,9 +624,8 @@ function _mini_debug() {
         printf "%s\n" "${@}" \
             | awk -v prefix="${prefix}" '{print prefix $0}' \
             >&3
-            # | dd of="${DEBUG_LOG:-/dev/stderr}" conv=notrunc oflag=append status=none
     fi
-}
+)
 
 # Temporarily turn on xtrace and run the given command
 function run-verbose() {

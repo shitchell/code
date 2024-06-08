@@ -15,9 +15,14 @@ file to a client.
 
 # Setup
 
-  1. Create a <SHELL>_LIB_PATH environment var to include the directories
-     to search for importable scripts.
-     e.g.: BASH_LIB_PATH or ZSH_LIB_PATH
+  1. Setup the lib dir(s)
+     * create a <SHELL>_LIB_PATH environment variable to include the directories
+       to search for importable scripts, e.g.:
+         export BASH_LIB_PATH="$HOME/bin/lib:$HOME/code/bash/lib"
+         export ZSH_LIB_PATH="$HOME/bin/lib:$HOME/code/zsh/lib"
+     * OR create a LIB_DIR environment variable to include a single directory
+       to search for importable scripts, e.g.:
+         export LIB_DIR="$HOME/code/bash/lib"
   2. Source this script in your shell.
 
 # Usage
@@ -353,36 +358,45 @@ function __bash_libs_get_path() {
     @stdout     The value of <SHELL>_LIB_PATH or PATH
     '
     #__debug "_call(${@})"
+    local path shell_lower shell_upper lib_path lib_path_value
 
     # reliably determine the shell
     local shell_lower=$(get-shell)
     local shell_upper=$(echo "${shell_lower}" | tr '[:lower:]' '[:upper:]')
 
     # determine the current shell's lib path
-    local lib_path="${shell_upper}_LIB_PATH"
-    #__debug "lib_path: ${lib_path}"
+    local lib_path_name="${shell_upper}_LIB_PATH"
+    #__debug "lib_path_name: ${lib_path_name}"
 
     # load the value of the lib path from the environment
     if [ "${shell_lower}" = "bash" ]; then
         #__debug "getting bash lib path"
-        local lib_path_value="${!lib_path}"
+        local lib_path_value="${!lib_path_name}"
     elif [ "${shell_lower}" = "zsh" ]; then
         #__debug "getting zsh lib path"
-        local lib_path_value="${(P)lib_path}"
+        local lib_path_value="${(P)lib_path_name}"
     else
         #__debug "attempting generic lib path eval"
         # attempt a generic eval, although chances are low that the rest of
         # the module will work even if this does
-        eval local lib_path_value="\$${lib_path}"
+        eval local lib_path_value="\$${lib_path_name}"
         if [ $? -ne 0 ]; then
-            echo "$(functionname): failed to determine the value of '${lib_path}'" >&2
+            echo "$(functionname): failed to determine the value of '${lib_path_name}'" >&2
             return 1
         fi
     fi
 
-    #__debug "lib_path_value: ${lib_path_value}"
+    lib_path="${lib_path_value:-${PATH}}"
 
-    echo "${lib_path_value:-${PATH}}"
+    # If LIB_DIR is set, append it to the lib path
+    if [[ -n "${LIB_DIR}" ]]; then
+        [[ -n "${lib_path}" ]] \
+            && lib_path="${LIB_DIR}:${lib_path}" \
+            || lib_path="${LIB_DIR}"
+    fi
+
+    #__debug "lib_path: ${lib_path}"
+    echo "${lib_path}"
 }
 
 function __bash_libs_get_filepath() {
@@ -407,7 +421,7 @@ function __bash_libs_get_filepath() {
         return 0
     fi
 
-    # Try to find the path in <SHELL>_LIB_PATH or PATH
+    # Try to find the path in <SHELL>_LIB_PATH or PATH, with or without the .sh
     local lib_path_array
     IFS=":" read -ra lib_path_array <<< "$(__bash_libs_get_path)"
     #__debug "lib_path_array: ${lib_path_array[@]}"

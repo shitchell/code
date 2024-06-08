@@ -27,183 +27,173 @@ function mkuniq() {
     echo "${filename}"
 }
 
-function generate-changelog() {
-    :  'Generate a git-style name-status changelog between two directories
-
-        Given two directories, generate a name-status changelog that describes
-        the changes between the two directories. The changelog is sorted by
-        filename.
+function is-java-class() {
+    :  'Determine if a file is a java class
 
         @usage
-            [-x/--exclude <regex>] <source-dir> <target-dir>
-
-        @arg -x/--exclude <regex>
-            A regex pattern to exclude files from the comparison
-
-        @arg <source-dir>
-            The source directory to compare
-
-        @arg <target-dir>
-            The target directory to compare
+            <file>
 
         @stdout
-            The name-status changelog
+            The specified filepath and its java type (class, groovy, jar)
+
+        @stderr
+            Any error messages
+
+        @return 0
+            The file is a java class
+
+        @return 1
+            The file is not a java class
+
+        @return 2
+            No file was specified
+
+        @return 3
+            The file does not exist or is not readable
+
+        @return 4
+            The file is a directory
+
+        @return 5
+            The file is a symlink
+
+        @return 6
+            The file has no extension
+
+        @return 7
+            The file has an invalid extension
     '
-    local source_dir
-    local target_dir
-    local exclude_patterns=()
 
-    # Parse the options
-    while [[ ${#} -gt 0 ]]; do
-        case "${1}" in
-            -x | --exclude)
-                exclude_patterns+=("${2}")
-                shift 2
-                ;;
-            -*)
-                echo "error: unknown option: ${1}" >&2
-                return ${E_ERROR}
-                ;;
-            *)
-                if [[ -n "${target_dir}" ]]; then
-                    echo "error: too many arguments" >&2
-                    return 1
-                fi
-                [[ -z "${source_dir}" ]] && source_dir="${1}" || target_dir="${1}"
-                shift 1
-                ;;
-        esac
-    done
+    local filepath="${1}"
+    local filename=$(basename "${filepath%.*}")
+    local extension
 
-    local created_files=()
-    local deleted_files=()
-    local shared_files=()
-    local changelog=()
+    # Use /dev/stdin if "-" was passed
+    [[ "${filepath}" == "-" ]] && filepath="/dev/stdin"
 
-    if [[ ! -d "${source_dir}" ]]; then
-        echo "error: source directory does not exist: ${source_dir}" >&2
-        return ${E_ERROR}
+    # Determine the extension
+    if [[ "${filepath}" == "/dev/stdin" ]]; then
+        extension="java"
+        echo "${filepath}: warning: skipping extension and filename validations" >&2
+    elif [[ "${filepath}" =~ \. ]]; then
+        extension="${filepath##*.}"
     fi
 
-    if [[ ! -d "${target_dir}" ]]; then
-        echo "error: target directory does not exist: ${target_dir}" >&2
-        return ${E_ERROR}
+    # Make sure a filepath was given
+    if [[ -z "${filepath}" ]]; then
+        echo "error: no filepath specified" >&2
+        return 2
     fi
 
-    local source_files=()
-    local target_files=()
-    local source_file
-    local target_file
-    local filepath
-    local source_md5
-    local target_md5
-    local file_sizes
-    local file_bits
-    local source_bits
-    local target_bits
-    local source_size
-    local target_size
-    local change_mode
+    # Perform some file / filename checks if not reading from stdin
+    if [[ "${filepath}" != "/dev/stdin" ]]; then
+        # Check if the filepath is a directory
+        if [[ -d "${filepath}" ]]; then
+            echo "${filepath}: error: is a directory" >&2
+            return 4
+        fi
 
-    # Collect the source files as relative paths
-    while IFS= read -r -d '' source_file; do
-        # Skip files that match the exclude patterns
-        for pattern in "${exclude_patterns[@]}"; do
-            if [[ "${source_file}" =~ ${pattern} ]]; then
-                continue 2
+        # Check if it's a symlink
+        if [[ -L "${filepath}" ]]; then
+            # If we're not following symlinks, exit with an error
+            if [[ ${FOLLOW_SYMLINKS} -eq 0 ]]; then
+                echo "${filepath}: error: is a symlink" >&2
+                return 5
             fi
-        done
-        source_files+=("${source_file}")
-    done < <(find "${source_dir}" -type f -printf "%P\0")
 
-    # Collect the target files as relative paths
-    while IFS= read -r -d '' target_file; do
-        # Skip files that match the exclude patterns
-        for pattern in "${exclude_patterns[@]}"; do
-            if [[ "${target_file}" =~ ${pattern} ]]; then
-                continue 2
+            # Otherwise, get the real path
+            filepath=$(readlink -f "${filepath}")
+            if [[ $? -ne 0 ]]; then
+                echo "${filepath}: error: failed to read symlink '${filepath}'" >&2
+                return 5
             fi
-        done
-        target_files+=("${target_file}")
-    done < <(find "${target_dir}" -type f -printf "%P\0")
 
-    # Determine the created, modified, and shared files
-    readarray -t created_files < <(
-        comm -23 \
-            <(printf "%s\n" "${source_files[@]}" | sort) \
-            <(printf "%s\n" "${target_files[@]}" | sort)
+            # And call this function again
+            is-java-class "${filepath}"
+            return ${?}
+        fi
+
+        # Check for an extension
+        if [[ -z "${extension}" ]]; then
+            echo "${filepath}: error: no extension" >&2
+            return 6
+        fi
+
+        # Check that the extension is "java", "class", "jar", or "groovy"
+        if [[
+            "${extension}" != "java"
+            && "${extension}" != "class"
+            && "${extension}" != "jar"
+            && "${extension}" != "groovy"
+        ]]; then
+            echo "${filepath}: error: invalid extension '.${extension}'" >&2
+            return 7
+        fi
+
+        # ...and that the file exists
+        if [[ ! -f "${filepath}" ]]; then
+            echo "${filepath}: error: file '${filepath}' does not exist" >&2
+            return 3
+        fi
+
+        # If the extension is "jar" or "class", do a `file` check
+        if [[ "${extension}" == "jar" || "${extension}" == "class" ]]; then
+            file_info=$(file "${filepath}")
+            if [[ "${file_info}" =~ "Java class data" ]]; then
+                echo "${filepath}: compiled java class"
+                return 0
+            elif [[ "${file_info}" =~ "Java archive data" ]]; then
+                echo "${filepath}: compiled java archive"
+                return 0
+            else
+                echo "${filepath}: error: file is not a java class" >&2
+                return 1
+            fi
+        fi
+    fi
+
+    # Then read the file
+    data=$(cat "${filepath}" 2>&1 | tr -d '\0')
+    if [[ $? -ne 0 ]]; then
+        echo "${filepath}: error: failed to read file '${filepath}'" >&2
+        if [[ -n "${data}" ]]; then
+            echo "${data}" >&2
+        fi
+        return 1
+    fi
+
+    # Make sure there's data
+    if [[ -z "${data}" ]]; then
+        echo "${filepath}: error: no file content to check" >&2
+        return 1
+    fi
+
+    # Grep for the class declaration
+    class_name=$(
+        echo "${data}" \
+            | grep -zoP '\n?(public\s+)?class\s+\K([^\s]+)(?=\s+{)' 2>/dev/null \
+            | tr -d '\0'
     )
-    readarray -t deleted_files < <(
-        comm -13 \
-            <(printf "%s\n" "${source_files[@]}" | sort) \
-            <(printf "%s\n" "${target_files[@]}" | sort)
-    )
-    readarray -t shared_files < <(
-        comm -12 \
-            <(printf "%s\n" "${source_files[@]}" | sort) \
-            <(printf "%s\n" "${target_files[@]}" | sort)
-    )
 
-    # Compare the shared files
-    for filepath in "${shared_files[@]}"; do
-        change_mode=""
-
-        source_file="${source_dir}/${filepath}"
-        target_file="${target_dir}/${filepath}"
-
-        if [[ -f "${target_file}" ]]; then
-            # Do a size comparison first
-            file_sizes=$(stat -c %s "${source_file}" "${target_file}" 2>/dev/null)
-
-            if [[ -n "${file_sizes}" ]]; then
-                source_size="${file_sizes%%$'\n'*}"
-                target_size="${file_sizes##*$'\n'}"
-
-                # If the sizes are different, the files are different
-                if [[ "${source_size}" -ne "${target_size}" ]]; then
-                    change_mode="M"
-                else
-                    # If the sizes are the same, do an md5 comparison
-                    source_md5=$(md5sum < "${source_file}")
-                    source_md5="${source_md5//[^a-f0-9]/}"
-                    target_md5=$(md5sum < "${target_file}")
-                    target_md5="${target_md5//[^a-f0-9]/}"
-
-                    if [[ "${source_md5}" != "${target_md5}" ]]; then
-                        change_mode="M"
-                    fi
-                fi
-            fi
-
-            # Do a bit comparison
-            file_bits=$(stat -c %a "${source_file}" "${target_file}" 2>/dev/null)
-            source_bits="${file_bits%%$'\n'*}"
-            target_bits="${file_bits##*$'\n'}"
-
-            if [[ "${source_bits}" != "${target_bits}" ]]; then
-                change_mode="M"
-            fi
+    # Finally, check that the class name matches the filename
+    if [[ "${filepath}" == "/dev/stdin" ]]; then
+        if [[ -n "${class_name}" ]]; then
+            echo "/dev/stdin: java class"
+            return 0
         else
-            # If we get here... wat
-            change_mode="D"
-            echo "error: deleted file caught in shared files: ${filepath}" >&2
+            echo "/dev/stdin: error: file is not a java class" >&2
+            return 1
         fi
-
-        if [[ -n "${change_mode}" ]]; then
-            changelog+=("${change_mode}"$'\t'"${filepath}")
+    elif [[ -n "${class_name}" ]]; then
+        if [[ "${class_name}" == "${filename}" ]]; then
+            echo "${filepath}: java class"
+            return 0
+        else
+            echo "${filepath}: error: class name '${class_name}' does not match filename '${filename}'" >&2
+            return 1
         fi
-    done
-
-    # Add the created files to the changelog
-    for filepath in "${created_files[@]}"; do
-        changelog+=("A"$'\t'"${filepath}")
-    done
-
-    # Add the deleted files to the changelog
-    for filepath in "${deleted_files[@]}"; do
-        changelog+=("D"$'\t'"${filepath}")
-    done
-
-    # Print the changelog, sorted by filename
-    printf "%s\n" "${changelog[@]}" | sort -k2
+    else
+        echo "${filepath}: error: file is not a java class" >&2
+        return 1
+    fi
 }
