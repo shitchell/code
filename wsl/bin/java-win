@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# Try to pass the args to a valid Windows Java executable
+
+JAVA_WIN=""
+
+# debug function
+if ! declare -f debug &>/dev/null; then
+    function debug() {
+        if [[ "${DEBUG}" =~ ^("true"|"1")$ ]]; then
+            printf "[debug] %s\n" "${@}" >&2
+        fi
+    }
+fi
+
+# Check first for an explicit `java-win` system-level symlink
+while read -r path; do
+    if [[ -L "${path}" && ! "${path}" == "/home/"* ]]; then
+        JAVA_WIN="${path}"
+        break
+    fi
+done < <(which -a java-win)
+
+# If no symlink was found, look for java.exe
+if [[ -z "${JAVA_WIN}" ]]; then
+    JAVA_WIN=$(which java.exe)
+fi
+
+# If we found a thing, do the thing
+if [[ -n "${JAVA_WIN}" ]]; then
+    debug "java-win: ${JAVA_WIN}" >&2
+    "${JAVA_WIN}" "${@}"
+else
+    echo "error: could not find a Windows Java executable" >&2
+    exit 1
+fi
