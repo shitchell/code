@@ -7,10 +7,10 @@ IDLE_PATH="${IDLE_DIR}/IdleMouse.class"
 # Determine which version of java to use
 java="java"
 case "$(environment)" in
-    WSL*)  java="java-win";;
+    *WSL*)  java="java-win";;
 esac
 
 if [[ -r "${IDLE_PATH}" ]]; then
     cd "${IDLE_DIR}"
-    "${java}" IdleMouse "${@}"
+    DEBUG="${DEBUG}" "${java}" IdleMouse "${@}"
 fi

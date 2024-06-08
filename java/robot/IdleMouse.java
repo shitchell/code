@@ -520,6 +520,7 @@ public class IdleMouse
         // If the time string is in the format "HH:MM:SS"
         if (isColonSeparated)
         {
+            Pattern pattern = Pattern.compile("(?:(\\d+):)?(?:(\\d+):)?(\\d+)")
             String[] parts = timeString.split(":");
             int hours = 0;
             int minutes = 0;
