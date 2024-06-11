@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# `git log` for a function
+
+if [[ ${#} -ne 2 ]]; then
+    echo "usage: $(basename "${0}") <function regex> <filename>" >&2
+    exit 1
+fi
+
+git log -L:"${1}:${2}"
