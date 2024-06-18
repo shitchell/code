@@ -2,6 +2,20 @@
 #
 # Compile and run a java program. Allows writing java classes with a shebang so
 # that they can be run as normal shell scripts.
+#
+# TODO: Make use of a java cache directory:
+# TODO:
+# TODO: - {cache}/
+# TODO:   - 
+# TODO: - {cache}/
+# TODO:   - e5c776ad226012ee5ff1fb57c9e33386/
+# TODO:     - Hello.class
+# TODO:     - .meta
+# TODO:   - 5929abdd753d858e6461ca759cac8b8f/
+# TODO:     - Other.class
+# TODO:     - .meta
+# TODO:
+# TODO: And use MD5 or `[ $SCRIPT -nt $COMPILED ]` to determine recompilation
 
 # require javac
 if ! command -v javac >/dev/null 2>&1; then
