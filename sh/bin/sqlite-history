@@ -1433,13 +1433,21 @@ function __action-install() {
 
     # Set up the hook script
     local rc_lines=$(cat << EOF
-# Requires bash-preexec for calculating the durations of commands
-[[ -f "\${HOME}/.bash-preexec.sh" ]] && source "\${HOME}/.bash-preexec.sh"
+#!/usr/bin/env bash
+
+if [[ -f "\${HOME}/.bash-preexec.sh" && -z "\${bash_preexec_imported:-}" ]]; then
+    source "\${HOME}/.bash-preexec.sh"
+fi
 
 # Set up the prehook if bash-preexec is installed
 if [[ -n "\${bash_preexec_imported:-}" ]]; then
     __bash_sqlite_history_prehook() {
-        __LAST_CMD_START_TIME=\$(date +%s%N)
+        if ((BASH_VERSINFO >= 5)); then
+            __LAST_CMD_START_TIME="\${EPOCHREALTIME%.*}"
+            __LAST_CMD_START_TIME="\${__LAST_CMD_START_TIME::-3}" # milliseconds
+        else
+            __LAST_CMD_START_TIME=\$(date '+%s%3N') # milliseconds
+        fi
         __SQLITE_HISTORY_DIR="\${PWD}"
     }
     preexec_functions+=(__bash_sqlite_history_prehook)
@@ -1467,8 +1475,15 @@ __bash_sqlite_history_posthook() {
 
     if [[ -n "\${bash_preexec_imported:-}" ]]; then
         # Get the last command and calculate the duration
-        local last_cmd_end_time=\$(date +%s%N)
-        local last_cmd_duration=\$(((last_cmd_end_time - __LAST_CMD_START_TIME) / 1000000))
+        local last_cmd_end_time
+        if ((BASH_VERSINFO >= 5)); then
+            last_cmd_end_time="\${EPOCHREALTIME%.*}"
+            last_cmd_end_time="\${last_cmd_end_time::-3}" # milliseconds
+        else
+            last_cmd_end_time=\$(date '+%s%3N') # milliseconds
+        fi
+
+        local last_cmd_duration=\$((last_cmd_end_time - __LAST_CMD_START_TIME))
         sqlite_history_args+=(--duration "\${last_cmd_duration}")
         unset __LAST_CMD_START_TIME
     fi
