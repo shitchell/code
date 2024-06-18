@@ -29,12 +29,8 @@ public class IdleMouse
     Robot robot;
     private static boolean DEBUG = false;
     private static String[] timePatterns = {
-        "HH:mm:ss[ a]",
-        "HH:mm[ a]",
-        "HH[ a]",
-        "H:mm:ss[ a]",
-        "H:mm[ a]",
-        "H[ a]",
+        "HH[:mm[:ss]]",
+        "h[h][:mm[:ss]][ ]a",
         "HHmm"
     };
 
@@ -512,79 +508,59 @@ public class IdleMouse
      * Parse a time string in the format "[[HH:]MM:]SS" or "[[1h ]2m ]3s" and
      * return the number of milliseconds.
      */
-    public static int durationStringToSeconds(String timeString)
+    public static int durationStringToSeconds(String timeString) throws NumberFormatException
     {
         int seconds = 0;
-        boolean isColonSeparated = timeString.contains(":");
+        // Valid patterns should return 3 groups: hours, minutes, seconds
+        Pattern[] validPatterns = {
+            // 1h 2m 3s, 1h2m3s, 1h 3s, 1h, 2m, 3s
+            Pattern.compile(
+                "(?:(\\d+)h ?)?(?:(\\d+)m ?)?(?:(\\d+)s)?(?<=.)"
+            ),
+            // 01:02:03 (1h 2m 3s), 02:03 (2m 3s), :03 (3s)
+            Pattern.compile(
+                "(?:(\\d+):)?(\\d+)?:(\\d+)"
+            )
+        };
 
-        // If the time string is in the format "HH:MM:SS"
-        if (isColonSeparated)
+        // Loop through the valid patterns and try to parse the time string
+        for (Pattern pattern : validPatterns)
         {
-            Pattern pattern = Pattern.compile("(?:(\\d+):)?(?:(\\d+):)?(\\d+)")
-            String[] parts = timeString.split(":");
-            int hours = 0;
-            int minutes = 0;
+            Matcher matcher = pattern.matcher(timeString);
+            if (matcher.find() && ! matcher.group(0).isEmpty())
+            {
+                int matchHours = 0;
+                int matchMinutes = 0;
+                int matchSeconds = 0;
 
-            if (parts.length == 3)
-            {
-                try {
-                    hours = Integer.parseInt(parts[0]);
-                    minutes = Integer.parseInt(parts[1]);
-                    seconds = Integer.parseInt(parts[2]);
-                } catch (NumberFormatException e) {
-                    System.err.printf("Invalid time string: %s%n", timeString);
-                    System.exit(1);
-                }
-            } else if (parts.length == 2)
-            {
-                try {
-                    minutes = Integer.parseInt(parts[0]);
-                    seconds = Integer.parseInt(parts[1]);
-                } catch (NumberFormatException e) {
-                    System.err.printf("Invalid time string: %s%n", timeString);
-                    System.exit(1);
-                }
-            } else if (parts.length == 1)
-            {
-                try {
-                    seconds = Integer.parseInt(parts[0]);
-                } catch (NumberFormatException e) {
-                    System.err.printf("Invalid time string: %s%n", timeString);
-                    System.exit(1);
-                }
-            } else {
-                System.err.printf("Invalid time string: %s%n", timeString);
-                System.exit(1);
-            }
+                // Validate that the pattern returns 3 groups
+                if (matcher.groupCount() == 3)
+                {
+                    if (matcher.group(1) != null)
+                    {
+                        matchHours = Integer.parseInt(matcher.group(1));
+                    }
+                    if (matcher.group(2) != null)
+                    {
+                        matchMinutes = Integer.parseInt(matcher.group(2));
+                    }
+                    if (matcher.group(3) != null)
+                    {
+                        matchSeconds = Integer.parseInt(matcher.group(3));
+                    }
 
-            seconds = (hours * 60 * 60 + minutes * 60 + seconds);
-        } else {
-            // If the time string is in the format "1h 2m 3s"
-            String[] parts = timeString.split(" ");
-            int partValue = 0;
-
-            for (String part : parts)
-            {
-                partValue = Integer.parseInt(part.substring(0, part.length() - 1));
-                if (part.endsWith("d")) {
-                    seconds += partValue * 24 * 60 * 60;
-                } else if (part.endsWith("h"))
-                {
-                    seconds += partValue * 60 * 60;
-                } else if (part.endsWith("m"))
-                {
-                    seconds += partValue * 60;
-                } else if (part.endsWith("s"))
-                {
-                    seconds += partValue;
-                } else {
-                    System.err.printf("Invalid time string: %s%n", timeString);
-                    System.exit(1);
+                    // Put it all together
+                    seconds = (
+                        matchHours * 3600 + matchMinutes * 60 + matchSeconds
+                    );
+                    return seconds;
                 }
             }
         }
 
-        return seconds;
+        throw new NumberFormatException(
+            String.format("error: invalid time string: %s", timeString)
+        );
     }
 
     public static String secondsToTimeString(int seconds)
@@ -608,7 +584,7 @@ public class IdleMouse
 
             try {
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern(pattern);
-                time = LocalTime.parse(string, formatter);
+                time = LocalTime.parse(string.toUpperCase(), formatter);
             } catch (DateTimeParseException e) {
                 continue;
             }
