@@ -349,6 +349,14 @@ public class IdleMouse
             {
                 remainingTime = (int) (loopDuration - (System.currentTimeMillis() - startTime) / 1000);
             }
+
+            // If the remaining time is less than the idle time, set the idle
+            // time to the remaining time to avoid waiting past the given
+            // duration
+            if (remainingTime < idleTime)
+            {
+                idleTime = remainingTime;
+            }
         } while (runForever || remainingTime > 0);
     }
 
