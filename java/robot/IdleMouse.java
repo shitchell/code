@@ -59,10 +59,7 @@ public class IdleMouse
 
     public static void main(String[] args) throws AWTException
     {
-        // Set up defaults for:
-        // - idle time: 5 seconds
-        // - jiggle pixel offset: 1 pixel
-        // - number of loops / duration of loops: 1
+        // Set up default values
         int idleTime = 10;
         int xOffset = 1;
         int yOffset = 1;
@@ -264,10 +261,6 @@ public class IdleMouse
         startTime = System.currentTimeMillis();
         remainingTime = loopDuration;
         lastPointerInfo = MouseInfo.getPointerInfo();
-        // System.out.printf(
-        //     "%sWaiting for the mouse to be idle for %d seconds...%s%n",
-        //     S_DIM, idleTime, S_RESET
-        // );
         do {
             // Wait `idleTime` seconds for the mouse to move. If it doesn't move
             // in that time, `pointerInfo` will be null, and we'll jiggle the
@@ -342,16 +335,6 @@ public class IdleMouse
                 // Update the last pointer info
                 lastPointerInfo = pointerInfo;
             }
-
-            // // Print a message about the remaining time
-            // remainingTime = (int) (loopDuration - (System.currentTimeMillis() - startTime) / 1000);
-            // if (loopDuration != -1 && remainingTime > 0)
-            // {
-            //     System.out.printf(
-            //         "%sRemaining%s: %s%s%s%n",
-            //         C_KEY, S_RESET, C_VALUE, secondsToTimeString(remainingTime), S_RESET
-            //     );
-            // }
 
             // Sleep for a bit before checking again
             try
@@ -437,7 +420,6 @@ public class IdleMouse
 
             if (xNew != x || yNew != y)
             {
-                // System.out.printf("Mouse moved from (%d, %d) to (%d, %d)%n", x, y, xNew, yNew);
                 lastTime = System.currentTimeMillis();
                 x = pointerInfo.getLocation().x;
                 y = pointerInfo.getLocation().y;
