@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+# WIP: code just copied from ChatGPT. This will eventually (and should as it is,
+#      but I want to make it betterer) add a worktree where the resulting `.git`
+#      file uses a relative path for the `gitdir: ` value.
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <path> <branch>"
+    exit 1
+fi
+
+WORKTREE_PATH=$1
+BRANCH=$2
+
+# Add the worktree
+git worktree add "$WORKTREE_PATH" "$BRANCH"
+
+# Get the absolute path to the worktree
+WORKTREE_ABS_PATH=$(realpath "$WORKTREE_PATH")
+
+# Get the absolute path to the main repo's .git directory
+GIT_DIR=$(git rev-parse --git-dir)
+
+# Compute the relative path from the worktree to the .git directory
+RELATIVE_GIT_DIR=$(realpath --relative-to="$WORKTREE_ABS_PATH" "$GIT_DIR/worktrees/$BRANCH")
+
+# Update the .git file in the worktree
+echo "gitdir: $RELATIVE_GIT_DIR" > "$WORKTREE_PATH/.git"
+
+echo "Worktree added with relative gitdir: $RELATIVE_GIT_DIR"

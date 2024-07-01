@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Clone a repository using the structure:
+#
+# - {repo}/
+#   - .bare/
+#     - branches/
+#       - ...
+#     - COMMIT_EDITMSG
+#     - config
+#     - ...
+#   - .git (points to .bare)
+#   - {branch worktree 1}
+#   - {branch worktree 2}
+#   - ...
+#
+
+set -e
+
+# Cycle through the args to determine whether to show progress, removing the
+# --quiet option if it appears (we need stdout for our own purposes and will
+# respect the user's choice manually)
+GIT_ARGS=()
+SHOW_PROGRESS=true
+for arg in "${@}"; do
+    if [[ "${arg}" == "--progress" ]]; then
+        SHOW_PROGRESS=true
+    elif [[ "${arg}" == "--quiet" ]]; then
+        SHOW_PROGRESS=false
+    else
+        GIT_ARGS+=( "${arg}" )
+    fi
+done
+
+# Because we're using this script in an environment where `git` extensions can
+# modify the path of the target directory, extract the target directory from the
+# `git` output
+TARGET_DIRECTORY=""
+CLONE_REGEX="^Cloning into [^']*'(.*)'...$"
+while read -r line; do
+    ${SHOW_PROGRESS} && echo "${line}"
+    if [[ "${line}" =~ ${CLONE_REGEX} ]]; then
+        TARGET_DIRECTORY="${BASH_REMATCH[1]}"
+    fi
+done < <(git clone --progress --bare "${GIT_ARGS[@]}" 2>&1)
+
+# Navigate to the target directory and move the contents to `.bare`
+cd "${TARGET_DIRECTORY}"
+mkdir .bare
+mv * .bare
+
+# Create a `.git` file that points to the `.bare` directory
+echo "gitdir: ./.bare" > .git
+
+# `git clone --bare` uses a different `fetch` refspec than `git clone`, so we
+# need to update the fetch refspec to match the default behavior of `git clone`
+git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+
+# Gets all branches from origin
+git fetch origin
