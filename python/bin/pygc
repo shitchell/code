@@ -36,15 +36,15 @@ class Prompt(cmd.Cmd):
 	def default(self, line):
 		# A constant alone won't invoke the calculator, so we replace each constant with (constant*1)
 		for const in self._constants:
-			line = re.sub("([^A-z])(" + const + ")([^A-z])", "\g<1>(\g<2>*1)\g<3>", " " + line + " ").strip()
+			line = re.sub(r"([^A-z])(" + const + r")([^A-z])", r"\g<1>(\g<2>*1)\g<3>", " " + line + " ").strip()
 		# For some reason, pound(s) fails and needs to be replaced with lbs
-		line = re.sub("([^A-z])(pound)(s)?([^A-z])", "\g<1>lbs ", " " + line + " ").strip()
+		line = re.sub(r"([^A-z])(pound)(s)?([^A-z])", r"\g<1>lbs ", " " + line + " ").strip()
 		# Strip comments from this shiznit
 		line = re.sub('#.*', '', line)
 		query = urllib.parse.quote(line, safe="")
 		res = calc(query)
 		if options.quietish and res.startswith("="):
-			print("".join(re.findall("[\d\.\-]", res)))
+			print("".join(re.findall(r"[\d\.\-]", res)))
 		else:
 			print(res)
 	def do_copyright(self, line):
