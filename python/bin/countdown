@@ -238,4 +238,4 @@ try:
         time.sleep(args.delay)
 except KeyboardInterrupt:
     print()
-    exit(0)
+    exit(1)
