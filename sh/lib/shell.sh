@@ -1226,3 +1226,82 @@ function search-back() {
     fi
     return 1
 }
+
+function read-chars() {
+    :  'Read individual characters from stdin
+
+        Read individual characters from stdin and set a variable to the value of
+        each character. By default, the variable is set to REPLY. Intended to be
+        used in a while loop, e.g.:
+        
+            while read-chars foo; do ...; done
+
+        @usage
+            [-n <int>] [<var>]
+
+        @optarg -n <int>
+            Read <int> characters at a time. Defaults to 1.
+
+        @optarg <var>
+            Set <var> to the value of each character. Defaults to REPLY.
+    '
+    # Default values
+    local varname="REPLY"
+    local count=1
+    local chars=()
+    local char
+    
+    # Parse the values
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -c | --count)
+                count="${2}"
+                shift 2
+                ;;
+            --)
+                shift
+                varname="${1}"
+                break
+                ;;
+            *)
+                varname="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    # Validate the count
+    if ! [[ "${count}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid count: ${count}" >&2
+        return 1
+    fi
+
+    # Set up the variable
+    declare -n var="${varname}"
+
+    # The magic sauce, taken from StackExchange:
+    # https://unix.stackexchange.com/a/49585
+    #
+    #     while IFS= read -rn1 a; do printf %s "${a:-$'\n'}"; done
+    #
+    # But since we only want to use this in a while loop, we will NOT use a
+    # while loop here. Instead, we will simply use `read` to obtain a single
+    # character at a time. We will still use a `for` loop to repeat this process
+    # <count> times. Since this is intended to be used in a while loop, we will
+    # instead simply set the variable to the characters read and then return a 0
+    # or 1 depending on whether any characters were read to indicate whether the
+    # loop should continue.
+    for ((i = 0; i < count; i++)); do
+        if IFS= read -rn1 char; then
+            chars+=("${char:-$'\n'}")
+        elif [[ ${#chars[@]} -eq 0 ]]; then
+            # We reached the end of stdin before reading any characters. Will
+            # set the variable to nothing and return 1 to break out of the loop.
+            var=""
+            return 1
+        fi
+    done
+
+    # Set the variable to the characters read
+    IFS='' var="${chars[*]}"
+}
