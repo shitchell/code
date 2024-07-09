@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# Calculate the similarity between two files using `git diff --word-colors` for
+# a character-by-character comparison (excluding most whitespace)
+#
+# Determined by:
+# 1. Finding the number of shared characters
+# 2. Determining <shared chars>/<total chars> for each file (Individual
+#    Similarity Percentage)
+# 3. Finding the average of both Similarity Percentages
+
+include-source 'debug'
+
+FILE1="${1}"
+FILE2="${2}"
+
+if [[ -z "${FILE2}" ]]; then
+	echo "usage: $(basename "${0}") <file> <file>" >&2
+	exit 1
+fi
+
+debug-vars FILE1 FILE2
+
+# Determine the character diff
+char_diff=$(
+	GIT_PASSTHROUGH=true git \
+		-c color.diff.old=bold \
+		-c color.diff.new=bold \
+		-c color.diff.meta=bold \
+	 		diff --no-index --color-words=. \
+	 		-- "${FILE1}" "${FILE2}" 2>/dev/null
+)
+if [[ -z "${char_diff}" ]]; then
+	AVERAGE_SIMILARITY=100
+else
+	readarray -t shared_chars < <(
+		echo "${char_diff}" \
+ 			| grep -Ev '^(.{4,5}(diff|index|---|\+\+\+|@@) .*)$' \
+ 			| sed $'s/\x1b\[1m[^\x1b]*\x1b\[m//g' \
+ 			| grep -o .
+	)
+
+	# Determine the similarity percentage for each file
+	shared_chars_count="${#shared_chars[@]}"
+	debug-vars shared_chars shared_chars_count
+	FILE1_SIZE=$(wc -c < "${FILE1}")
+	FILE1_SIMILARITY=$((shared_chars_count * 100 / FILE1_SIZE))
+
+	FILE2_SIZE=$(wc -c < "${FILE2}")
+	FILE2_SIMILARITY=$((shared_chars_count * 100 / FILE2_SIZE))
+
+	# Determine the average
+	AVERAGE_SIMILARITY=$(( (FILE1_SIMILARITY + FILE2_SIMILARITY) / 2 ))
+fi
+
+debug-vars -vvv shared_chars shared_chars_count FILE1_SIMILARITY FILE2_SIMILARITY AVERAGE_SIMILARITY
+
+echo "${AVERAGE_SIMILARITY}%"
