@@ -3,56 +3,742 @@
 # Calculate the similarity between two files using `git diff --word-colors` for
 # a character-by-character comparison (excluding most whitespace)
 #
-# Determined by:
-# 1. Finding the number of shared characters
-# 2. Determining <shared chars>/<total chars> for each file (Individual
-#    Similarity Percentage)
-# 3. Finding the average of both Similarity Percentages
+# Formulas:
+#   - Average Similarity: (shared / file1) + (shared / file2) / 2
+#   - Total Similarity: (shared * 2) / (file1 + file2)
 
-include-source 'debug'
+## imports #####################################################################
+################################################################################
 
-FILE1="${1}"
-FILE2="${2}"
+include-source 'debug.sh'
 
-if [[ -z "${FILE2}" ]]; then
-	echo "usage: $(basename "${0}") <file> <file>" >&2
-	exit 1
-fi
 
-debug-vars FILE1 FILE2
+## exit codes ##################################################################
+################################################################################
 
-# Determine the character diff
-char_diff=$(
-	GIT_PASSTHROUGH=true git \
-		-c color.diff.old=bold \
-		-c color.diff.new=bold \
-		-c color.diff.meta=bold \
-	 		diff --no-index --color-words=. \
-	 		-- "${FILE1}" "${FILE2}" 2>/dev/null
-)
-if [[ -z "${char_diff}" ]]; then
-	AVERAGE_SIMILARITY=100
-else
-	readarray -t shared_chars < <(
-		echo "${char_diff}" \
- 			| grep -Ev '^(.{4,5}(diff|index|---|\+\+\+|@@) .*)$' \
- 			| sed $'s/\x1b\[1m[^\x1b]*\x1b\[m//g' \
- 			| grep -o .
-	)
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
 
-	# Determine the similarity percentage for each file
-	shared_chars_count="${#shared_chars[@]}"
-	debug-vars shared_chars shared_chars_count
-	FILE1_SIZE=$(wc -c < "${FILE1}")
-	FILE1_SIMILARITY=$((shared_chars_count * 100 / FILE1_SIZE))
 
-	FILE2_SIZE=$(wc -c < "${FILE2}")
-	FILE2_SIMILARITY=$((shared_chars_count * 100 / FILE2_SIZE))
+## traps #######################################################################
+################################################################################
 
-	# Determine the average
-	AVERAGE_SIMILARITY=$(( (FILE1_SIMILARITY + FILE2_SIMILARITY) / 2 ))
-fi
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
 
-debug-vars -vvv shared_chars shared_chars_count FILE1_SIMILARITY FILE2_SIMILARITY AVERAGE_SIMILARITY
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
 
-echo "${AVERAGE_SIMILARITY}%"
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+
+    # Set up color variables for use in scripts
+    C_FILE="${C_CYAN}"
+    C_COUNT="${C_YELLOW}"
+    C_ERROR="${C_RED}"
+    C_SUCCESS="${C_GREEN}"
+}
+
+# @description Unset color variables
+# @usage unset-colors
+function unset-colors() {
+    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
+          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    local usage_prefix="usage: $(basename "${0}")"
+    echo -n "${usage_prefix} [-h] [--help] [--config-file <file>] [-c <when>] "
+    echo "[-s/--silent]"
+    echo "${usage_prefix//?/ } [--symmetric] [--jaccard] [--dice] [--overlap]"
+    echo "${usage_prefix//?/ } [--all-averaged] [--all]"
+    echo "${usage_prefix//?/ } <file1> <file2> ..."
+}
+
+function help-epilogue() {
+    echo "calculate the similarity of two or more files"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Similarity is calculated using \`git diff --word-colors\` for a"
+    echo "character-by-character comparison. Several algorithms are available"
+    echo "for calculating similarity, making use of the number of shared"
+    echo "characters and the file sizes."
+    echo
+    echo "When multiple files are compared, they can either be compared"
+    echo "collectively (e.g., all files compared to each other) or pairwise"
+    echo "(e.g., each file compared to every other file)."
+    echo
+    echo "A configuration file can be used to set default values for options:"
+    echo "  ~/.$(basename "${0}").conf"
+    echo
+    echo "Algorithms:"
+    cat << EOF
+    Symmetric Average
+        (shared / file1) + (shared / file2) / 2
+
+        Calculates the ratio of shared characters to the total number of
+        characters in each file, then averages the two ratios.
+
+    Jaccard Index
+        shared / (file1 + file2 - shared)
+
+        Calculates the ratio of shared characters to the total number of
+        unique characters in both files.
+
+    Sørensen-Dice Coefficient
+        (2 * shared) / (file1 + file2)
+
+        Calculates the ratio of shared characters to the total number of
+        characters in both files, emphasizing shared characters.
+
+    Overlap Coefficient
+        shared / min(file1, file2)
+
+        Calculates the ratio of shared characters to the size of the smaller
+        file.
+
+    All Averaged
+        (symmetric + jaccard + dice + overlap) / 4
+
+        Calculates the similarity using all algorithms and averages the results.
+
+    All
+        symmetric, jaccard, dice, overlap, all-averaged
+
+        All algorithms are calculated, and their individual results are
+        displayed.
+EOF
+    echo
+    echo "Base Options:"
+    cat << EOF
+    -h                    display usage
+    --help                display this help message
+    --config-file <file>  use the specified configuration file
+    -c/--color <when>     when to use color ("auto", "always", "never")
+    -s/--silent           suppress all output
+EOF
+    echo
+    echo "Algorithm Options:"
+    cat << EOF
+    --symmetric           use the Symmetric Average algorithm (default)
+    --jaccard             use the Jaccard Index algorithm
+    --dice                use the Sørensen-Dice Coefficient algorithm
+    --overlap             use the Overlap Coefficient algorithm
+    --all-averaged        use the All Averaged algorithm
+    --all                 use all algorithms
+EOF
+    echo
+    echo "Comparison Options:"
+    cat << EOF
+    --pairwise            compare each file to every other file (default)
+    --collective          compare all files to each other
+EOF
+    echo
+    echo "Files:"
+    cat << EOF
+    <file1> <file2> ...   the files to compare
+EOF
+}
+
+function parse-args() {
+    # Parse the arguments first for a config file to load default values from
+    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
+    for ((i=0; i<${#}; i++)); do
+        case "${!i}" in
+            -c | --config-file)
+                let i++
+                CONFIG_FILE="${!i}"
+                ;;
+        esac
+    done
+    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
+
+    # Default values
+    FILEPATHS=()
+    DO_COLOR=false
+    DO_SILENT=false
+    ALGORITHM="symmetric" # symmetric, jaccard, dice, overlap, all-averaged, all
+    ALGORITHM_FUNCTION=""
+    COMPARISON_MODE="pairwise" # pairwise, collective
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            --symmetric | --jaccard      | --dice | \
+            --overlap   | --all-averaged | --all)
+                ALGORITHM="${1/--/}"
+                ;;
+            --pairwise | --collective)
+                COMPARISON_MODE="${1/--/}"
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                FILEPATHS+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        FILEPATHS+=("${1}")
+        shift 1
+    done
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && setup-colors || unset-colors
+    fi
+
+    # If no filepaths were specified, print the usage and exit
+    if [[ ${#FILEPATHS[@]} -eq 0 ]]; then
+        help-usage
+        return ${E_ERROR}
+    fi
+
+    # Validate that a function exists for the specified algorithm
+    if ! declare -F "algorithm-${ALGORITHM}" &>/dev/null; then
+        echo "error: unknown algorithm: ${ALGORITHM}" >&2
+        return ${E_ERROR}
+    else
+        ALGORITHM_FUNCTION="algorithm-${ALGORITHM}"
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+
+function all-or-nothing() {
+    :  'Check if the shared characters are all or nothing
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+
+    # 0% match
+    if [[ "${shared}" == "0" ]]; then
+        echo "0"
+        return ${E_SUCCESS}
+    fi
+
+    # 100% match
+    for file_size in "${file_sizes[@]}"; do
+        if [[ "${shared}" -ne "${file_size}" ]]; then
+            return ${E_ERROR}
+        fi
+    done
+    echo "100"
+    return ${E_SUCCESS}
+}
+
+function collective-warning() {
+    :  'If collective mode is enabled, print a warning
+
+        @usage [<label>]
+
+        @optarg <label>
+            Print <label> before the warning
+    '
+    local label="${1}"
+    local warning="algorithm not intended for collective comparison"
+    local message=""
+
+    if [[ "${COMPARISON_MODE}" == "collective" ]]; then
+        [[ -n "${label}" ]] && message+="${label}: "
+        message+="warning: ${warning}"
+        echo "${message}" >&2
+    fi
+}
+
+function get-char-diff() {
+    :  'Get the character diff between two files
+
+        Uses `git diff --word-colors` to compare two files character-by-character.
+
+        @usage <file1> <file2>
+    '
+    local file1="${1}"
+    local file2="${2}"
+    local char_diff
+
+    char_diff=$(
+        GIT_PASSTHROUGH=true git \
+            -c color.diff.old=bold \
+            -c color.diff.new=bold \
+            -c color.diff.meta=bold \
+                diff --no-index --color-words=. \
+                -- "${file1}" "${file2}" 2>/dev/null
+    )
+
+    echo "${char_diff}"
+}
+
+function get-shared-characters() {
+    :  'Get the shared characters between two files'
+    local file1="${1}"
+    local file2="${2}"
+    local char_diff shared_chars
+
+    # Get the character diff between the two files
+    char_diff=$(get-char-diff "${file1}" "${file2}")
+
+    # If the diff is empty, the files are identical
+    if [[ -z "${char_diff}" ]]; then
+        cat "${file1}"
+        return
+    fi
+
+    # Strip out the headers, color codes, and differences from char_diff
+    shared_chars=$(
+        echo "${char_diff}" \
+            | grep -Ev '^(.{4,5}(diff|index|---|\+\+\+|@@) .*)$' \
+            | sed $'s/\x1b\[1m[^\x1b]*\x1b\[m//g'
+    )
+
+    echo "${shared_chars}"
+}
+
+function get-shared-count() {
+    :  'Get the number of shared characters across multiple files
+
+        Uses `git diff --word-colors` to compare two files character-by-character
+        and count the number of shared characters.
+
+        @usage <file1> <file2> ...
+    '
+    local files=( "${@}" ) file_count="${#files[@]}"
+    local file1 file2
+    local char_diff shared_chars shared_chars_count
+    local tmp_file
+
+    debug-vars files
+
+    # Require at least 2 files
+    if [[ ${#files[@]} -lt 2 ]]; then
+        echo "error: at least 2 files are required" >&2
+        return ${E_ERROR}
+    fi
+
+    # If more than 3 files are provided, print a warning and create a temp file
+    if [[ ${#files[@]} -gt 2 ]]; then
+        collective-warning \
+            "get-shared-characters" \
+            "computing diffs across 3+ files is experimental"
+        tmp_file=$(mktemp --tmpdir "text-similarity.XXXXXXXXXX")
+        debug-vars tmp_file
+    fi
+
+    # `git diff` only supports 2 files, so we're going to kinda hack this by:
+    # 1. Comparing file1 against file2 = diff
+    # 2. Set file1=diff and file2=file3
+    # 3. Repeat until all files have been compared
+
+    # Compare the files n-1 times
+    for ((i=0; i<(file_count-1); i++)); do
+        debug "iteration ${i}"
+        # If this is the first iteration, set file1 to the first file, else set
+        # it to the diff from the previous iteration
+        if [[ ${i} -eq 0 ]]; then
+            file1="${files[${i}]}"
+        else
+            file1="${tmp_file}"
+        fi
+
+        # Set file2 to the next file
+        file2="${files[${i}+1]}"
+
+        # Get the character diff between the two files
+        char_diff=$(get-char-diff "${file1}" "${file2}")
+
+        # If the diff is empty, the files are identical
+        if [[ -z "${char_diff}" ]]; then
+            shared_chars_count=$(wc -c < "${file1}")
+        else
+            # Remove the headers, color codes, and differences from char_diff
+            char_diff=$(
+                echo "${char_diff}" \
+                    | grep -Ev '^(.{4,5}(diff|index|---|\+\+\+|@@) .*)$' \
+                    | sed $'s/\x1b\[1m[^\x1b]*\x1b\[m//g'
+            )
+            debug-vars file1 file2 char_diff
+            # If using the temp file, write the diff to it
+            if [[ -n "${tmp_file}" ]]; then
+                echo "${char_diff}" > "${tmp_file}"
+            fi
+            # Get every individual shared character
+            readarray -t shared_chars < <(grep -o . <<< "${char_diff}")
+            shared_chars_count=${#shared_chars[@]}
+            debug-vars file1 file2 shared_chars
+        fi
+    done
+
+    echo "${shared_chars_count}"
+}
+
+function algorithm-symmetric() {
+    :  'Calculate the Symmetric Average similarity between 2+ files
+
+        Calculates the ratio of shared characters to file size for each file,
+        then averages all ratios.
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+    local -i ratio_sum=0
+
+    all-or-nothing "${shared}" "${file_sizes[@]}" && return
+
+    for file_size in "${file_sizes[@]}"; do
+        let ratio_sum+=$(( shared * 100 / file_size ))
+    done
+
+    echo $(( ratio_sum / ${#file_sizes[@]} ))
+}
+
+function algorithm-jaccard() {
+    :  'Calculate the Jaccard Index similarity between 2+ files
+
+        Calculates the ratio of shared characters to the union of all unique
+        characters across all files.
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    collective-warning
+
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+    # local -i unique_chars=0
+    local -i total_chars=0
+
+    debug-vars shared file_sizes
+
+    all-or-nothing "${shared}" "${file_sizes[@]}" && return
+
+    for file_size in "${file_sizes[@]}"; do
+        # let unique_chars+=$(( file_size - shared ))
+        let total_chars+=file_size
+    done
+
+    let unique_chars=$(( total_chars - (shared * (${#file_sizes[@]} - 1)) ))
+
+    echo $(( (shared * 100) / unique_chars ))
+}
+
+function algorithm-dice() {
+    :  'Calculate the Sørensen-Dice Coefficient similarity between 2+ files
+
+        Calculates the ratio of shared characters to the total number of
+        characters in all files, emphasizing shared characters.
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    collective-warning
+
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+    local -i file_count=${#file_sizes[@]}
+    local -i total_size=0
+
+    all-or-nothing "${shared}" "${file_sizes[@]}" && return
+
+
+    for file_size in "${file_sizes[@]}"; do
+        let total_size+=file_size
+    done
+
+    echo $(( (shared * file_count * 100) / total_size ))
+}
+
+function algorithm-overlap() {
+    :  'Calculate the Overlap Coefficient similarity between 2+ files
+
+        Calculates the ratio of shared characters to the size of the smaller
+        file.
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+    local -i min_size=${file_sizes[0]}
+
+    all-or-nothing "${shared}" "${file_sizes[@]}" && return
+
+
+    for file_size in "${file_sizes[@]:1}"; do
+        (( file_size < min_size )) && min_size=${file_size}
+    done
+
+    echo $(( (shared * 100) / min_size ))
+}
+
+function _get-algorithms() {
+    :  'Get all algorithm functions
+
+        Finds all algorithm functions dynamically (to allow for easy addition)
+    '
+    declare -a function_names
+    readarray -t function_names < <(
+        declare -F | awk '$3 ~ /^algorithm-/ { print $3 }'
+    )
+    printf '%s\n' "${function_names[@]}"
+
+}
+
+function algorithm-all-averaged() {
+    :  'Calculate the average similarity using all algorithms
+
+        Calculates the similarity using all algorithms and averages the results.
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+    local -i total=0
+    local function_names=() function_name function_result
+    local -i function_count=0
+
+    readarray -t function_names < <(_get-algorithms)
+
+    for function_name in "${function_names[@]}"; do
+        # Skip any "all" functions
+        [[ "${function_name}" == "algorithm-all"* ]] && continue
+
+        function_result=$(${function_name} "${shared}" "${file_sizes[@]}")
+        let total+=function_result
+        let function_count++
+    done
+
+    echo $(( total / function_count ))
+}
+
+function algorithm-all() {
+    :  'Calculate the similarity using all algorithms
+
+        Calculates the similarity using all algorithms.
+
+        @usage <shared> <file1_size> <file2_size> ...
+    '
+    local shared="${1}"
+    local file_sizes=( "${@:2}" )
+    local function_names=() function_name function_result
+
+    readarray -t function_names < <(_get-algorithms)
+
+    debug-vars function_names shared file_sizes
+
+    for function_name in "${function_names[@]}"; do
+        # Skip any "all" functions
+        [[ "${function_name}" == "algorithm-all"* ]] && continue
+
+        # Run the function and print the result
+        debug "running ${function_name}()..."
+        function_result=$(${function_name} "${shared}" "${file_sizes[@]}")
+        debug-vars function_result
+        echo "${function_name}"$'\t'"${function_result}%"
+    done
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    debug-vars FILEPATHS DO_COLOR DO_SILENT ALGORITHM ALGORITHM_FUNCTION \
+               COMPARISON_MODE
+
+    local shared similarity
+    local file1 file2 file1_size file2_size shared
+    local file_sizes=() # for collective
+
+    # Compare the files either pairwise or collectively
+    if [[ "${COMPARISON_MODE}" == "pairwise" ]]; then
+        # Loop over all files, comparing each one against every other file
+        for ((file1_i=0; file1_i<${#FILEPATHS[@]}; file1_i++)); do
+            file1="${FILEPATHS[${file1_i}]}"
+            file1_size=$(wc -c < "${file1}")
+            # Compare the current file against all subsequent files
+            for ((file2_i=file1_i+1; file2_i<${#FILEPATHS[@]}; file2_i++)); do
+                file2="${FILEPATHS[${file2_i}]}"
+                file2_size=$(wc -c < "${file2}")
+
+                # Get the number of shared characters
+                shared=$(get-shared-characters "${file1}" "${file2}")
+
+                # Calculate the similarity using the specified algorithm
+                similarity=$(
+                    "${ALGORITHM_FUNCTION}" "${shared}" \
+                        "${file1_size}" "${file2_size}"
+                )
+
+                debug-vars file1 file1_size file2 file2_size shared \
+                    ALGORITHM_FUNCTION similarity
+
+                # If the function output multiple lines, print in the format:
+                #
+                #   <file1>::<file2>
+                #     <output>
+                #
+                # If the function output a single integer, print in the format:
+                #
+                #   <file1>::<file2> <output>%
+
+                if [[ "${similarity}" == *$'\n'* ]]; then
+                    printf "%s::%s\n" "${file1}" "${file2}"
+                    printf "%s\n" "${similarity[@]}" | sed 's/^/  /'
+                elif [[ "${similarity}" =~ ^[0-9]+$ ]]; then
+                    printf "%s::%s %s%%\n" "${file1}" "${file2}" "${similarity}"
+                else
+                    echo "error: invalid output from algorithm" >&2
+                    echo "${similarity}" >&2
+                    return ${E_ERROR}
+                fi
+            done
+        done
+    elif [[ "${COMPARISON_MODE}" == "collective" ]]; then
+        # Get the collective share of characters
+        shared=$(get-shared-characters "${FILEPATHS[@]}")
+
+        # Get the file sizes
+        for file in "${FILEPATHS[@]}"; do
+            file_sizes+=( $(wc -c < "${file}") )
+        done
+
+        # Calculate the similarity using the specified algorithm
+        similarity=$(
+            "${ALGORITHM_FUNCTION}" "${shared}" "${file_sizes[@]}"
+        )
+
+        debug-vars shared file_sizes ALGORITHM_FUNCTION similarity
+
+        # If the function output multiple lines, print in the format:
+        #
+        #   <file1>::<file2>
+        #     <output>
+        #
+        # If the function output a single integer, print in the format:
+        #
+        #   <file1>::<file2> <output>%
+
+        # Print the joined filenames
+        printf "%s" "${FILEPATHS[0]}"
+        printf "::%s" "${FILEPATHS[@]:1}"
+
+        if [[ "${similarity}" == *$'\n'* ]]; then
+            echo
+            printf "%s\n" "${similarity[@]}" | sed 's/^/  /'
+        elif [[ "${similarity}" =~ ^[0-9]+$ ]]; then
+            printf " %s%%\n" "${similarity}"
+        else
+            echo "error: invalid output from algorithm" >&2
+            echo "${similarity}" >&2
+            return ${E_ERROR}
+        fi
+    fi
+
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
