@@ -4,10 +4,10 @@
 # filepaths are provided and the ref is a commit, the files modified in that
 # commit will be used.
 
-# include-source 'echo.sh'
-# include-source 'git.sh'
-# include-source 'shell.sh'
-# include-source 'debug.sh'
+include-source 'echo.sh'
+include-source 'git.sh'
+include-source 'shell.sh'
+include-source 'debug.sh'
 
 ## usage functions #############################################################
 ################################################################################
