@@ -30,6 +30,7 @@
         run-available-function music song.mp3
 '
 
+include-source 'debug'
 include-source 'exit-codes'
 
 function run-available() {
@@ -79,6 +80,9 @@ function run-available() {
     local prefix functions=() function_name command
     local -i exit_code
 
+    # Set up a trap to return an error on ^C
+    trap "return 1" INT
+
     # Set the prefix
     prefix="ra_${category}_"
     debug "searching for functions with prefix: ${prefix}"
@@ -111,7 +115,7 @@ function run-available() {
             if ((exit_code == E_CONTINUE)); then
                 continue
             fi
-            return ${?}
+            return ${exit_code}
         fi
     done
 
@@ -146,16 +150,17 @@ ra_set-volume_osascript() {
 
 ra_audio-player_mpv() {
     local alarm="${1}"
-    local volume="${2}"
+    local -i volume="${2:-100}"
 
     # Play the file using mpv, silencing all output except the status line
-    mpv --volume="${volume}" --msg-level=all=no,statusline=v -- "${alarm}"
+    mpv --volume="${volume}" --msg-level=all=no,statusline=v -- "${alarm}" \
+        || return ${?}
     echo  # add a newline after the status line
 }
 
 ra_audio-player_mplayer() {
     local alarm="${1}"
-    local volume="${2}"
+    local -i volume="${2:-100}"
 
     # Play the file using mplayer
     mplayer -volume "${volume}" -really-quiet -- "${alarm}"
@@ -163,7 +168,6 @@ ra_audio-player_mplayer() {
 
 ra_audio-player_vlc() {
     local alarm="${1}"
-    local -i volume="${2}"
 
     # Play the file using vlc
     vlc --intf dummy --play-and-exit -- "${alarm}"
@@ -172,10 +176,9 @@ ra_audio-player_vlc() {
 
 ra_audio-player_powerplay() {
     local alarm="${1}"
-    local volume="${2}"
 
     # Play the file using powerplay
-    powerplay -v "${volume}" -q -- "${alarm}"
+    powerplay "${alarm}"
 }
 
 ra_audio-player_aplay() {

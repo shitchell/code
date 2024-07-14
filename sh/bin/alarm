@@ -66,6 +66,15 @@ function setup-colors() {
     S_BLINK=$'\e[5m'
     S_INVERT=$'\e[7m'
     S_HIDDEN=$'\e[8m'
+
+    # Set up categorical colors
+    C_ALARM="${S_BOLD}"
+    C_FILEPATH="${C_GREEN}"
+    C_ERROR="${C_RED}"
+    C_SUCCESS="${C_GREEN}"
+    C_WARNING="${C_YELLOW}"
+    C_NUMBER="${S_BOLD}${C_CYAN}"
+    C_COMMENT="${S_DIM}"
 }
 
 # @description Unset color variables
@@ -219,7 +228,7 @@ function parse-args() {
                 break
                 ;;
             -*)
-                echo "error: unknown option: ${1}" >&2
+                echo "${C_ERROR}error: unknown option: ${1}${S_RESET}" >&2
                 return ${E_ERROR}
                 ;;
             *)
@@ -255,7 +264,7 @@ function parse-args() {
                 fi
                 ;;
             *)
-                echo "error: invalid color mode: ${color_when}" >&2
+                echo "${C_ERROR}error: invalid color mode: ${color_when}${S_RESET}" >&2
                 return ${E_ERROR}
                 ;;
         esac
@@ -264,35 +273,35 @@ function parse-args() {
 
     # Validate repeat, snooze, and the volumes
     if ! is-int "${REPEAT}"; then
-        echo "error: repeat must be an integer" >&2
+        echo "${C_ERROR}error: repeat must be an integer${S_RESET}" >&2
         return ${E_ERROR}
     elif [[ ${REPEAT} -lt 1 ]]; then
-        echo "error: repeat must be at least 1" >&2
+        echo "${C_ERROR}error: repeat must be at least 1${S_RESET}" >&2
         return ${E_ERROR}
     fi
 
     if ! is-int "${SNOOZE}"; then
-        echo "error: snooze must be an integer" >&2
+        echo "${C_ERROR}error: snooze must be an integer${S_RESET}" >&2
         return ${E_ERROR}
     elif [[ ${SNOOZE} -lt 1 ]]; then
-        echo "error: snooze must be at least 1" >&2
+        echo "${C_ERROR}error: snooze must be at least 1${S_RESET}" >&2
         return ${E_ERROR}
     fi
 
     if ! is-int "${ALARM_VOLUME}"; then
-        echo "error: volume must be an integer" >&2
+        echo "${C_ERROR}error: volume must be an integer${S_RESET}" >&2
         return ${E_ERROR}
     elif [[ ${ALARM_VOLUME} -lt 0 || ${ALARM_VOLUME} -gt 100 ]]; then
-        echo "error: volume must be between 0 and 100" >&2
+        echo "${C_ERROR}error: volume must be between 0 and 100${S_RESET}" >&2
         return ${E_ERROR}
     fi
 
     if [[ -n "${SYS_VOLUME}" ]]; then
         if ! is-int "${SYS_VOLUME}"; then
-            echo "error: system volume must be an integer" >&2
+            echo "${C_ERROR}error: system volume must be an integer${S_RESET}" >&2
             return ${E_ERROR}
         elif [[ ${SYS_VOLUME} -lt 0 || ${SYS_VOLUME} -gt 100 ]]; then
-            echo "error: system volume must be between 0 and 100" >&2
+            echo "${C_ERROR}error: system volume must be between 0 and 100${S_RESET}" >&2
             return ${E_ERROR}
         fi
     fi
@@ -303,7 +312,7 @@ function parse-args() {
         if [[ -d "${ALARM_DIR}" ]]; then
             ALARM_DIRS+=("${ALARM_DIR}")
         else
-            echo "error: alarm directory does not exist: ${ALARM_DIR}" >&2
+            echo "${C_ERROR}error: alarm directory does not exist: ${ALARM_DIR}${S_RESET}" >&2
             return ${E_ERROR}
         fi
     fi
@@ -317,6 +326,8 @@ function parse-args() {
     if [[ ${#ALARM_NAMES[@]} -eq 0 ]]; then
         ALARM_NAMES=("Alarm")
     fi
+
+    # Validate 
 
     return ${E_SUCCESS}
 }
@@ -362,7 +373,7 @@ function list-alarms() {
     done
 
     if [[ ${#filepaths[@]} -eq 0 ]]; then
-        echo "no alarms found" >&2
+        echo "${C_ERROR}error: no alarms found${S_RESET}" >&2
         return ${E_ERROR}
     fi
 
@@ -370,7 +381,8 @@ function list-alarms() {
         filename="${filepath##*/}"  # remove the path
         filename="${filename%.*}"   # no extension
         filename="${filename,,}"    # lowercase
-        printf '%s - %s\n' "${filename}" "${filepath}"
+        printf "${C_ALARM}%s${S_RESET}  ${C_FILEPATH}%s${S_RESET}\n" \
+            "${filename}" "${filepath}"
     done
 }
 
@@ -402,6 +414,33 @@ function play-failsafe() {
 
 ## run-available functions
 
+ra_countdown_countdown() {
+    local when="${1}"
+
+    countdown "${when}"
+}
+
+ra_countdown_date() {
+    local when="${1}"
+    local end_time duration
+
+    # Set up a trap to return an error on ^C
+    trap "return 1" INT
+
+    end_time=$(date -d "${when}" "+%s")
+    duration=$((end_time - $(date "+%s")))
+    while ((duration > 0)); do
+        duration=$((duration - 1))
+        echo -ne "${C_COMMENT}Time remaining: ${S_RESET}${C_NUMBER}${duration}${S_RESET}${C_COMMENT} seconds\033[0K${S_RESET}"
+        if ((duration > 0)); then
+            sleep 1
+            echo -ne "\r"
+        else
+            echo
+        fi
+    done
+}
+
 ### Use the default RA functions, aliasing them to manage priorities
 ra_audio-player_10_mpv() { ra_audio-player_mpv "${@}"; }
 ra_audio-player_20_mplayer() { ra_audio-player_mplayer "${@}"; }
@@ -428,8 +467,8 @@ function main() {
     fi
 
     if [[ -n "${WHEN}" ]]; then
-        countdown "${WHEN}" || {
-            echo "alarm cancelled"
+        run-available countdown "${WHEN}" || {
+            echo "${C_WARNING}Alarm cancelled, exiting${S_RESET}"
             return ${E_SUCCESS}
         }
     fi
@@ -442,15 +481,15 @@ function main() {
             elif ${DO_FAILSAFE}; then
                 play-failsafe 10
             else
-                echo "error: alarm not found: ${alarm}" >&2
+                echo "${C_ERROR}error: alarm not found: ${alarm}${S_RESET}" >&2
                 return ${E_ERROR}
             fi
         done
         # If this is the last repeat, don't snooze
         [[ ${i} -eq $((REPEAT - 1)) ]] || {
-            echo "snoozing for ${SNOOZE} seconds..."
-            countdown "${SNOOZE} seconds" || {
-                echo "snooze cancelled"
+            echo "${C_COMMENT}Snoozing for ${S_RESET}${C_NUMBER}${SNOOZE}${S_RESET}${C_COMMENT} seconds...${S_RESET}"
+            run-available countdown "${SNOOZE} seconds" || {
+                echo "${C_COMMENT}Snooze cancelled, exiting${S_RESET}"
                 break
             }
         }
