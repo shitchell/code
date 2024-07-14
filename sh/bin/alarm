@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+#
+# Sound the alarm
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug'
+include-source 'shell'
+include-source 'text'
+include-source 'run-available'
+include-source 'exit-codes'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+}
+
+# @description Unset color variables
+# @usage unset-colors
+function unset-colors() {
+    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
+          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    echo "play an alarm sound at a specified time"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Play an alarm sound at a specified time. Time can be specified in any"
+    echo "format that python's dateutil.parser can understand, e.g.:"
+    echo "  - 5 minutes"
+    echo "  - 10:30"
+    echo "  - now + 1 hour"
+    echo "  - tomorrow at noon"
+    echo
+    echo "Alarm names are case-insensitive and will be searched for in the"
+    echo "following directories (in order of priority):"
+    echo "  - one of:"
+    echo "    - the -d/--alarm-dir option"
+    echo "    - OR the ALARM_DIR variable in the config file"
+    echo "    - OR the ALARM_DIR environment variable"
+    echo "  - AND ~/.local/share/alarm"
+    echo "  - AND /usr/share/"
+    echo
+    echo "Alarms can have any extension that can be played by mplayer. If no"
+    echo "alarm is specified, 'Alarm' will be used. If no alarm is found and"
+    echo "the -f/--failsafe option is used, a built-in alarm will be played."
+    echo
+    echo "If multiple alarms are specified, they will be played in order each"
+    echo "time the alarm is repeated."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                         display usage
+    --config-file <file>       use the specified configuration file
+    --help                     display this help message
+    -c/--color <when>          when to use color ("auto", "always", "never")
+    -s/--silent                suppress all output
+    -l/--list                  list all available alarms
+    -d/--alarm-dir <dir>       directory containing alarm sounds
+    -w/--when <time>           when to play the alarm
+    -r/--repeat <times>        number of times to repeat the alarm (default: 3)
+    -S/--snooze <seconds>      interval between alarm repeats (default: 300)
+    -v/--volume <percent>      volume of the alarm (default: 100)
+    -V/--sys-volume <percent>  system volume to set before playing the alarm
+    -f/--failsafe              if no alarm is found, play a built-in alarm
+    [<alarm1> [alarm2 ...]]    alarm sounds to play
+EOF
+}
+
+function parse-args() {
+    # Parse the arguments first for a config file to load default values from
+    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
+    for ((i=0; i<${#}; i++)); do
+        case "${!i}" in
+            -c | --config-file)
+                let i++
+                CONFIG_FILE="${!i}"
+                ;;
+        esac
+    done
+    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
+
+    # Default values
+    DO_COLOR=false
+    DO_SILENT=false
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+    DO_LIST=false
+    ALARM_DIR="${ALARM_DIR}"
+    ALARM_DIRS=""  # will be set after parsing the arguments
+    WHEN=""
+    REPEAT=3
+    SNOOZE=300  # 5 minutes
+    ALARM_VOLUME=100
+    SYS_VOLUME=""  # do not set system volume unless specified
+    DO_FAILSAFE=false
+    ALARM_NAMES=()
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            -l | --list)
+                DO_LIST=true
+                ;;
+            -d | --alarm-dir)
+                ALARM_DIR="${2}"
+                shift 1
+                ;;
+            -w | --when)
+                WHEN="${2}"
+                shift 1
+                ;;
+            -r | --repeat)
+                REPEAT="${2}"
+                shift 1
+                ;;
+            -S | --snooze)
+                SNOOZE="${2}"
+                shift 1
+                ;;
+            -v | --volume)
+                ALARM_VOLUME="${2}"
+                shift 1
+                ;;
+            -V | --sys-volume)
+                SYS_VOLUME="${2}"
+                shift 1
+                ;;
+            -f | --failsafe)
+                # TODO: add --failsafe[=<duration>] option
+                DO_FAILSAFE=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                ALARM_NAMES+=("${1}")
+                ;;
+        esac
+        shift 1
+    done
+
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        ALARM_NAMES+=("${1}")
+        shift 1
+    done
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && setup-colors || unset-colors
+    fi
+
+    # Validate repeat, snooze, and the volumes
+    if ! is-int "${REPEAT}"; then
+        echo "error: repeat must be an integer" >&2
+        return ${E_ERROR}
+    elif [[ ${REPEAT} -lt 1 ]]; then
+        echo "error: repeat must be at least 1" >&2
+        return ${E_ERROR}
+    fi
+
+    if ! is-int "${SNOOZE}"; then
+        echo "error: snooze must be an integer" >&2
+        return ${E_ERROR}
+    elif [[ ${SNOOZE} -lt 1 ]]; then
+        echo "error: snooze must be at least 1" >&2
+        return ${E_ERROR}
+    fi
+
+    if ! is-int "${ALARM_VOLUME}"; then
+        echo "error: volume must be an integer" >&2
+        return ${E_ERROR}
+    elif [[ ${ALARM_VOLUME} -lt 0 || ${ALARM_VOLUME} -gt 100 ]]; then
+        echo "error: volume must be between 0 and 100" >&2
+        return ${E_ERROR}
+    fi
+
+    if [[ -n "${SYS_VOLUME}" ]]; then
+        if ! is-int "${SYS_VOLUME}"; then
+            echo "error: system volume must be an integer" >&2
+            return ${E_ERROR}
+        elif [[ ${SYS_VOLUME} -lt 0 || ${SYS_VOLUME} -gt 100 ]]; then
+            echo "error: system volume must be between 0 and 100" >&2
+            return ${E_ERROR}
+        fi
+    fi
+
+    # Set up the alarm directories
+    ALARM_DIRS=()
+    if [[ -n "${ALARM_DIR}" ]]; then
+        if [[ -d "${ALARM_DIR}" ]]; then
+            ALARM_DIRS+=("${ALARM_DIR}")
+        else
+            echo "error: alarm directory does not exist: ${ALARM_DIR}" >&2
+            return ${E_ERROR}
+        fi
+    fi
+    for dir in "${HOME}/.local/share/alarm" "/usr/share/alarm"; do
+        if [[ -d "${dir}" ]]; then
+            ALARM_DIRS+=("${dir}")
+        fi
+    done
+
+    # If no alarm names were specified, use the default
+    if [[ ${#ALARM_NAMES[@]} -eq 0 ]]; then
+        ALARM_NAMES=("Alarm")
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function find-alarm() {
+    local name="${1}"
+    local filename filetype
+
+    shopt -s nullglob
+    for dir in "${ALARM_DIRS[@]}"; do
+        debug "searching for alarm: ${name} in ${dir}"
+        for file in "${dir}/"*; do
+            # Remove only the last extension
+            filename="${file%.*}"
+            filename="${filename##*/}"
+            debug "  - checking: ${file} -- ${filename}"
+            if [[ "${filename,,}" == "${name,,}" ]]; then
+                # Validate the file type
+                filetype=$(file --brief --mime-type "${file}")
+                if [[ "${filetype}" == "audio/"* ]]; then
+                    echo "${file}"
+                    return ${E_SUCCESS}
+                fi
+            fi
+        done
+    done
+}
+
+function list-alarms() {
+    local dir file filename filepath filepaths=()
+
+    shopt -s nullglob
+    for dir in "${ALARM_DIRS[@]}"; do
+        if [[ -d "${dir}" ]]; then
+            for filepath in "${dir}/"*; do
+                filepaths+=("${filepath}")
+            done
+        fi
+    done
+
+    if [[ ${#filepaths[@]} -eq 0 ]]; then
+        echo "no alarms found" >&2
+        return ${E_ERROR}
+    fi
+
+    for filepath in "${filepaths[@]}"; do
+        filename="${filepath##*/}"  # remove the path
+        filename="${filename%.*}"   # no extension
+        filename="${filename,,}"    # lowercase
+        printf '%s - %s\n' "${filename}" "${filepath}"
+    done
+}
+
+function set-sys-vol() {
+    local volume="${1}"
+
+    run-available set-volume "${volume}"
+}
+
+function play-alarm() {
+    local alarm="${1}"
+    local volume="${2}"
+    local sys_volume="${3}"
+
+    if [[ -n "${sys_volume}" ]]; then
+        set-sys-vol "${sys_volume}"
+    fi
+
+    run-available audio-player "${alarm}" "${volume}"
+}
+
+function play-failsafe() {
+    local pid
+    local -i duration="${1:-10}"
+
+    # Play the failsafe alarm
+    run-available failsafe-audio "${duration}"
+}
+
+## run-available functions
+
+### Use the default RA functions, aliasing them to manage priorities
+ra_audio-player_10_mpv() { ra_audio-player_mpv "${@}"; }
+ra_audio-player_20_mplayer() { ra_audio-player_mplayer "${@}"; }
+ra_audio-player_30_vlc() { ra_audio-player_vlc "${@}"; }
+ra_audio-player_40_powerplay() { ra_audio-player_powerplay "${@}"; }
+ra_audio-player_50_aplay() { ra_audio-player_aplay "${@}"; }
+ra_failsafe-audio_10_speaker-test() { ra_failsafe-audio_speaker-test "${@}"; }
+ra_failsafe-audio_20_osaudio() { ra_failsafe-audio_osaudio "${@}"; }
+ra_failsafe-audio_30_aplay() { ra_failsafe-audio_aplay "${@}"; }
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    debug-vars DO_COLOR DO_SILENT ALARM_DIR ALARM_DIRS WHEN REPEAT SNOOZE \
+               ALARM_VOLUME SYS_VOLUME DO_FAILSAFE ALARM_NAMES
+
+    if ${DO_LIST}; then
+        list-alarms
+        return ${E_SUCCESS}
+    fi
+
+    if [[ -n "${WHEN}" ]]; then
+        countdown "${WHEN}" || {
+            echo "alarm cancelled"
+            return ${E_SUCCESS}
+        }
+    fi
+
+    for ((i=0; i<REPEAT; i++)); do
+        for alarm in "${ALARM_NAMES[@]}"; do
+            alarm_file=$(find-alarm "${alarm}")
+            if [[ -n "${alarm_file}" ]]; then
+                play-alarm "${alarm_file}" "${ALARM_VOLUME}" "${SYS_VOLUME}"
+            elif ${DO_FAILSAFE}; then
+                play-failsafe 10
+            else
+                echo "error: alarm not found: ${alarm}" >&2
+                return ${E_ERROR}
+            fi
+        done
+        # If this is the last repeat, don't snooze
+        [[ ${i} -eq $((REPEAT - 1)) ]] || {
+            echo "snoozing for ${SNOOZE} seconds..."
+            countdown "${SNOOZE} seconds" || {
+                echo "snooze cancelled"
+                break
+            }
+        }
+    done
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
