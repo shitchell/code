@@ -148,6 +148,21 @@ ra_set-volume_osascript() {
     osascript -e "set volume output volume ${volume}"
 }
 
+ra_get-volume_amixer() {
+    # Get the volume using amixer
+    amixer get Master | awk -F'[][]' '/%/ {gsub(/%/, ""); print $2; exit}'
+}
+
+ra_get-volume_pactl() {
+    echo "warning: pactl not implemented" >&2
+    return "${E_CONTINUE}"
+}
+
+ra_get-volume_osascript() {
+    # Get the volume using osascript
+    osascript -e 'output volume of (get volume settings)'
+}
+
 ra_audio-player_mpv() {
     local alarm="${1}"
     local -i volume="${2:-100}"
