@@ -1,0 +1,339 @@
+#!/usr/bin/env bash
+#
+# Capture an image or video from a webcam using ffmpeg (for now, will add
+# support for other tools later)
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_NO_WEBCAM=2
+
+
+## traps #######################################################################
+################################################################################
+
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## colors ######################################################################
+################################################################################
+
+# Determine if we're in a terminal
+[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+
+# @description Set up color variables
+# @usage setup-colors
+function setup-colors() {
+    C_RED=$'\e[31m'
+    C_GREEN=$'\e[32m'
+    C_YELLOW=$'\e[33m'
+    C_BLUE=$'\e[34m'
+    C_MAGENTA=$'\e[35m'
+    C_CYAN=$'\e[36m'
+    C_WHITE=$'\e[37m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    S_UNDERLINE=$'\e[4m'
+    S_BLINK=$'\e[5m'
+    S_INVERT=$'\e[7m'
+    S_HIDDEN=$'\e[8m'
+}
+
+# @description Unset color variables
+# @usage unset-colors
+function unset-colors() {
+    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
+          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
+}
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-c <when>] [-s] [--] [file ...]"
+}
+
+function help-epilogue() {
+    echo "take an image or video from a webcam"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                      display usage
+    --help                  display this help message
+    -c/--color <when>       when to use color ("auto", "always", "never")
+    -s/--silent             suppress all output
+    -r/--resolution <res>   set the resolution of the image or video (default:
+                            640x480)
+    -d/--device <dev>       set the device to use (default: /dev/video0)
+    -D/--duration <sec>     set the duration of the video (default: 5)
+    file                    the file to save the image or video to
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATH=""
+    RESOLUTION="640x480"
+    DEVICE="/dev/video0"
+    DURATION=5  # seconds
+    CAPTURE_TYPE=""  # will be set to "image" or "video"
+    DO_COLOR=false
+    DO_SILENT=false
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            -r | --resolution)
+                RESOLUTION="${2}"
+                shift 1
+                ;;
+            -d | --device)
+                DEVICE="${2}"
+                shift 1
+                ;;
+            -D | --duration)
+                DURATION="${2}"
+                CAPTURE_TYPE="video"
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                if [[ -n "${FILEPATH}" ]]; then
+                    echo "error: too many arguments" >&2
+                    return ${E_ERROR}
+                fi
+                FILEPATH="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # If -- was used, collect the remaining arguments
+    while [[ ${#} -gt 0 ]]; do
+        if [[ -n "${FILEPATH}" ]]; then
+            echo "error: too many arguments" >&2
+            return ${E_ERROR}
+        fi
+        FILEPATH="${1}"
+        shift 1
+    done
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && setup-colors || unset-colors
+    fi
+
+    # Check for a webcam
+    if [[ ! -e "${DEVICE}" ]]; then
+        echo "error: no webcam found at ${DEVICE}" >&2
+        return ${E_NO_WEBCAM}
+    fi
+
+    # Check for a file path
+    if [[ -z "${FILEPATH}" ]]; then
+        echo "error: no file path specified" >&2
+        return ${E_ERROR}
+    fi
+
+    # Validate the resolution
+    if [[ ! "${RESOLUTION}" =~ ^[0-9]+x[0-9]+$ ]]; then
+        echo "error: invalid resolution: ${RESOLUTION}" >&2
+        return ${E_ERROR}
+    fi
+
+    # Validate the duration
+    if [[ "${CAPTURE_TYPE}" == "video" && ! "${DURATION}" =~ ^[0-9]+$ ]]; then
+        echo "error: invalid video duration: ${DURATION}" >&2
+        return ${E_ERROR}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function get-capture-program() {
+    local programs=( ffmpeg )
+
+    for program in "${programs[@]}"; do
+        if command -v "${program}" &>/dev/null; then
+            echo "${program}"
+            return ${E_SUCCESS}
+        fi
+    done
+}
+
+function get-image-ffmpeg() {
+    local resolution="${1}"
+    local device="${2}"
+    local filepath="${3}"
+    ffmpeg -f video4linux2 -s "${resolution}" -i "${device}" -vframes 1 \
+           -y "${filepath}"
+}
+
+function get-video-ffmpeg() {
+    local resolution="${1}"
+    local device="${2}"
+    local duration="${3}"
+    local filepath="${4}"
+    ffmpeg -f video4linux2 -s "${resolution}" -i "${device}" -t "${duration}" \
+           -y "${filepath}"
+}
+
+function get-image() {
+    local program
+    program=$(get-capture-program) || return ${?}
+    case "${program}" in
+        ffmpeg)
+            get-image-ffmpeg "${@}"
+            ;;
+        *)
+            echo "error: no capture program found" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+}
+
+function get-video() {
+    local program
+    program=$(get-capture-program) || return ${?}
+    case "${program}" in
+        ffmpeg)
+            get-video-ffmpeg "${@}"
+            ;;
+        *)
+            echo "error: no capture program found" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+}
+
+function infer-capture-type() {
+    local filepath="${1}"
+    local ext="${filepath##*.}"
+    case "${ext,,}" in
+        jpg | jpeg | png | gif | bmp)
+            echo "image"
+            ;;
+        mp4 | avi | mkv | mov | webm | flv | vob | ogv | ogg | gifv)
+            echo "video"
+            ;;
+        *)
+            echo "error: unknown file extension: ${ext}" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}    
+
+    # Infer the capture type if not specified
+    if [[ -z "${CAPTURE_TYPE}" ]]; then
+        CAPTURE_TYPE=$(infer-capture-type "${FILEPATH}") || return ${?}
+    fi
+
+    # Capture the image or video
+    case "${CAPTURE_TYPE}" in
+        image)
+            get-image "${RESOLUTION}" "${DEVICE}" "${FILEPATH}"
+            ;;
+        video)
+            get-video "${RESOLUTION}" "${DEVICE}" "${DURATION}" "${FILEPATH}"
+            ;;
+        *)
+            echo "error: unknown capture type: ${CAPTURE_TYPE}" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
