@@ -398,6 +398,12 @@ function play-alarm() {
     local sys_volume="${3}"
 
     if [[ -n "${sys_volume}" ]]; then
+        # Try to get the volume to restore it later
+        ORIGINAL_VOLUME=$(run-available get-volume)
+        export ORIGINAL_VOLUME
+        if [[ -n "${ORIGINAL_VOLUME}" ]]; then
+            trap "run-available set-volume ${ORIGINAL_VOLUME}" EXIT
+        fi
         set-sys-vol "${sys_volume}"
     fi
 
