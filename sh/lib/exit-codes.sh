@@ -1,64 +1,80 @@
 #!/usr/bin/env bash
 : '
 A list of exit codes for use in shell scripts.
+
+Note when adding new exit codes: the possible range is 0-255.
 '
 
 # General
 
-declare -xri E_SUCCESS=0
-declare -xri E_ERROR=1
-declare -xri E_UNKNOWN=2
+export E_SUCCESS=0
+export E_ERROR=1
+export E_UNKNOWN=2
+export E_HELP_DISPLAYED=3
 
 
-# Argument parsing - 100
+# 10-19 - Argument parsing
 
-declare -xri E_INVALID_ARGUMENT=100
-declare -xri E_MISSING_ARGUMENT=101
-declare -xri E_UNKNOWN_ARGUMENT=102
-declare -xri E_INVALID_OPTION=103
-declare -xri E_MISSING_OPTION=104
-declare -xri E_UNKNOWN_OPTION=105
-declare -xri E_INVALID_VALUE=106
-declare -xri E_MISSING_VALUE=107
-declare -xri E_UNKNOWN_VALUE=108
-
-
-# Type checking - 200
-
-declare -xri E_INVALID_TYPE=200
-declare -xri E_NOT_A_NUMBER=201
-declare -xri E_NOT_A_STRING=202
-declare -xri E_NOT_AN_ARRAY=203
-declare -xri E_NOT_A_MAP=204
-declare -xri E_NOT_A_FUNCTION=205
-declare -xri E_NOT_A_FILE=206
-declare -xri E_NOT_A_DIRECTORY=207
-declare -xri E_NOT_A_LINK=208
-declare -xri E_NOT_A_SOCKET=209
-declare -xri E_NOT_A_PIPE=210
-declare -xri E_NOT_A_DEVICE=211
-declare -xri E_NOT_A_BLOCK_DEVICE=212
-declare -xri E_NOT_A_CHARACTER_DEVICE=213
-declare -xri E_NOT_A_USER=214
-declare -xri E_NOT_A_GROUP=215
-declare -xri E_NOT_A_DATE=216
-declare -xri E_NOT_AN_IP=217
-declare -xri E_NOT_A_PORT=218
-declare -xri E_NOT_A_URL=219
+export E_INVALID_ARGUMENT=10
+export E_MISSING_ARGUMENT=11
+export E_UNKNOWN_ARGUMENT=12
+export E_INVALID_OPTION=13
+export E_MISSING_OPTION=14
+export E_UNKNOWN_OPTION=15
+export E_INVALID_VALUE=16
+export E_MISSING_VALUE=17
+export E_UNKNOWN_VALUE=18
 
 
-# Filesystem - 300
+# 20-45 - Type checking
 
-declare -xri E_FILE_NOT_FOUND=300
-declare -xri E_FILE_EXISTS=301
-declare -xri E_PERMISSION_DENIED=302
-declare -xri E_FILE_NOT_READABLE=303
-declare -xri E_FILE_NOT_WRITABLE=304
-declare -xri E_FILE_NOT_EXECUTABLE=305
-declare -xri E_FILE_NOT_EMPTY=306
+export E_INVALID_TYPE=20
+export E_NOT_A_NUMBER=21
+export E_NOT_A_STRING=22
+export E_NOT_AN_ARRAY=23
+export E_NOT_A_MAP=24
+export E_NOT_A_FUNCTION=25
+export E_NOT_A_FILE=26
+export E_NOT_A_DIRECTORY=27
+export E_NOT_A_LINK=28
+export E_NOT_A_SOCKET=29
+export E_NOT_A_PIPE=30
+export E_NOT_A_DEVICE=31
+export E_NOT_A_BLOCK_DEVICE=32
+export E_NOT_A_CHARACTER_DEVICE=33
+export E_NOT_A_USER=34
+export E_NOT_A_GROUP=35
+export E_NOT_A_DATE=36
+export E_NOT_AN_IP=37
+export E_NOT_A_PORT=38
+export E_NOT_A_URL=39
 
 
-# Git - 400
+# 46-59 - Filesystem
 
-declare -xri E_NOT_A_REPOSITORY=400
-declare -xri E_INVALID_COMMIT=401
+export E_FILE_NOT_FOUND=46
+export E_FILE_EXISTS=47
+export E_PERMISSION_DENIED=48
+export E_FILE_NOT_READABLE=49
+export E_FILE_NOT_WRITABLE=50
+export E_FILE_NOT_EXECUTABLE=51
+export E_FILE_NOT_EMPTY=52
+
+
+# 60-70 - Git
+
+export E_NOT_A_REPOSITORY=60
+export E_INVALID_COMMIT=61
+
+# 80-89 - Commands / Functions
+
+export E_COMMAND_NOT_FOUND=80
+export E_FUNCTION_NOT_FOUND=81
+export E_INVALID_COMMAND=82
+export E_INVALID_FUNCTION=83
+export E_INVALID_COMMAND_OR_FUNCTION=84
+
+# 90-99 - Flow Control
+export E_CONTINUE=90
+export E_BREAK=91
+export E_EXIT=92
