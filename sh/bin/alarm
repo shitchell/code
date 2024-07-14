@@ -199,7 +199,7 @@ function parse-args() {
                 ALARM_DIR="${2}"
                 shift 1
                 ;;
-            -w | --when)
+            -w | --when | --at | --time)
                 WHEN="${2}"
                 shift 1
                 ;;
