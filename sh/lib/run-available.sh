@@ -27,7 +27,7 @@
         }
 
         # Run the function
-        run-available-function music song.mp3
+        run-available music song.mp3
 '
 
 include-source 'debug'
@@ -36,32 +36,73 @@ include-source 'exit-codes'
 function run-available() {
     :  "Run the first available function given a category
 
-        Given a category, search for all functions that match and run the first
-        whose name matches a command available on the system. Functions should
-        follow the format 'ra_<category>_[<priority>_]<name>'. For example, if
-        the category is 'music', the functions should be named
-        'ra_music_<command>'. When the function runs, it will find all available
-        functions starting with the 'ra_music_' prefix, extract the command
-        name, and check if that command is available on the system. If it is,
-        the function will be run. Functions can optionally include a priority
-        to determine the order in which they are checked. The priority should be
-        an integer followed by an underscore, e.g. 'ra_music_10_play' will be
-        checked before 'ra_music_20_pause'. Whether a priority is given or not,
-        the functions will be checked in alphabetical order.
+        Given a category, search for all functions, commands, or aliases
+        (runnables) available. Names should follow the format
+        'ra_<category>_[<priority>_]<command>'. For example, if the category is
+        'music', the runnable should be named 'ra_music_<command>'. When this
+        function is run, it will find all available runnables starting with the
+        'ra_music_' prefix, extract the command name, and check if that command
+        is available on the system. If it is, the function will be run.
 
-        If a function returns ${E_CONTINUE}, the next function will be checked.
-        If no functions are found for the category, the function will return
+        Runnable names can optionally include a priority to determine the order
+        in which they are checked. The priority should be an integer followed by
+        an underscore, e.g. 'ra_music_10_mpv' will be checked before
+        'ra_music_20_mplayer'. Whether a priority is given or not, the functions
+        will be checked in alphabetical order.
+
+        The list of runnables can be filtered using the '--exclude' option. This
+        option takes a glob pattern to exclude from the list of available
+        runnables, e.g. '--exclude ra_music_mp*' would exclude
+        'ra_music_mplayer' and 'ra_music_mpv'.
+
+        The list of available runnables can be optionally built from aliases,
+        functions, or commands using the '--(no-)aliases', '--(no-)functions',
+        and '--(no-)commands' options. By default, commands are excluded for
+        performance reasons (i.e.: --functions --aliases --no-commands).
+
+        If a runnable returns ${E_CONTINUE}, the next runnable will be checked.
+        If no runnables are found for the category, this function will return
         ${E_FUNCTION_NOT_FOUND}. If no commands are found for the functions, the
         function will return ${E_COMMAND_NOT_FOUND}.
 
         @usage
-            <category> [options]
+            [--(no-)functions] [--(no-)commands] [--(no-)aliases]
+            [--exclude <command>] [--list]
+            <category> [--] [options]
 
-        @optarg options
-            Any options to pass to the function
+        @option --functions
+            Include functions in the list of available commands
+
+        @option --no-functions
+            Exclude functions from the list of available commands
+
+        @option --commands
+            Include commands in the list of available commands
+
+        @option --no-commands
+            Exclude commands from the list of available commands
+
+        @option --aliases
+            Include aliases in the list of available commands
+
+        @option --no-aliases
+            Exclude aliases from the list of available commands
+
+        @option --exclude <command>
+            A glob pattern to exclude from the list of available commands, e.g.:
+            'ra_music_mp*' would exclude 'ra_music_mplayer' and 'ra_music_mpv'
+
+        @option --list
+            List all available functions for the category
 
         @arg <category>
             The category of functions to search for
+
+        @optarg --
+            All arguments after this will be passed to the function
+
+        @optarg options
+            Any options to pass to the function
 
         @stdout
             The output of the function that was run
@@ -70,67 +111,165 @@ function run-available() {
             If no functions are found for the category
 
         @return ${E_COMMAND_NOT_FOUND}
-            If no commands are found for the functions
+            If functions are found, but their commands are not in the PATH
 
         @return
             The return code of the function that was run
-        "
-    local category="${1}"
-    local options=( "${@:2}" )
-    local prefix functions=() function_name command
+    "
+    # Default values
+    local category=""
+    local options=()
+    local do_list=false
+    local do_functions=true do_commands=false do_aliases=true
+    local compgen_args=()
+    local exclude=()
+    local prefix candidates=() runnables=()
+    local runnable_category runnable_name runnable_priority runnable_command
     local -i exit_code
+
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --functions)
+                do_functions=true
+                ;;
+            --no-functions)
+                do_functions=false
+                ;;
+            --commands)
+                do_commands=true
+                ;;
+            --no-commands)
+                do_commands=false
+                ;;
+            --aliases)
+                do_aliases=true
+                ;;
+            --no-aliases)
+                do_aliases=false
+                ;;
+            --exclude)
+                exclude+=( "${2}" )
+                shift 1
+                ;;
+            --list)
+                do_list=true
+                ;;
+            --)
+                # All arguments after this will be passed to the function
+                options+=( "${@:2}" )
+                break
+                ;;
+            *)
+                # Set the category or options
+                if [[ -z "${category}" ]]; then
+                    category="${1}"
+                else
+                    options+=( "${1}" )
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    debug-vars category options do_list do_functions do_commands do_aliases \
+        exclude
+
+    # Require a category if we're not listing functions
+    if ! ${do_list}; then
+        if [[ -z "${category}" ]]; then
+            echo "error: category is required" >&2
+            return "${E_MISSING_ARGUMENT}"
+        fi
+    fi
 
     # Set up a trap to return an error on ^C
     trap "return 1" INT
 
     # Set the prefix
-    prefix="ra_${category}_"
-    debug "searching for functions with prefix: ${prefix}"
+    prefix="ra_"
+    [[ -n "${category}" ]] && prefix+="${category}_"
+    debug "searching for runnables with prefix: ${prefix}"
 
     # Find all available functions for the category
-    readarray -t functions < <(compgen -A function | grep "^${prefix}")
+    ${do_functions} && compgen_args+=( -A function )
+    ${do_commands} && compgen_args+=( -c )
+    ${do_aliases} && compgen_args+=( -a )
+    readarray -t runnable < <(
+        compgen "${compgen_args[@]}" | grep "^${prefix}" | sort -un
+    )
 
     # Check if any functions were found
-    if [[ ${#functions[@]} -eq 0 ]]; then
-        echo "error: no functions found for category: ${category}" >&2
+    if [[ ${#runnable[@]} -eq 0 ]]; then
+        echo "error: no runnable found for category: ${category}" >&2
         return "${E_FUNCTION_NOT_FOUND}"
     fi
 
-    # Loop over the functions
-    for function_name in "${functions[@]}"; do
-        # Extract the command name
-        command="${function_name#"${prefix}"}"
-        if [[ "${command}" =~ ^[0-9]+_ ]]; then
-            command="${command#*_}"
+    # Collect the candidate runnables -- not excluded and commands in $PATH
+    for runnable_name in "${runnable[@]}"; do
+        debug "checking runnable: ${runnable_name}"
+        # Extract the runnable details
+        if [[ "${runnable_name}" =~ ^ra_([^_]+)_([0-9]+_)?(.+)$ ]]; then
+            runnable_category="${BASH_REMATCH[1]}"
+            runnable_priority="${BASH_REMATCH[2]}"
+            runnable_command="${BASH_REMATCH[3]}"
+        else
+            continue
         fi
-        debug "  => checking for command: ${command}"
+        debug "  => category: ${runnable_category}"
+        debug "  => priority: ${runnable_priority}"
+        debug "  => command: ${runnable_command}"
+
+        # Check if the command is excluded
+        for exclude_pattern in "${exclude[@]}"; do
+            if [[ "${runnable_command}" == ${exclude_pattern} ]]; then
+                debug "  => excluding command: ${runnable_command}"
+                continue 2
+            fi
+        done
 
         # Check if the command is available
-        if command -v "${command}" &>/dev/null; then
-            # Run the function
-            debug "  => running function: ${function_name} ${options[*]}"
-            ${function_name} "${options[@]}"
-            exit_code=${?}
-            debug "  => function returned: ${exit_code} (E_CONTINUE=${E_CONTINUE})"
-            if ((exit_code == E_CONTINUE)); then
-                continue
-            fi
-            return ${exit_code}
+        if command -v "${runnable_command}" &>/dev/null; then
+            debug "  => found command: ${runnable_command}"
+            candidates+=( "${runnable_name}" )
+        else
+            debug "  => command not found: ${runnable_command}"
         fi
     done
 
-    echo "error: no commands found for functions" >&2
-    return "${E_COMMAND_NOT_FOUND}"
+    # Check if any candidates were found
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        echo "error: no candidate runnables found" >&2
+        return "${E_COMMAND_NOT_FOUND}"
+    fi
+
+    debug-vars candidates
+
+    # If listing, print the candidates and return
+    if ${do_list}; then
+        printf "%s\n" "${candidates[@]}"
+        return
+    fi
+
+    # Loop over the candidates and run them until one returns a non-E_CONTINUE
+    for runnable_name in "${candidates[@]}"; do
+        debug "running function: ${runnable_name}"
+        "${runnable_name}" "${options[@]}"
+        exit_code=$?
+        if [[ ${exit_code} -ne ${E_CONTINUE} ]]; then
+            return ${exit_code}
+        fi
+    done
 }
 
-ra_set-volume_amixer() {
+function ra_set-volume_amixer() {
     local volume="${1}"
 
     # Set the volume using amixer
     amixer -q set Master "${volume}%"
 }
 
-ra_set-volume_pactl() {
+function ra_set-volume_pactl() {
     local volume="${1}"
     local sink
 
@@ -141,29 +280,29 @@ ra_set-volume_pactl() {
     pactl set-sink-volume "${sink}" "${volume}%"
 }
 
-ra_set-volume_osascript() {
+function ra_set-volume_osascript() {
     local volume="${1}"
 
     # Set the volume using osascript
     osascript -e "set volume output volume ${volume}"
 }
 
-ra_get-volume_amixer() {
+function ra_get-volume_amixer() {
     # Get the volume using amixer
     amixer get Master | awk -F'[][]' '/%/ {gsub(/%/, ""); print $2; exit}'
 }
 
-ra_get-volume_pactl() {
+function ra_get-volume_pactl() {
     echo "warning: pactl not implemented" >&2
     return "${E_CONTINUE}"
 }
 
-ra_get-volume_osascript() {
+function ra_get-volume_osascript() {
     # Get the volume using osascript
     osascript -e 'output volume of (get volume settings)'
 }
 
-ra_audio-player_mpv() {
+function ra_audio-player_mpv() {
     local alarm="${1}"
     local -i volume="${2:-100}"
 
@@ -173,7 +312,7 @@ ra_audio-player_mpv() {
     echo  # add a newline after the status line
 }
 
-ra_audio-player_mplayer() {
+function ra_audio-player_mplayer() {
     local alarm="${1}"
     local -i volume="${2:-100}"
 
@@ -181,7 +320,7 @@ ra_audio-player_mplayer() {
     mplayer -volume "${volume}" -really-quiet -- "${alarm}"
 }
 
-ra_audio-player_vlc() {
+function ra_audio-player_vlc() {
     local alarm="${1}"
 
     # Play the file using vlc
@@ -189,14 +328,14 @@ ra_audio-player_vlc() {
 
 }
 
-ra_audio-player_powerplay() {
+function ra_audio-player_powerplay() {
     local alarm="${1}"
 
     # Play the file using powerplay
     powerplay "${alarm}"
 }
 
-ra_audio-player_aplay() {
+function ra_audio-player_aplay() {
     local alarm="${1}"
 
     # Validate that the alarm is a wav file
@@ -209,7 +348,7 @@ ra_audio-player_aplay() {
     aplay "${alarm}"
 }
 
-ra_failsafe-audio_speaker-test() {
+function ra_failsafe-audio_speaker-test() {
     local pid
     local -i duration="${1:-10}"
     speaker-test -t sine -f 1000 -l 1 &
@@ -225,7 +364,7 @@ ra_failsafe-audio_speaker-test() {
     kill -9 "${pid}" 2>/dev/null
 }
 
-ra_failsafe-audio_osaudio() {
+function ra_failsafe-audio_osaudio() {
     local pid
     local -i duration="${1:-10}"
     while :; do osascript -e "beep"; sleep 0.5; done &
@@ -241,7 +380,7 @@ ra_failsafe-audio_osaudio() {
     kill -9 "${pid}" 2>/dev/null
 }
 
-ra_failsafe-audio_aplay() {
+function ra_failsafe-audio_aplay() {
     local pid wav_file wav_files
     local -i duration="${1:-10}"
 
