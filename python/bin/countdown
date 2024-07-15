@@ -14,6 +14,7 @@ TODO:
 """
 
 import re
+import sys
 import time
 import argparse
 from dateutil.parser import parse
@@ -29,14 +30,16 @@ parser.add_argument(
 p_continue.add_argument(
     "-c",
     "--continue",
-    dest="cont",
-    action="store_true",
+    dest="stop",
+    action="store_false",
     help="continue displaying the time since the timestring after it passes",
 )
 p_continue.add_argument(
     "-s",
     "--stop",
+    dest="stop",
     action="store_true",
+    default=True,
     help="stop displaying the time until the timestring after it passes",
 )
 parser.add_argument(
@@ -90,7 +93,8 @@ p_output.add_argument(
 args = parser.parse_args()
 
 # default to stopping if neither stop nor continue is provided
-if not args.stop and not args.cont:
+# print(f"{args.stop=}")
+if args.stop is None:
     args.stop = True
 
 _substitutions = [
@@ -119,7 +123,10 @@ def parse_timestring(timestring: str) -> datetime:
 
     # check if the timestring is of the form 'now +/- n units'
     now_match = re.match(
-        r"^(now )?([+-])? ?(\d+) ?(s|seconds?|m|minutes?|h|hours?|d|days?|w|weeks?|M|months?|y|years?)$",
+        (
+            r"^(now )?([+-])? ?(\d+) ?"
+            r"(s|seconds?|m|minutes?|h|hours?|d|days?|w|weeks?|M|months?|y|years?)$"
+        ),
         timestring,
         re.IGNORECASE,
     )
@@ -131,19 +138,19 @@ def parse_timestring(timestring: str) -> datetime:
         if not add_or_subtract:
             add_or_subtract = "+"  # default to adding
         match unit:
-            case "s" | "seconds":
+            case "s" | "second" | "seconds":
                 future_seconds = int(num)
-            case "m" | "minutes":
+            case "m" | "minute" | "minutes":
                 future_seconds = int(num) * 60
-            case "h" | "hours":
+            case "h" | "hr" | "hrs" | "hour" | "hours":
                 future_seconds = int(num) * 3600
-            case "d" | "days":
+            case "d" | "day" | "days":
                 future_seconds = int(num) * 86400
-            case "w" | "weeks":
+            case "w" | "wk" | "wks" | "week " |"weeks":
                 future_seconds = int(num) * 604800
-            case "M" | "months":
+            case "M" | "month" | "months":
                 future_seconds = int(num) * 2629743
-            case "y" | "years":
+            case "y" | "yr" | "yrs" | "year" | "years":
                 future_seconds = int(num) * 31556926
             case _:
                 raise ValueError(f"invalid unit '{unit}'")
@@ -175,6 +182,7 @@ def deltastr(
     years: bool = False,
     precision: int = 0,
     keep_null: bool = False,
+    stop: bool = False
 ) -> str:
     total_seconds = delta.total_seconds()
     # determine which unis to calculate
@@ -199,38 +207,65 @@ def deltastr(
     # and need to calculate using precision
     delta_items = []
     for i in range(len(units)):
-        if not total_seconds:
+        # print(f"\n{total_seconds=}")
+        if not total_seconds and stop:
             # if we've no more seconds left, don't keep counting
             # i might potentially remove this, because i reckon it'll improve
             # efficiency far less often than it'll add an extra step
             # TODO: benchmark this function with and without this if statement
             break
+        else:
+            is_negative = total_seconds < 0
+            total_seconds = round(abs(total_seconds))
         unit_name, unit_seconds = units[i]
+        # print(f"{unit_name}, {unit_seconds}, {total_seconds}")
         num_units = 0
         if i == len(units) - 1 and precision:
+            # this is the last unit
+            # print(f"rounding the last unit '{unit_name}' to {precision}")
             num_units = round(total_seconds / unit_seconds, precision)
         else:
             num_units, total_seconds = divmod(total_seconds, unit_seconds)
             num_units = int(num_units)
+            if is_negative:
+                total_seconds *= -1
 
-        if num_units <= 0 and not keep_null and unit_name != "seconds":
+
+        # print(f"unit '{unit_name}' = {num_units}")
+
+        if num_units == 0 and not keep_null and unit_name != "seconds":
+            # print(f"skipping null {unit_name}")
             continue
 
         if num_units == 1:
-            unit_name = unit_name[:-1]
+            unit_name = unit_name.rstrip("s")
 
-        delta_items.append(f"{num_units:02} {unit_name}")
+        if is_negative:
+            num_units *= -1
+            num_units_str = f"{num_units:03d}"
+        else:
+            num_units_str = f"{num_units:02d}"
 
+        delta_items.append(f"{num_units_str} {unit_name}")
+
+    # print(f"{delta_items=}")
     return ", ".join(delta_items)
 
 
 target = parse_timestring(" ".join(args.timestring))
 
+# If the target is in the past and we're not continuing, exit with an error
+if target < datetime.now():
+    print("error: cannot countdown from the past without `--continue`", file=sys.stderr)
+    sys.exit(1)
+
+# print(f"Counting down to: {target}")
+
 numchars = 0
 
 try:
     for delta in deltaiter(target, args.stop):
-        dstr = deltastr(delta, precision=args.precision)
+        dstr = deltastr(delta, precision=args.precision, stop=args.stop)
         # erase the last line
         print("\r" + " " * numchars, end="\r")
         print(dstr, end="", flush=True)
