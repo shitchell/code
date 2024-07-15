@@ -14,7 +14,7 @@ elif ! [[ -r "${path}" ]]; then
 elif ! [[ -f "${path}" ]]; then
   echo "error: '${path}' is not a file" >&2
   exit 1
-elif ! file "${path}" 2>&1 | grep -Eqi 'audio|media'; then
+elif ! file --brief --mime-type "${path}" 2>&1 | grep -Eq '^(audio|video)'; then
   echo "error: '${path}' is not an audio file" >&2
   exit 1
 fi
