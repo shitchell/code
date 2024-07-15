@@ -33,6 +33,11 @@
 include-source 'debug'
 include-source 'exit-codes'
 
+# Ensure exit codes are set
+export E_CONTINUE="${E_CONTINUE:-127}"
+export E_FUNCTION_NOT_FOUND="${E_FUNCTION_NOT_FOUND:-128}"
+export E_COMMAND_NOT_FOUND="${E_COMMAND_NOT_FOUND:-129}"
+
 function run-available() {
     :  "Run the first available function given a category
 
@@ -67,6 +72,7 @@ function run-available() {
 
         @usage
             [--(no-)functions] [--(no-)commands] [--(no-)aliases]
+            [--(no-)continue] [--continue-on-error]
             [--exclude <command>] [--list]
             <category> [--] [options]
 
@@ -87,6 +93,16 @@ function run-available() {
 
         @option --no-aliases
             Exclude aliases from the list of available commands
+
+        @option --continue
+            Continue to the next runnable if a runnable returns ${E_CONTINUE}
+
+        @option --continue-on-error
+            Continue to the next runnable if a runnable returns a non-zero exit
+            code
+
+        @option --no-continue
+            Never continue to the next runnable based on exit code
 
         @option --exclude <command>
             A glob pattern to exclude from the list of available commands, e.g.:
@@ -121,6 +137,8 @@ function run-available() {
     local options=()
     local do_list=false
     local do_functions=true do_commands=false do_aliases=true
+    local do_continue=true
+    local do_continue_on_error=false
     local compgen_args=()
     local exclude=()
     local prefix candidates=() runnables=()
@@ -147,6 +165,17 @@ function run-available() {
                 ;;
             --no-aliases)
                 do_aliases=false
+                ;;
+            --continue)
+                do_continue=true
+                ;;
+            --continue-on-error)
+                do_continue=true
+                do_continue_on_error=true
+                ;;
+            --no-continue)
+                do_continue=false
+                do_continue_on_error=false
                 ;;
             --exclude)
                 exclude+=( "${2}" )
@@ -189,24 +218,26 @@ function run-available() {
     # Set the prefix
     prefix="ra_"
     [[ -n "${category}" ]] && prefix+="${category}_"
-    debug "searching for runnables with prefix: ${prefix}"
+    debug "searching for runnables..."
 
     # Find all available functions for the category
     ${do_functions} && compgen_args+=( -A function )
     ${do_commands} && compgen_args+=( -c )
     ${do_aliases} && compgen_args+=( -a )
-    readarray -t runnable < <(
-        compgen "${compgen_args[@]}" | grep "^${prefix}" | sort -un
+    debug-vars compgen_args prefix
+    readarray -t runnables < <(
+        compgen "${compgen_args[@]}" | grep "^${prefix}" | sort -u
     )
+    debug-vars runnables
 
     # Check if any functions were found
-    if [[ ${#runnable[@]} -eq 0 ]]; then
+    if [[ ${#runnables[@]} -eq 0 ]]; then
         echo "error: no runnable found for category: ${category}" >&2
         return "${E_FUNCTION_NOT_FOUND}"
     fi
 
     # Collect the candidate runnables -- not excluded and commands in $PATH
-    for runnable_name in "${runnable[@]}"; do
+    for runnable_name in "${runnables[@]}"; do
         debug "checking runnable: ${runnable_name}"
         # Extract the runnable details
         if [[ "${runnable_name}" =~ ^ra_([^_]+)_([0-9]+_)?(.+)$ ]]; then
@@ -256,7 +287,19 @@ function run-available() {
         debug "running function: ${runnable_name}"
         "${runnable_name}" "${options[@]}"
         exit_code=$?
-        if [[ ${exit_code} -ne ${E_CONTINUE} ]]; then
+
+        # Determine if we should continue based on the exit code
+        if ${do_continue} || ${do_continue_on_error}; then
+            if [[ ${exit_code} -eq ${E_CONTINUE} ]]; then
+                debug "continuing based on exit code: ${exit_code}"
+                continue
+            elif ${do_continue_on_error} && [[ ${exit_code} -ne 0 ]]; then
+                debug "continuing based on exit code: ${exit_code}"
+                echo "continuing to next runnable..."
+                continue
+            fi
+        else
+            # If we're not continuing, return the exit code
             return ${exit_code}
         fi
     done
@@ -331,6 +374,9 @@ function ra_audio-player_vlc() {
 function ra_audio-player_powerplay() {
     local alarm="${1}"
 
+    # Only run in a windows bash environment with `psrun` available
+    ( __check_windows_bash && __check_psrun ) || return "${E_CONTINUE}"
+
     # Play the file using powerplay
     powerplay "${alarm}"
 }
@@ -404,4 +450,20 @@ function ra_failsafe-audio_aplay() {
 
     # Kill the speaker-test process
     kill -9 "${pid}" 2>/dev/null
+}
+
+# Check if the environment is WSL, Git Bash, or both
+function __check_git_bash() {
+    local uname=$(uname -a)
+    [[ "${uname}" == MINGW* ]] && return 0
+}
+function __check_wsl() {
+    local uname=$(uname -a)
+    [[ "${uname}" == *[Mm]icrosoft* ]] && return 0
+}
+function __check_windows_bash() {
+    __check_git_bash || __check_wsl
+}
+function __check_psrun() {
+    command -v psrun &>/dev/null
 }
