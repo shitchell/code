@@ -6,7 +6,7 @@ path="${1}"
 
 # Validate the path
 if [[ -z "${path}" ]]; then
-  echo "usage: $(basename "${0}") <audio file>" >&2
+  echo "usage: $(basename "${0}") <media file>" >&2
   exit 1
 elif ! [[ -r "${path}" ]]; then
   echo "error: cannot read '${path}'" >&2
@@ -15,7 +15,7 @@ elif ! [[ -f "${path}" ]]; then
   echo "error: '${path}' is not a file" >&2
   exit 1
 elif ! file --brief --mime-type "${path}" 2>&1 | grep -Eq '^(audio|video)'; then
-  echo "error: '${path}' is not an audio file" >&2
+  echo "error: '${path}' is not a media file" >&2
   exit 1
 fi
 
