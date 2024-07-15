@@ -1233,8 +1233,8 @@ function read-chars() {
         Read individual characters from stdin and set a variable to the value of
         each character. By default, the variable is set to REPLY. Intended to be
         used in a while loop, e.g.:
-        
-            while read-chars foo; do ...; done
+
+            while read-chars foo; do something --with $foo; done
 
         @usage
             [-n <int>] [<var>]
@@ -1250,7 +1250,7 @@ function read-chars() {
     local count=1
     local chars=()
     local char
-    
+
     # Parse the values
     while [[ ${#} -gt 0 ]]; do
         case "${1}" in
