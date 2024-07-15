@@ -255,7 +255,7 @@ def deltastr(
 target = parse_timestring(" ".join(args.timestring))
 
 # If the target is in the past and we're not continuing, exit with an error
-if target < datetime.now():
+if target < datetime.now() and args.stop:
     print("error: cannot countdown from the past without `--continue`", file=sys.stderr)
     sys.exit(1)
 
