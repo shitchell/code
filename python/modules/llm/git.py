@@ -17,6 +17,8 @@ import openai as _openai
 
 from . import core as _core
 
+DEFAULT_MODEL: str = "gpt-4o-mini"
+
 
 def _md_newlines(text: str) -> str:
     text = _re.sub(r"\n\n\n+", "\0\0", text)
@@ -28,11 +30,14 @@ def _md_newlines(text: str) -> str:
     text = text.replace("\f", "")
     return text
 
+
 def review_diff(
-        diff: str,
-        max_size: int = 10000,
-        key: str = _os.environ.get(_core.OPENAI_ENVIRON_KEY)
-    ) -> _Tuple[bool, str]:
+    diff: str,
+    max_size: int = 10000,
+    key: str = _os.environ.get(_core.OPENAI_ENVIRON_KEY),
+    model: str = DEFAULT_MODEL,
+    temperature: float = 0.1,
+) -> _Tuple[bool, str]:
     """
     Review a diff, checking for common issues:
     * Passwords included
@@ -107,34 +112,34 @@ def review_diff(
             "+++ b/llm/git.py\n"
             "@@ -192,10 +264,15 @@ def describe_diff(\n"
             "     # Debug the messages\n"
-            "     # print(\"Messages:\\n----\", _json.dumps(messages, indent=2)"
-            ", \"----\", file=_sys.stderr)\n"
-            "     # print(\"Messages:\\n----\")\n"
+            '     # print("Messages:\\n----", _json.dumps(messages, indent=2)'
+            ', "----", file=_sys.stderr)\n'
+            '     # print("Messages:\\n----")\n'
             "     # _pprint(messages)\n"
-            "     # print(\"----\")\n"
+            '     # print("----")\n'
             "     # return\n"
-            "-    # print(\"Messages:\\n----\")\n"
+            '-    # print("Messages:\\n----")\n'
             "-    # _pprint(messages)\n"
-            "-    # print(\"----\")\n"
+            '-    # print("----")\n'
             "-    # return\n"
             # True life debug statements from this script :')
-            "+    print(f\"SYSTEM MESSAGE\\n----\\n{system_message}\\n\\n\", "
+            '+    print(f"SYSTEM MESSAGE\\n----\\n{system_message}\\n\\n", '
             "file=_sys.stderr)\n"
-            "+    print(f\"EXAMPLE BASIC\\n----\\n{example_basic_diff}\\n\\n\","
+            '+    print(f"EXAMPLE BASIC\\n----\\n{example_basic_diff}\\n\\n",'
             " file=_sys.stderr)\n"
-            "+    print(f\"EXAMPLE BASIC RESPONSE\\n----\\n"
-            "{example_basic_response}\\n\\n\", file=_sys.stderr)\n"
-            "+    print(f\"EXAMPLE EXTENDED\\n----\\n"
-            "{example_extended_diff}\\n\\n\", file=_sys.stderr)\n"
-            "+    print(f\"EXAMPLE EXTENDED RESPONSE\\n----\\n"
-            "{example_extended_response}\\n\\n\", file=_sys.stderr)\n"
+            '+    print(f"EXAMPLE BASIC RESPONSE\\n----\\n'
+            '{example_basic_response}\\n\\n", file=_sys.stderr)\n'
+            '+    print(f"EXAMPLE EXTENDED\\n----\\n'
+            '{example_extended_diff}\\n\\n", file=_sys.stderr)\n'
+            '+    print(f"EXAMPLE EXTENDED RESPONSE\\n----\\n'
+            '{example_extended_response}\\n\\n", file=_sys.stderr)\n'
             "+    # _pprint(messages, stream=_sys.stderr, width=120)\n"
-            "+    print(\"----\", file=_sys.stderr)\n"
+            '+    print("----", file=_sys.stderr)\n'
             "+    print(diff, file=_sys.stderr)\n"
             "+    return\n"
             "     # Generate the commit message\n"
             "     response = client.chat.completions.create(\n"
-        )
+        ),
     ]
     example_responses: str = [
         (
@@ -149,22 +154,22 @@ def review_diff(
             " value:', foo)`\n"
         ),
         (
-            "[-192,10 +264,15] warning: debugging code found: `print(f\"SYSTEM "
-            "MESSAGE\\n----\\n{system_message}\\n\\n\", file=_sys.stderr)`\n"
-            "[-192,10 +264,15] warning: debugging code found: `print(f\"EXAMPLE"
-            " BASIC\\n----\\n{example_basic_diff}\\n\\n\", file=_sys.stderr)`\n"
-            "[-192,10 +264,15] warning: debugging code found: `print(f\"EXAMPLE"
-            " BASIC RESPONSE\\n----\\n{example_basic_response}\\n\\n\", file="
+            '[-192,10 +264,15] warning: debugging code found: `print(f"SYSTEM '
+            'MESSAGE\\n----\\n{system_message}\\n\\n", file=_sys.stderr)`\n'
+            '[-192,10 +264,15] warning: debugging code found: `print(f"EXAMPLE'
+            ' BASIC\\n----\\n{example_basic_diff}\\n\\n", file=_sys.stderr)`\n'
+            '[-192,10 +264,15] warning: debugging code found: `print(f"EXAMPLE'
+            ' BASIC RESPONSE\\n----\\n{example_basic_response}\\n\\n", file='
             "_sys.stderr)`\n"
-            "[-192,10 +264,15] warning: debugging code found: `print(f\"EXAMPLE"
-            " EXTENDED\\n----\\n{example_extended_diff}\\n\\n\", file="
+            '[-192,10 +264,15] warning: debugging code found: `print(f"EXAMPLE'
+            ' EXTENDED\\n----\\n{example_extended_diff}\\n\\n", file='
             "_sys.stderr)`\n"
-            "[-192,10 +264,15] warning: debugging code found: `print(f\"EXAMPLE"
-            " EXTENDED RESPONSE\\n----\\n{example_extended_response}\\n\\n\", "
+            '[-192,10 +264,15] warning: debugging code found: `print(f"EXAMPLE'
+            ' EXTENDED RESPONSE\\n----\\n{example_extended_response}\\n\\n", '
             "file=_sys.stderr)`\n"
             "[-192,10 +264,15] warning: debugging code found: `print(diff, "
             "file=_sys.stderr)`\n"
-        )
+        ),
     ]
 
     # Create an *bad* response to correct
@@ -177,9 +182,7 @@ def review_diff(
         # Debug example
         "+print('Line 1 -- Debugging code')\n"
     )
-    bad_example_response: str = (
-        'success'
-    )
+    bad_example_response: str = "success"
     bad_example_correction: str = (
         "INVALID RESPONSE. The response should have been:\n"
         "[-11,0 +12,1] warning: debugging code found: `print('Line 1 -- "
@@ -211,20 +214,24 @@ def review_diff(
     # Set up the message list
     messages: list[dict[str, str]] = [
         {"role": "system", "content": "You are a diff reviewer."},
-        {"role": "system", "content": system_message}
+        {"role": "system", "content": system_message},
     ]
     # Add the examples
     for example_diff, example_response in zip(example_diffs, example_responses):
-        messages.extend([
-            {"role": "user", "content": example_diff},
-            {"role": "assistant", "content": example_response}
-        ])
+        messages.extend(
+            [
+                {"role": "user", "content": example_diff},
+                {"role": "assistant", "content": example_response},
+            ]
+        )
     # Add the bad example
-    messages.extend([
-        {"role": "user", "content": bad_example_diff},
-        {"role": "assistant", "content": bad_example_correction},
-        {"role": "system", "content": bad_example_response}
-    ])
+    messages.extend(
+        [
+            {"role": "user", "content": bad_example_diff},
+            {"role": "assistant", "content": bad_example_correction},
+            {"role": "system", "content": bad_example_response},
+        ]
+    )
     # Add the user's diff
     messages.append({"role": "user", "content": diff})
 
@@ -232,9 +239,9 @@ def review_diff(
 
     # Generate the review message
     response = client.chat.completions.create(
-        model="gpt-4-turbo-preview",
+        model=model,
         messages=messages,
-        temperature=0.1,
+        temperature=temperature,
     )
     message: str = response.choices[0].message.content
     success: bool = message == "success"
@@ -249,8 +256,12 @@ def review_diff(
 
     return success, message
 
+
 def describe_diff(
-    diff: str, key: str = _os.environ.get(_core.OPENAI_ENVIRON_KEY)
+    diff: str,
+    key: str = _os.environ.get(_core.OPENAI_ENVIRON_KEY),
+    model: str = DEFAULT_MODEL,
+    temperature: float = 0.1,
 ) -> str:
     """
     Generate a commit message from a diff of changes.
@@ -379,9 +390,9 @@ def describe_diff(
 
     # Generate the commit message
     response = client.chat.completions.create(
-        model="gpt-4-turbo-preview",
+        model=model,
         messages=messages,
-        temperature=0.25,
+        temperature=temperature,
     )
     return response.choices[0].message.content
 
@@ -406,7 +417,7 @@ if __name__ == "__main__":
         "-f",
         "--file",
         type=Path,
-        help="Use FILE for input rather than command line arguments"
+        help="Use FILE for input rather than command line arguments",
     )
 
     # Add the subparsers
@@ -427,7 +438,7 @@ if __name__ == "__main__":
         "--max-size",
         type=int,
         default=300000,
-        help="The maximum size of the diff"
+        help="The maximum size of the diff",
     )
     review_parser.add_argument("diff", nargs="?", help="The diff of changes")
 
