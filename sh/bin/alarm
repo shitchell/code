@@ -435,6 +435,13 @@ ra_countdown_date() {
 
     end_time=$(date -d "${when}" "+%s")
     duration=$((end_time - $(date "+%s")))
+
+    # Exit with an error if the duration is negative
+    if ((duration < 0)); then
+        echo "${C_ERROR}error: time has already passed${S_RESET}" >&2
+        return ${E_ERROR}
+    fi
+
     while ((duration > 0)); do
         duration=$((duration - 1))
         echo -ne "${C_COMMENT}Time remaining: ${S_RESET}${C_NUMBER}${duration}${S_RESET}${C_COMMENT} seconds\033[0K${S_RESET}"
