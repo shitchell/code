@@ -146,7 +146,7 @@ def parse_timestring(timestring: str) -> datetime:
                 future_seconds = int(num) * 3600
             case "d" | "day" | "days":
                 future_seconds = int(num) * 86400
-            case "w" | "wk" | "wks" | "week " |"weeks":
+            case "w" | "wk" | "wks" | "week " | "weeks":
                 future_seconds = int(num) * 604800
             case "M" | "month" | "months":
                 future_seconds = int(num) * 2629743
@@ -182,7 +182,7 @@ def deltastr(
     years: bool = False,
     precision: int = 0,
     keep_null: bool = False,
-    stop: bool = False
+    stop: bool = False,
 ) -> str:
     total_seconds = delta.total_seconds()
     # determine which unis to calculate
@@ -230,7 +230,6 @@ def deltastr(
             if is_negative:
                 total_seconds *= -1
 
-
         # print(f"unit '{unit_name}' = {num_units}")
 
         if num_units == 0 and not keep_null and unit_name != "seconds":
@@ -264,13 +263,19 @@ if target < datetime.now() and args.stop:
 numchars = 0
 
 try:
+    intervals: int = 0
     for delta in deltaiter(target, args.stop):
         dstr = deltastr(delta, precision=args.precision, stop=args.stop)
         # erase the last line
         print("\r" + " " * numchars, end="\r")
         print(dstr, end="", flush=True)
         numchars = len(dstr)
+        intervals += 1
+        if args.max_intervals and intervals >= args.max_intervals:
+            break
         time.sleep(args.delay)
 except KeyboardInterrupt:
     print()
     exit(1)
+else:
+    print()
