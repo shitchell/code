@@ -38,6 +38,11 @@ export E_CONTINUE="${E_CONTINUE:-127}"
 export E_FUNCTION_NOT_FOUND="${E_FUNCTION_NOT_FOUND:-128}"
 export E_COMMAND_NOT_FOUND="${E_COMMAND_NOT_FOUND:-129}"
 
+
+# ------------------------------------------------------------------------------
+# run-available()
+# ------------------------------------------------------------------------------
+
 function run-available() {
     :  "Run the first available function given a category
 
@@ -310,6 +315,13 @@ function run-available() {
     done
 }
 
+
+# ------------------------------------------------------------------------------
+# ra_* functions
+# ------------------------------------------------------------------------------
+
+# ---- set-volume --------------------------------------------------------------
+
 function ra_set-volume_amixer() {
     local volume="${1}"
 
@@ -335,6 +347,8 @@ function ra_set-volume_osascript() {
     osascript -e "set volume output volume ${volume}"
 }
 
+# ---- get-volume --------------------------------------------------------------
+
 function ra_get-volume_amixer() {
     # Get the volume using amixer
     amixer get Master | awk -F'[][]' '/%/ {gsub(/%/, ""); print $2; exit}'
@@ -349,6 +363,8 @@ function ra_get-volume_osascript() {
     # Get the volume using osascript
     osascript -e 'output volume of (get volume settings)'
 }
+
+# ---- audio-player ------------------------------------------------------------
 
 function ra_audio-player_mpv() {
     local alarm="${1}"
@@ -398,6 +414,8 @@ function ra_audio-player_aplay() {
     # Play the file using aplay
     aplay "${alarm}"
 }
+
+# ---- failsafe-audio ----------------------------------------------------------
 
 function ra_failsafe-audio_speaker-test() {
     local pid
@@ -457,6 +475,67 @@ function ra_failsafe-audio_aplay() {
     kill -9 "${pid}" 2>/dev/null
 }
 
+# ---- notify ------------------------------------------------------------------
+# Note: The notify functions will all make use of the `__ra_parse_args_notify()`
+#       function defined below. It parses for common arguments across various
+#       notification commands, but not every command supports every argument.
+#       For example, the `notify.ps1` command allows for an audible beep, so
+#       running `run-available notify --audible` will produce a beep in an
+#       environment where `notify.ps1` is used, but not in an environment where
+#       `notify-send` is used.
+
+function ra_notify_notify-send() {
+    local args=()
+    __ra_parse_args_notify "${@}"
+    trap __ra_unset_args_notify RETURN
+
+    [[ -n "${notify_title}" ]] && args+=( "--title" "${notify_title}" )
+    [[ -n "${notify_message}" ]] && args+=( "--message" "${notify_message}" )
+    [[ -n "${notify_icon}" ]] && args+=( "--icon" "${notify_icon}" )
+    [[ -n "${notify_app}" ]] && args+=( "--app-name" "${notify_app}" )
+    [[ "${notify_timeout}" -gt 0 ]] && args+=( "--expire-time" "${notify_timeout}" )
+    [[ -n "${notify_category}" ]] && args+=( "--category" "${notify_category}" )
+
+    notify-send "${args[@]}"
+}
+
+function ra_notify_zenity() {
+    local args=()
+    __ra_parse_args_notify "${@}"
+    trap __ra_unset_args_notify RETURN
+
+    [[ -n "${notify_title}" ]] && args+=( "--title" "${notify_title}" )
+    [[ -n "${notify_message}" ]] && args+=( "--text" "${notify_message}" )
+    [[ -n "${notify_icon}" ]] && args+=( "--window-icon" "${notify_icon}" )
+    [[ -n "${notify_app}" ]] && args+=( "--window-icon" "${notify_app}" )
+    [[ "${notify_timeout}" -gt 0 ]] && args+=( "--timeout" "${notify_timeout}" )
+    [[ -n "${notify_category}" ]] && args+=( "--category" "${notify_category}" )
+
+    zenity --notification "${args[@]}"
+}
+
+function ra_notify_notify.ps1() {
+    ## notify.ps1 usage:
+    ##   notify.ps1 [-Title <string>] [-Text <string>]
+    ##              [-Icon <string>] [-Timeout <int>] [-Beep]
+    local args=()
+    __ra_parse_args_notify "${@}"
+    trap __ra_unset_args_notify RETURN
+
+    [[ -n "${notify_title}" ]] && args+=( "-Title" "${notify_title}" )
+    [[ -n "${notify_message}" ]] && args+=( "-Text" "${notify_message}" )
+    [[ -n "${notify_icon}" ]] && args+=( "-Icon" "${notify_icon}" )
+    [[ "${notify_timeout}" -gt 0 ]] && args+=( "-Timeout" "${notify_timeout}" )
+    ${notify_audible} && args+=( "-Beep" )
+
+    notify.ps1 "${args[@]}"
+}
+
+
+# ------------------------------------------------------------------------------
+# Helper functions
+# ------------------------------------------------------------------------------
+
 # Check if the environment is WSL, Git Bash, or both
 function __check_git_bash() {
     local uname=$(uname -a)
@@ -471,4 +550,57 @@ function __check_windows_bash() {
 }
 function __check_psrun() {
     command -v psrun &>/dev/null
+}
+function __ra_parse_args_notify() {
+    # Default argument parser for all notify functions
+    notify_title=""
+    notify_message=""
+    notify_icon=""
+    notify_app=""
+    notify_timeout=0
+    notify_category=""
+    notify_audible=false
+
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --title | --subject)
+                notify_title="${2}"
+                shift 1
+                ;;
+            --audible)
+                notify_audible=true
+                ;;
+            --message | --text | --body)
+                notify_message="${2}"
+                shift 1
+                ;;
+            --icon)
+                notify_icon="${2}"
+                shift 1
+                ;;
+            --app)
+                notify_app="${2}"
+                shift 1
+                ;;
+            --timeout)
+                notify_timeout="${2}"
+                shift 1
+                ;;
+            --category)
+                notify_category="${2}"
+                shift 1
+                ;;
+            *)
+                echo "error: unknown option: ${1}" >&2
+                return "${E_UNKNOWN_OPTION}"
+                ;;
+        esac
+        shift
+    done
+}
+function __ra_unset_args_notify() {
+    # Unset the arguments for all notify functions
+    unset notify_title notify_message notify_icon notify_app notify_timeout \
+        notify_category notify_audible
 }
