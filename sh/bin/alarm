@@ -340,6 +340,8 @@ function find-alarm() {
     local name="${1}"
     local filename filetype
 
+    debug-vars name ALARM_DIRS
+
     shopt -s nullglob
     for dir in "${ALARM_DIRS[@]}"; do
         debug "searching for alarm: ${name} in ${dir}"
@@ -455,14 +457,14 @@ ra_countdown_date() {
 }
 
 ### Use the default RA functions, aliasing them to manage priorities
-ra_audio-player_10_mpv() { ra_audio-player_mpv "${@}"; }
-ra_audio-player_20_mplayer() { ra_audio-player_mplayer "${@}"; }
-ra_audio-player_30_vlc() { ra_audio-player_vlc "${@}"; }
-ra_audio-player_40_powerplay() { ra_audio-player_powerplay "${@}"; }
-ra_audio-player_50_aplay() { ra_audio-player_aplay "${@}"; }
-ra_failsafe-audio_10_speaker-test() { ra_failsafe-audio_speaker-test "${@}"; }
-ra_failsafe-audio_20_osaudio() { ra_failsafe-audio_osaudio "${@}"; }
-ra_failsafe-audio_30_aplay() { ra_failsafe-audio_aplay "${@}"; }
+function ra_audio-player_10_mpv() { ra_audio-player_mpv "${@}"; }
+function ra_audio-player_20_mplayer() { ra_audio-player_mplayer "${@}"; }
+function ra_audio-player_30_vlc() { ra_audio-player_vlc "${@}"; }
+function ra_audio-player_40_powerplay() { ra_audio-player_powerplay "${@}"; }
+function ra_audio-player_50_aplay() { ra_audio-player_aplay "${@}"; }
+function ra_failsafe-audio_10_speaker-test() { ra_failsafe-audio_speaker-test "${@}"; }
+function ra_failsafe-audio_20_osaudio() { ra_failsafe-audio_osaudio "${@}"; }
+function ra_failsafe-audio_30_aplay() { ra_failsafe-audio_aplay "${@}"; }
 
 
 ## main ########################################################################
