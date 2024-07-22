@@ -1305,3 +1305,82 @@ function read-chars() {
     # Set the variable to the characters read
     IFS='' var="${chars[*]}"
 }
+
+function prompt-continue() {
+    :  'Prompt the user to continue
+
+        Prompt the user to continue and check their input against a pattern.
+        Exit or return based on user input and specified options.
+
+        @usage
+            [-y/--yes-pattern <regex>] [-e/--exit] [--exit-msg <msg>] [<prompt>]
+
+        @optarg -y/--yes-pattern <regex>
+            Use <regex> to determine if the user input is a "yes". Defaults to
+            "^[Yy](es)?$".
+
+        @optarg -e/--exit
+            If specified, will `exit` rather than `return`.
+
+        @optarg --exit-msg <msg>
+            A message to print before exiting. Defaults to "".
+
+        @optarg <prompt>
+            Display <prompt> before the input is received. Defaults to "Type
+            \"yes\" to continue:".
+    '
+
+    # Default values
+    local yes_pattern="[Yy](es)?"
+    local prompt="Type \"yes\" to continue:"
+    local do_exit=false
+    local exit_msg=""
+
+    # Parse the values
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            -y | --yes-pattern)
+                yes_pattern="${2}"
+                shift 2
+                ;;
+            -e | --exit)
+                do_exit=true
+                shift 1
+                ;;
+            --exit-msg)
+                exit_msg="${2}"
+                shift 2
+                ;;
+            --)
+                shift 1
+                prompt="${1}"
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return 1
+                ;;
+            *)
+                prompt="${1}"
+                shift 1
+                ;;
+        esac
+    done
+
+    # Wrap the regex in "^...$" if it is not already
+    ! [[ "${yes_pattern}" == "^"* ]] && yes_pattern="^${yes_pattern}"
+    ! [[ "${yes_pattern}" == *"$" ]] && yes_pattern="${yes_pattern}$"
+
+    # Prompt the user for input
+    read -p "${prompt} " user_input
+
+    # Check if the input matches the yes pattern
+    if ! [[ "${user_input}" =~ ${yes_pattern} ]]; then
+        [[ -n "${exit_msg}" ]] && echo "${exit_msg}"
+        if ${do_exit}; then
+            exit 1
+        else
+            return 1
+        fi
+    fi
+}
