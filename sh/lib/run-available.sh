@@ -288,15 +288,20 @@ function run-available() {
         "${runnable_name}" "${options[@]}"
         exit_code=$?
 
+        debug-vars exit_code do_continue do_continue_on_error E_CONTINUE
+
         # Determine if we should continue based on the exit code
         if ${do_continue} || ${do_continue_on_error}; then
             if [[ ${exit_code} -eq ${E_CONTINUE} ]]; then
-                debug "continuing based on exit code: ${exit_code}"
+                debug "continuing based on E_CONTINUE"
                 continue
             elif ${do_continue_on_error} && [[ ${exit_code} -ne 0 ]]; then
-                debug "continuing based on exit code: ${exit_code}"
+                debug "continuing on error exit code: ${exit_code}"
                 echo "continuing to next runnable..."
                 continue
+            else
+                debug "returning exit code: ${exit_code}"
+                return ${exit_code}
             fi
         else
             # If we're not continuing, return the exit code
