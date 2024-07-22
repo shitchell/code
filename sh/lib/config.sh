@@ -1,45 +1,67 @@
-# WIP: should probably borrow the config reading functions from `exwrapper`
+## WIP
+#
+# TODO: should probably borrow the config reading functions from `exwrapper`
 #
 # A library for parsing and reading configuration files.
 #
+############################################
 # Example configuration file:
 ############################################
-# # This is a comment
-# [section]
-# key = value
-# key2 = value2
-# key3 =( value3.1 "other value 3.2" )
-# key4 =(
-#   value4.1
-#   other value 4.2   
-# )
-# key6 = true
-# key7 = 3.14
-# [[sub-section]]
-# key5 = value5
 #
-# [section2]
-# key = value
+#    # This is a comment
+#    [section]
+#    key = value
+#    key2 = value2
+#    key3 =( value3.1 "other value 3.2" )
+#    key4 = (
+#      value4.1
+#      other value 4.2   
+#    )
+#    key6 = true
+#    key7 = 3.14
+#    [[sub-section]]
+#    key5 = value5
+#
+#    [section2]
+#    key = value
+#
 ############################################
-#
 # Example usage:
 ############################################
-# $ source config.sh
-# $ config-use "config.txt"
-# $ config-get section key
-# $ config-get section.sub-section key
-# $ config-set section key "new value"
-# $ config-set section.sub-section key "${new_array[@]}"
-# # Use a per-command configuration file
-# $ config-get section key --config-file "config.txt"
-# # Return a default value if the key is not found
-# $ config-get section key --default "default value"
-# # Return an non-zero exit code if the key is not found
-# $ config-get section key --exit-on-missing
-# # Return a non-zero exit code if the key does not match the expected type
-# $ config-get section key --require bool
-# # Return a default value if the key does not match the expected type
-# $ config-get section key --require bool --default true
+#
+#    #!/usr/bin/env bash
+#
+#    # Load the configuration library
+#    include-source "config.sh"
+#
+#    config-use "config.txt"
+#    key_value=$(config-get section key)
+#    subsection_key_value=$(config-get section.sub-section key)
+#
+#    # Set a new value
+#    config-set section key "new value"
+#    config-set section.sub-section key "${new_array[@]}"
+#
+#    # Use a per-command configuration file
+#    config2_key_value=$(config-get section key --config-file "config2.txt")
+#
+#    # Return a default value if the key is not found
+#    default_key=$(config-get section key --default "default value")
+#
+#    # Echo an error if the key is not found
+#    if ! key_value=$(config-get section key); then
+#        echo "error: could not find section.key" >&2
+#        exit 1
+#    fi
+#
+#    # Return a non-zero exit code if the key does not match the expected type
+#    if ! key_value=$(config-get section key --require bool); then
+#        echo "error: section.key is not a boolean: ${key_value}" >&2
+#        exit 1
+#    fi
+#
+#    # Return a default value if the key does not match the expected type
+#    key_value=$(config-get section key --require bool --default true)
 
 ## colors ######################################################################
 ################################################################################
