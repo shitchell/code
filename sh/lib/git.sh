@@ -850,3 +850,145 @@ function git-remote-tracking-branch() {
 
     [[ -n "${remote_branch}" ]] && echo "${remote_branch}" || return 1
 }
+
+function get-first-commit() {
+    :  'Get the first commit in the current repository
+
+        @stdout
+            The hash of the first commit in the current repository
+    '
+    git rev-list --max-parents=0 HEAD
+}
+
+function ref-exists() {
+    :  'Determine if the specified ref exists in the current repo
+
+        @usage
+            [--remote] [--local] [--tag] [--branch] <ref>
+
+        @arg ref
+            The ref to check
+
+        @optarg --remote
+            Check if the ref exists as a remote ref
+
+        @optarg --local
+            Check if the ref exists as a local ref
+
+        @optarg --tag
+            Check if the ref exists as a tag
+
+        @optarg --branch
+            Check if the ref exists as a branch (default)
+
+        @return 0
+            The ref exists in the current repo
+
+        @return 1
+            The ref does not exist in the current repo
+    '
+    local ref=""
+    local full_ref=""
+    local ref_type=""
+    local is_remote=false
+    local remote=""
+    local repo="."
+    local refs=()
+
+    # Parse the arguments
+    while [[ "${#}" -gt 0 ]]; do
+    case "${1}" in
+        --remote)
+            is_remote=true
+            shift
+            ;;
+        --local)
+            is_remote=false
+            shift
+            ;;
+        --tag)
+            ref_type="tag"
+            shift
+            ;;
+        --branch)
+            ref_type="branch"
+            shift
+            ;;
+        -C | --repo)
+            repo="${2}"
+            shift 2
+            ;;
+        *)
+            ref="${1}"
+            shift
+            ;;
+    esac
+    done
+    remote=$(git -C "${repo}" remote)
+
+    if [[ -z "${ref_type}" ]]; then
+        # If no ref_type is set, look for tags OR branches
+        refs+=("refs/tags/${ref}")
+        if ${is_remote}; then
+            refs+=("refs/remotes/${remote}/${ref}")
+        else
+            refs+=("refs/heads/${ref}")
+        fi
+    elif [[ "${ref_type}" == "tag" ]]; then
+        refs+=("refs/tags/${ref}")
+    elif [[ "${ref_type}" == "branch" ]]; then
+        if ${is_remote}; then
+            refs+=("refs/remotes/${remote}/${ref}")
+        else
+            refs+=("refs/heads/${ref}")
+        fi
+    fi
+
+    # Search for the refs and exit on the first success
+    for ref in "${refs[@]}"; do
+        git -C "${repo}" show-ref --verify --quiet "${ref}" && return 0
+    done
+
+    # If no ref was found, exit with an error
+    return 1
+} >/dev/null 2>&1
+
+function resilient-push() {
+    :  'Push changes to the remote, retrying if necessary
+
+        Try to push changes to the remote. If the push fails, try to rebase and
+        push again. If the rebase fails, try to merge and push again. If the
+        merge fails, log an error and exit.
+
+        @usage
+            [remote]
+
+        @optarg remote
+            The remote to push to. Default: origin
+
+        @return 0
+            The changes were pushed to the remote
+
+        @return 1
+            The changes could not be pushed to the remote
+    '
+    local push_options=( "${@}" )
+    git push "${push_options[@]}" #>/dev/null 2>&1
+    if [ ${?} -ne 0 ]; then
+        # Rebase pull
+        git pull --rebase #>/dev/null 2>&1
+        git push "${push_options[@]}" #>/dev/null 2>&1
+        if [ ${?} -ne 0 ]; then
+            # Merge pull
+            output=$(
+                git pull >/dev/null #2>&1
+                git push "${push_options[@]}" #2>&1
+            )
+            exit_code=${?}
+            if [ ${exit_code} -ne 0 ]; then
+                echo "${output}" >&2
+                return ${exit_code}
+            fi
+        fi
+    fi
+}
