@@ -289,7 +289,8 @@ function __include_source_parse_args() {
     SHOW_LOCATION=0
 
     # parse arguments
-    POSITIONAL_ARGS=()
+    SOURCE_PATH=""
+    SOURCE_ARGS=()
     while [[ ${#} -gt 0 ]]; do
         local arg="$1"
         case "$arg" in
@@ -335,16 +336,18 @@ function __include_source_parse_args() {
                 return 3
                 ;;
             -*)
-                echo "$(functionname): invalid option '$arg'" >&2
+                echo "$(functionname): invalid option '${arg}'" >&2
                 return 1
                 ;;
             *)
-                POSITIONAL_ARGS+=("$arg")
-                shift
+                SOURCE_PATH="${arg}"
+                shift 1
+                # Set any remaining args as arguments to the included script
+                SOURCE_ARGS=("${@}")
+                break
                 ;;
         esac
     done
-    set -- "${POSITIONAL_ARGS[@]}"
 }
 
 
@@ -482,6 +485,8 @@ function source-url() {
 
     local url="${1}"
     local filename="${url##*/}"
+    shift 1
+    local source_args=("${@}")
 
     # treat the filename as a url
     if [ "${SHOW_LOCATION}" -eq 1 ] 2>/dev/null; then
@@ -494,6 +499,9 @@ function source-url() {
     # download the script
     local tmp_dir=$(mktemp -dt "`functionname`.XXXXX")
     local script_file="${tmp_dir}/${filename}"
+
+    # ensure the temporary directory is removed on function return
+    trap "rm -rf ${tmp_dir}" RETURN
 
     curl -s -o "${script_file}" "${url}"
     if [ $? -ne 0 ] && [ "${VERBOSE}" -eq 1 ]; then
@@ -508,12 +516,9 @@ function source-url() {
 
     # source the contents of the downloaded script
     if [ "${DO_SOURCE}" -eq 1 ]; then
-        source "${script_file}"
+        source "${script_file}" "${source_args[@]}"
         local source_exit_code=$?
     fi
-
-    # remove the temporary directory
-    rm -rf "${tmp_dir}"
 
     # return the exit code of the sourced script if available
     return ${source_exit_code:-0}
@@ -530,6 +535,8 @@ function source-lib() {
     #__debug "_call(${*})"
 
     local filename="${1}"
+    shift 1
+    local source_args=("${@}")
 
     # get the path to the file
     local filepath=$(__bash_libs_get_filepath "${filename}")
@@ -556,7 +563,7 @@ function source-lib() {
         if [ "${VERBOSE:-0}" -eq 1 ]; then
             echo "$(functionname): sourcing '${filepath}'"
         fi
-        source "${filepath}"
+        source "${filepath}" "${source_args[@]}"
         return $?
     fi
 }
@@ -564,42 +571,41 @@ function source-lib() {
 # Import a shell script from ${<SHELL>_LIB_PATH:-${PATH}} given a filename
 function include-source() {
     : '
-    Given a library name or url, source it in the current shell.
+    Given a library name or url, source it in the current shell. If arguments
+    are passed after the filename, they are treated as arguments to the
+    included script.
 
     @usage      [-h/--help] [-l/--location] [-L/--no-location] [-n/--dry-run]
                 [-N/--no-dry-run] [-c/--cat] [-C/--no-cat] [-v/--verbose]
-                [-V/--no-verbose] <filename>
+                [-V/--no-verbose] <filename> [<filename args> ...]
     '
     #__debug "_call(${*})"
 
-    local filename="${1}"
     local exit_code=0
 
     __include_source_parse_args "$@"
     case $? in 0);; 3) return 0 ;; *) return $?;; esac
 
-    local filename="${POSITIONAL_ARGS[0]}"
-
-    # ensure the filename is not empty
-    if [ -z "$filename" ]; then
+    # ensure the path is not empty
+    if [ -z "${SOURCE_PATH}" ]; then
         __include_source_help_usage >&2
         exit_code=1
     else
-        # determine whether to treat the filename as a filepath or url
-        if [[ "${filename}" =~ ^https?:// ]]; then
-            # treat the filename as a url
-            #__debug "sourcing url: ${filename}"
-            source-url "${filename}"
+        # determine whether to treat the path as a filepath or url
+        if [[ "${SOURCE_PATH}" =~ ^https?:// ]]; then
+            # treat the path as a url
+            #__debug "sourcing url: ${SOURCE_PATH}"
+            source-url "${SOURCE_PATH}" "${SOURCE_ARGS[@]}"
             exit_code=${?}
         else
-            # treat the filename as a filepath
-            #__debug "sourcing lib: ${filename}"
-            source-lib "${filename}"
+            # treat the path as a filepath
+            #__debug "sourcing lib: ${SOURCE_PATH}"
+            source-lib "${SOURCE_PATH}" "${SOURCE_ARGS[@]}"
             exit_code=${?}
         fi
     fi
 
-    unset POSITIONAL_ARGS SHOW_LOCATION VERBOSE DO_CAT DO_SOURCE
+    unset SOURCE_PATH SOURCE_ARGS SHOW_LOCATION VERBOSE DO_CAT DO_SOURCE
     return ${exit_code}
 }
 
@@ -908,35 +914,61 @@ function compile-sources() {
     return ${exit_code}
 }
 
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    # When sourcing the script, allow some options to be passed in
+    __do_set_lib_dir=false
 
-## Export Functions ############################################################
-################################################################################
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case "${1}" in
+            --set-libdir | --auto)
+                __do_set_lib_dir=true
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
 
-export -f __debug
-export -f get-shell
-export -f functionname
-export -f in-array
-export -f __include_source_help_usage
-export -f __include_source_help_epilogue
-export -f __include_source_help_full
-export -f __include_source_parse_args
-export -f __bash_libs_get_path
-export -f __bash_libs_get_filepath
-export -f __bash_libs_get_location
-export -f source-url
-export -f source-lib
-export -f include-source
-export -f import
-export -f __compile_sources_help_usage
-export -f __compile_sources_help_epilogue
-export -f __compile_sources_help_full
-export -f __compile_sources_parse_args
-export -f __compile_sources_find_include_source_line
-export -f __compile_sources
-export -f compile-sources
+    # Automatically set LIB_DIR to the same directory as the script
+    if ${__do_set_lib_dir}; then
+        __include_path="${BASH_SOURCE[0]}"
+        __lib_dir="${__include_path%/*}"
+        export LIB_DIR="$(realpath "${__lib_dir}")"
+        __debug "set LIB_DIR=${LIB_DIR}" >&2
+        unset __include_path __lib_dir
+    fi
+
+    ## Export Functions ########################################################
+    ############################################################################
+
+    export -f __debug
+    export -f get-shell
+    export -f functionname
+    export -f in-array
+    export -f __include_source_help_usage
+    export -f __include_source_help_epilogue
+    export -f __include_source_help_full
+    export -f __include_source_parse_args
+    export -f __bash_libs_get_path
+    export -f __bash_libs_get_filepath
+    export -f __bash_libs_get_location
+    export -f source-url
+    export -f source-lib
+    export -f include-source
+    export -f import
+    export -f __compile_sources_help_usage
+    export -f __compile_sources_help_epilogue
+    export -f __compile_sources_help_full
+    export -f __compile_sources_parse_args
+    export -f __compile_sources_find_include_source_line
+    export -f __compile_sources
+    export -f compile-sources
 
 
-## Export Variables ############################################################
-################################################################################
+    ## Export Variables ########################################################
+    ############################################################################
 
-export INCLUDE_SOURCE="include-source"
+    export INCLUDE_SOURCE="include-source"
+fi
