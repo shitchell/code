@@ -1,40 +1,95 @@
-LIB_DIR="${LIB_DIR:-$(dirname "${BASH_SOURCE[0]}")}"
+#!/usr/bin/env bash
+: '
+Asset Suite functions
+'
 
-# Load dependencies
-source "${LIB_DIR}/git.sh"
-source "${LIB_DIR}/debug.sh"
-source "${LIB_DIR}/text.sh"
+include-source 'git'
+include-source 'debug'
+include-source 'text'
 
-## Default values
-[[ -z "${FEATURE_PATTERN}" ]] && FEATURE_PATTERN="AS9-[A-Z]{3,5}-[A-Z]{0,5}-[0-9]{0,4}"
-[[ -z "${RELEASE_PATTERN}" ]] && RELEASE_PATTERN="{{feature}} Release"
-[[ -z "${MERGE_PATTERN}" ]] && MERGE_PATTERN="Merged in {{feature}} .*"
-[[ -z "${CHERRY_PICK_PATTERN}" ]] && CHERRY_PICK_PATTERN="Cherry-picking for {{feature}}"
+# ------------------------------------------------------------------------------
+# Setup global variables
+# ------------------------------------------------------------------------------
+# These values will be set, in order of lowest to highest priority, by:
+# - a config file (see next section)
+# - the environment
 
-# Load the above values from this project's config file if present
-## look, in order, for:
-## - an AS_CONFIG environment variable
-## - a config file in {repo}/devops
-## - a config file in the repo root (assuming we are in a repo)
-## - a config file in the current directory
+# ---- Default values ----------------------------------------------------------
+
+DEFAULT_FEATURE_PATTERN="AS9-[A-Z]{3,5}-[A-Z]{0,5}-[0-9]{0,4}"
+DEFAULT_RELEASE_PATTERN="{{feature}} Release"
+DEFAULT_MERGE_PATTERN="Merged in {{feature}} .*"
+DEFAULT_CHERRY_PICK_PATTERN="Cherry-picking for {{feature}}"
+
+# ---- Save environment values -------------------------------------------------
+# Since we will later overwrite the global variable values if/when we load a
+# config file, we need to save their environment values to restore them later
+ENV_FEATURE_PATTERN="${FEATURE_PATTERN}"
+ENV_RELEASE_PATTERN="${RELEASE_PATTERN}"
+ENV_MERGE_PATTERN="${MERGE_PATTERN}"
+ENV_CHERRY_PICK_PATTERN="${CHERRY_PICK_PATTERN}"
+
+# ---- Load config file --------------------------------------------------------
+# The config file name can be set by the $AS_CONFIG_NAME environment variable,
+# defaulting to ".as-config.sh".
+# The config file will be searched, in order of lowest to highest priority, in:
+# - the path specified by $AS_CONFIG
+# - ./$AS_CONFIG_NAME
+# - {repo-root}/$AS_CONFIG_NAME (if in a git repo)
+# - {repo-root}/devops/$AS_CONFIG_NAME
+# - $HOME/$AS_CONFIG_NAME
+AS_CONFIG_NAME="${AS_CONFIG_NAME:-.as-config.sh}"
 if [[ -z "${AS_CONFIG}" ]]; then
-    __AS_CONFIG_VAR="${AS_CONFIG}"
-    __AS_CONFIG_DEVOPS=$(
-        git rev-parse --is-inside-work-tree &>/dev/null &&
-            root=$(git rev-parse --show-toplevel 2>/dev/null) &&
-            echo "${root}/devops/.as-config.sh"
-    )
-    __AS_CONFIG_GIT=$(
-        git rev-parse --is-inside-work-tree &>/dev/null &&
-            root=$(git rev-parse --show-toplevel 2>/dev/null) &&
-            echo "${root}/.as-config.sh"
-    )
-    __AS_CONFIG_FILE="./.as-config.sh"
-    AS_CONFIG="${__AS_CONFIG_VAR:-${__AS_CONFIG_DEVOPS:-${__AS_CONFIG_GIT:-${__AS_CONFIG_FILE}}}}"
+    # If AS_CONFIG isn't set, try to find a config file
+    if [[ -f "./${AS_CONFIG_NAME}" && -r "./${AS_CONFIG_NAME}" ]]; then
+        ## - ./$AS_CONFIG_NAME
+        AS_CONFIG="./${AS_CONFIG_NAME}"
+    elif git rev-parse --is-inside-work-tree &>/dev/null; then
+        # get the repo root
+        __repo_root=$(git rev-parse --show-toplevel)
+
+        if [[
+            -f "${__repo_root}/${AS_CONFIG_NAME}"
+            && -r "${__repo_root}/${AS_CONFIG_NAME}"
+        ]]; then
+            ## - {repo-root}/$AS_CONFIG_NAME
+            AS_CONFIG="${__repo_root}/${AS_CONFIG_NAME}"
+        elif [[
+            -f "${__repo_root}/devops/${AS_CONFIG_NAME}"
+            && -r "${__repo_root}/devops/${AS_CONFIG_NAME}"
+        ]]; then
+            ## - {repo-root}/devops/$AS_CONFIG_NAME
+            AS_CONFIG="${__repo_root}/devops/${AS_CONFIG_NAME}"
+        fi
+    elif [[
+        -f "${HOME}/${AS_CONFIG_NAME}"
+        && -r "${HOME}/${AS_CONFIG_NAME}"
+    ]]; then
+        ## - $HOME/$AS_CONFIG_NAME
+        AS_CONFIG="${HOME}/${AS_CONFIG_NAME}"
+    fi
 fi
 if [[ -f "${AS_CONFIG}" && -r "${AS_CONFIG}" ]]; then
+    ## We will overwrite the environment variables here, which is why we saved
+    ## them off earlier -- so we can put them back, prioritizing environment
+    ## values over config values, but still loading the config values where
+    ## the environment variables are not set.
     source "${AS_CONFIG}"
 fi
+
+# ---- Set the global variables ------------------------------------------------
+# Set from (1) the environment, (2) config, or (3) the default value:
+#   VAR="${ENV_VALUE:-${CONFIG_VALUE}:-${DEFAULT_VALUE}}"
+
+FEATURE_PATTERN="${ENV_FEATURE_PATTERN:-${FEATURE_PATTERN:-${DEFAULT_FEATURE_PATTERN}}}"
+RELEASE_PATTERN="${ENV_RELEASE_PATTERN:-${RELEASE_PATTERN:-${DEFAULT_RELEASE_PATTERN}}}"
+MERGE_PATTERN="${ENV_MERGE_PATTERN:-${MERGE_PATTERN:-${DEFAULT_MERGE_PATTERN}}}"
+CHERRY_PICK_PATTERN="${ENV_CHERRY_PICK_PATTERN:-${CHERRY_PICK_PATTERN:-${DEFAULT_CHERRY_PICK_PATTERN}}}"
+
+
+# ------------------------------------------------------------------------------
+# Functions
+# ------------------------------------------------------------------------------
 
 # @description Generate a feature release commit message
 # @usage generate-release-message <feature-name>
@@ -76,340 +131,6 @@ function generate-merge-message() {
     local merge_message="${MERGE_PATTERN}"
     merge_message="${merge_message//\{\{feature\}\}/${feature_name}}"
     echo "${merge_message}"
-}
-
-# @description Reduce a branch flow file to single lines
-# @usage _normalize_branch_flow <branch-flow-file>
-# @usage echo "${branch_flow}" | _normalize_branch_flow
-function _normalize_branch_flow() {
-    local branch_flow_file="${1:-/dev/stdin}"
-
-    cat "${branch_flow_file}" \
-        | sed -e 's/;/\n/g;s/\]/]\n/g' \
-        | awk '{
-            if ($0 ~ /->/) {
-                # If the line contains a "->", remove space around it and quotes
-                # around the branches
-                source_branch = $0
-                gsub(/\s+->\s+.*/, "", source_branch)
-                gsub(/^\s*/, "", source_branch)
-                gsub(/"/, "", source_branch)
-
-                target_branch = $0
-                gsub(/.*->\s+/, "", target_branch)
-                gsub(/\s+.*$/, "", target_branch)
-                gsub(/"/, "", target_branch)
-
-                eol = $0
-                gsub(/.*->\s+[^ ;]+/, "", eol)
-                gsub(/^\s*/, "", eol)
-                gsub(/\s*$/, "", eol)
-
-                $0 = source_branch " -> " target_branch " " eol
-            } else {
-                # Just remove leading/trailing whitespace
-                gsub(/^\s*/, "", $0)
-                gsub(/\s*$/, "", $0)
-            }
-            if ($0 == "") {
-                next
-            } else if ($0 ~ /\[/ && $0 !~ /]/) {
-                in_multiline = 1
-                printf "%s", $0
-            } else if ($0 ~ /]/ && in_multiline) {
-                in_multiline = 0
-                print $0
-            } else if (in_multiline) {
-                printf "%s", $0
-            } else {
-                print $0
-            }
-        }'
-}
-
-# @description Convert a branch flow file to a digraph file
-# @usage branch-flow-to-digraph <branch-flow-file>
-function branch-flow-to-digraph() {
-    local branch_flow_file="${1}"
-    local flow_content
-    local line_regex="([^ ]+) -> ([^ ]+)( +)?(.*)?"
-
-    if [[ "${branch_flow_file}" == "-" ]]; then
-        branch_flow_file="/dev/stdin"
-    fi
-
-    if [[ -z "${branch_flow_file}" ]]; then
-        echo "usage: branch-flow-to-digraph <branch-flow-file>"
-        return 1
-    fi
-
-    flow_content=$(
-        _normalize_branch_flow "${branch_flow_file}" \
-            | sed -E 's/^([[:space:]]*)\*([[:space:]]+)/\1node\2/'
-    )
-
-    echo "digraph G {"
-    echo "  node [shape=box, fontname=Arial];"
-    while read -r line; do
-        # If the line contains a "->", then it's a branch flow line, so
-        # extract the source and target branches and quote them
-        if [[ "${line}" =~ ${line_regex} ]]; then
-            source_branch="${BASH_REMATCH[1]}"
-            target_branch="${BASH_REMATCH[2]}"
-            eol="${BASH_REMATCH[4]}"
-            printf '  "%s" -> "%s"' "${source_branch}" "${target_branch}"
-            [[ -n "${eol}" ]] && printf ' %s' "${eol}"
-            echo
-        else
-            # Otherwise, just print the line
-            echo "  ${line}"
-        fi
-    done <<< "${flow_content}"
-    echo "}"
-}
-
-# @description Convert a branch flow file to an image (requires graphviz)
-# @usage branch-flow-to-image <branch-flow-file> <image-file>
-function branch-flow-to-image() {
-    local branch_flow_file="${1}"
-    local image_file="${2:-/dev/stdout}"
-    local extension digraph
-
-    if [[ -z "${branch_flow_file}" || -z "${image_file}" ]]; then
-        echo "usage: branch-flow-to-image <branch-flow-file> <image-file>"
-        return 1
-    fi
-
-    extension="${image_file##*.}"
-    [[ "${extension}" == "${image_file}" ]] && extension="svg"
-    digraph=$(
-        branch-flow-to-digraph "${branch_flow_file}" \
-            | sed -E 's/cherrypick="?true"?/cherrypick="true", style="dashed"/g' \
-            | grep -Fv ' -> "*"'
-    )
-
-    echo "${branch_flow_file} -> ${image_file}"
-    echo "${digraph}" | dot -T"${extension}" -o "${image_file}"
-}
-
-# @description Get the parent branches for a given branch
-# @usage get-parent-branches [-f <flow-file>] <branch-name>
-function get-parent-branches() {
-    local branch_name
-    local flow_file="./branches.gv"
-
-    # Parse options
-    while [[ $# -gt 0 ]]; do
-        case "${1}" in
-            -f | --flow-file)
-                flow_file="${2}"
-                shift 2
-                ;;
-            -*)
-                echo "error: unknown option: ${1}" >&2
-                return 1
-                ;;
-            *)
-                [[ -z "${branch_name}" ]] && branch_name="${1}"
-                shift
-                ;;
-        esac
-    done
-
-    debug "get-parent-branches: branch_name=${branch_name} flow_file=${flow_file}"
-
-    if [[ -z "${branch_name}" ]]; then
-        echo "usage: get-parent-branch <branch-name> [-f <flow-file>]"
-        return 1
-    fi
-
-    local branch_flow=$(cat "${flow_file}")
-    local parent_branch=$(
-        echo "${branch_flow}" \
-            | grep -E "[ \t]*->[ \t]*${branch_name}" \
-            | sed -E 's/[ \t]*->[ \t]*.*//'
-    )
-    echo "${parent_branch}"
-}
-
-# @description Get branch settings from a branch flow file
-# @usage get-branch-option [-eESiVpP] [-s <source-branch>] [-t <target-branch>] [-o <option>] [-f <flow-file>]
-function get-branch-option() {
-    local line_regex="([^ ]+) -> ([^ ]+)( +)?(.*)?"
-
-    # Default values
-    local source_branch_name=""
-    local target_branch_name=""
-    local do_value_only=false
-    local do_pretty=false
-    local do_show_all_matches=false # don't uniquify results
-    local option_name=""
-    local flow_file="./branches.gv"
-
-    # Parse options
-    do_value_only_specified=false
-    while [[ $# -gt 0 ]]; do
-        case "${1}" in
-            -s | --source-branch)
-                source_branch_name="${2}"
-                shift 2
-                ;;
-            -t | --target-branch)
-                target_branch_name="${2}"
-                shift 2
-                ;;
-            -o | --option)
-                option_name="${2}"
-                shift 2
-                ;;
-            -f | --flow-file)
-                flow_file="${2}"
-                shift 2
-                ;;
-            -S | --strict)
-                do_strict=true
-                shift
-                ;;
-            --no-strict)
-                do_strict=false
-                shift
-                ;;
-            -p | --pretty)
-                do_pretty=true
-                shift
-                ;;
-            -P | --no-pretty)
-                do_pretty=false
-                shift
-                ;;
-            -V | --value-only)
-                do_value_only=true
-                do_strict=true
-                do_value_only_specified=true
-                shift
-                ;;
-            -k | --show-keys)
-                do_value_only=false
-                do_value_only_specified=true
-                shift
-                ;;
-            *)
-                echo "usage: get-branch-option [-s <source-branch>] [-t <target-branch>] [-o <option>] [-f <flow-file>]"
-                return 1
-                ;;
-        esac
-    done
-
-    debug-vars source_branch_name target_branch_name option_name flow_file \
-        do_regex do_strict do_pretty do_value_only do_value_only_specified
-
-    if ${do_value_only} && ! ${do_strict}; then
-        echo "error: --value-only must be used with --strict"
-    fi
-
-    if [[ -n "${option_name}" ]] && ! ${do_value_only_specified}; then
-        do_value_only=true
-    fi
-
-    if [[ "${flow_file}" == "-" ]]; then
-        flow_file="/dev/stdin"
-    fi
-
-    # Read the branch flow file, attempting to account for multiline options
-    local flow_content=$(_normalize_branch_flow "${flow_file}")
-
-    local line_source_branch line_target_branch line_options
-    readarray -t matching_options < <(
-        while read -r line; do
-            debug "processing line: ${line}"
-            if [[ "${line}" =~ ${line_regex} ]]; then
-                line_source_branch="${BASH_REMATCH[1]}"
-                line_target_branch="${BASH_REMATCH[2]}"
-                line_options="${BASH_REMATCH[4]}"
-            else
-                debug "line does not match regex, skipping"
-                continue
-            fi
-
-            # Use glob matching
-            if [[ ${source_branch_name} == ${line_source_branch} ]]; then
-                debug "source branch matches"
-            else
-                debug "source branch does not match"
-                continue
-            fi
-
-            if [[ ${target_branch_name} == ${line_target_branch} ]]; then
-                debug "target branch matches"
-            else
-                debug "target branch does not match"
-                continue
-            fi
-
-            # Parse the options, trimming leading/trailing whitespace and brackets,
-            # and replacing commas with newlines
-            line_options=$(
-                echo "${line_options}" \
-                    | sed -E 's/^ *\[//;s/\] *$//' \
-                    | sed -Ee :1 -e 's/^(([^",]|"[^"]*")*),/\1\n/;t1' \
-                    | sed 's/^ *//;s/ *$//'
-            )
-            debug "all options for source/target branch: ${line_options}"
-
-            if [[ -n "${option_name}" ]]; then
-                # Filter only the options matching the given option name
-                line_options=$(
-                    awk -F '=' -v option="${option_name}" '
-                        $1 == option {
-                            print $0
-                        }
-                    ' <<< "${line_options}")
-                debug "filtered options for source/target branch: ${line_options}"
-            fi
-            [[ -n "${line_options}" ]] && echo "${line_options}"
-        done <<< "${flow_content}" \
-            | awk -F '=' '
-                # For each option, store only the last value
-                {
-                    options[$1] = $0
-                }
-                END {
-                    for (option in options) {
-                        print options[option]
-                    }
-                }
-            '
-    )
-    debug "parsed matching options: ${matching_options[@]}"
-
-    # If value-only mode is enabled, only the value should be returned
-    if ${do_value_only}; then
-        debug "do_value_only=${do_value_only}, stripping option names"
-        readarray -t matching_options < <(
-            printf '%s\n' "${matching_options[@]}" | sed -E 's/^[^=]+=//'
-        )
-        debug "updated matching options: ${matching_options[@]}"
-    fi
-
-    local opt val
-    for matching_option in "${matching_options[@]}"; do
-        debug "parsing option: ${matching_option}"
-        val="${matching_option#*=}"
-        opt="${matching_option%%=*}"
-        if ${do_pretty}; then
-            debug "prettifying value"
-            val="${val#\"}"
-            val="${val%\"}"
-            # Replace escaped characters
-            val=$(printf '%b' "${val}" | sed 's/\\"/"/g')
-        fi
-        if ${do_value_only}; then
-            echo "${val}"
-        else
-            echo "${opt}=${val}"
-        fi
-    done
-
 }
 
 # @description Get the timestamp, hash, and number of committed files for the last cherry-pick or release for a feature into a branch
@@ -940,6 +661,21 @@ function as-config() {
 
     # Print the results
     echo "${return_str}"
+}
+
+# @description Get the server.mode
+function as-server.mode() {
+    as-config -i env.properties -K -F server.mode
+}
+
+# @description Is the server in development mode?
+function as-is-development() {
+    [[ "$(as-server.mode)" == "development" ]]
+}
+
+# @description Is the server in production mode?
+function as-is-production() {
+    [[ "$(as-server.mode)" == "production" ]]
 }
 
 # @description Run a command as the Asset Suite user
