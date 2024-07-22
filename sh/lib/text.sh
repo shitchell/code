@@ -52,14 +52,49 @@ function is-number() {
     is-int "${1}" || is-float "${1}"
 }
 
-# Remove leading/trailing whitespace from the specified string
-function trim() {
+function trim-left() {
+    :  'Remove leading whitespace characters [:space:] from a string
+
+        @usage
+            <string>
+
+        @stdout
+            The string with leading whitespace characters removed
+    '
     local string="${1}"
     [[ -z "${string}" ]] && read -t 0 && read -r string
     [[ -z "${string}" ]] && return 1
     string="${string#"${string%%[![:space:]]*}"}" # remove leading whitespace characters
+    echo "${string}"
+}
+
+function trim-right() {
+    :  'Remove trailing whitespace characters [:space:] from a string
+
+        @usage
+            <string>
+
+        @stdout
+            The string with trailing whitespace characters removed
+    '
+    local string="${1}"
+    [[ -z "${string}" ]] && read -t 0 && read -r string
+    [[ -z "${string}" ]] && return 1
     string="${string%"${string##*[![:space:]]}"}" # remove trailing whitespace characters
     echo "${string}"
+}
+
+# Remove leading/trailing whitespace from the specified string
+function trim() {
+    :  'Remove leading & trailing whitespace characters [:space:] from a string
+
+        @usage
+            <string>
+
+        @stdout
+            The string with leading and trailing whitespace characters removed
+    '
+    trim-left "$(trim-right "${1}")"
 }
 
 # @description Join the specified strings with the specified delimiter
@@ -337,10 +372,43 @@ function preview-output() {
 
 # @description Remove ANSI escape codes from the specified string
 function rmansi() {
+    :  'Remove ANSI escape codes from a string
+
+        @usage
+            <string>
+
+        @stdout
+            The string with ANSI escape codes removed
+    '
     sed $'s,\x1B\[[0-9;]*[a-zA-Z],,g'
 }
 
+function rmblank() {
+    :  'Remove blank lines /^$/ from a string
+
+        @usage
+            <string>
+
+        @stdout
+            The string with blank lines removed
+    '
+    grep -v '^$'
+}
+
+function rmempty() {
+    :  'Remove empty lines /^\s*$/ from a string
+
+        @usage
+            <string>
+
+        @stdout
+            The string with empty lines removed
+    '
+    grep -v '^[[:space:]]*$'
+}
+
 function awk-csv() {
+    :  'Awk, but with CSV parsing'
     awk -v FPAT="([^,]*)|(\"[^\"]*\")"
 }
 
