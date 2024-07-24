@@ -739,6 +739,13 @@ else
     declare -r _IS_PIPED=true
 fi
 
+# Do we have stdin?
+if [[ -t 0 ]]; then
+    declare -r _HAS_STDIN=false
+else
+    declare -r _HAS_STDIN=true
+fi
+
 # Are we in a script?
 ## get the calling process arguments
 __PARENT_ARGS=$(ps -o args= "${PPID}")
@@ -749,7 +756,7 @@ else
     declare -r _IN_SCRIPT=false
 fi
 
-debug-vars _IS_PIPED _IN_SCRIPT
+debug-vars _IS_PIPED _HAS_STDIN _IN_SCRIPT
 
 
 ## Behavior ####################################################################
@@ -866,40 +873,67 @@ POST_EXIT_CODE=0
 RUN_COMMAND=true
 
 
+## Collect plugins #############################################################
+
+
+PRE_PROCESS_PLUGINS=()
+for path in "${EXW_PATHS[@]}"; do
+    pre_process_dir="${path}/${WRAPPED_COMMAND}/pre-process.d"
+    if [[ -d "${pre_process_dir}" ]]; then
+        debug "loading pre-process scripts in '${pre_process_dir}'"
+        shopt -s nullglob
+        for filepath in "${pre_process_dir}"/*; do
+            if [[ -x "${filepath}" ]]; then
+                PRE_PROCESS_PLUGINS+=( "${filepath}" )
+            fi
+        done
+    fi
+done
+readonly PRE_PROCESS_PLUGINS
+
+POST_PROCESS_PLUGINS=()
+for path in "${EXW_PATHS[@]}"; do
+    post_process_dir="${path}/${WRAPPED_COMMAND}/post-process.d"
+    if [[ -d "${post_process_dir}" ]]; then
+        debug "loading post-process scripts in '${post_process_dir}'"
+        for filepath in "${post_process_dir}"/*; do
+            if [[ -x "${filepath}" ]]; then
+                POST_PROCESS_PLUGINS+=( "${filepath}" )
+            fi
+        done
+    fi
+done
+readonly POST_PROCESS_PLUGINS
+
+debug-vars PRE_PROCESS_PLUGINS POST_PROCESS_PLUGINS
+
+shopt -u nullglob
+
+
 ## Pre-process #################################################################
 
-# Do stuff before running the git command
+# Do stuff before running the wrapped command
 debug "begin pre-processing"
-shopt -s nullglob  # don't fail if glob patterns don't match anything
-for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
-    if ! [[ -d "${EXW_PATH_PART}/${WRAPPED_COMMAND}" ]]; then
-        debug "skipping non-existent directory: ${EXW_PATH_PART}/${WRAPPED_COMMAND}"
-        continue
-    fi
+for filepath in "${PRE_PROCESS_PLUGINS[@]}"; do
+    run-plugin \
+        --show-plugin-name="${SHOW_SCRIPT_NAME}" \
+        --stdout-label="" \
+        --stderr-label="" \
+        "${filepath}"
+    PRE_EXIT_CODE=${?}
 
-    pre_process_dir="${EXW_PATH_PART}/${WRAPPED_COMMAND}/pre-process.d"
-    for filepath in "${pre_process_dir}"/*; do
-        run-plugin \
-            --show-plugin-name="${SHOW_SCRIPT_NAME}" \
-            --stdout-label="" \
-            --stderr-label="" \
-            "${filepath}"
-        PRE_EXIT_CODE=${?}
-
-        if [[ ${PRE_EXIT_CODE} -ne 0 ]]; then
-            echo "pre-process script '$(dirname "${filepath}")' failed with exit code ${PRE_EXIT_CODE}" >&2
-            if ${EXIT_ON_FAILURE}; then
-                exit ${PRE_EXIT_CODE}
-            fi
+    if [[ ${PRE_EXIT_CODE} -ne 0 ]]; then
+        echo "pre-process script '$(dirname "${filepath}")' failed with exit code ${PRE_EXIT_CODE}" >&2
+        if ${EXIT_ON_FAILURE}; then
+            exit ${PRE_EXIT_CODE}
         fi
-    done
+    fi
 done
-shopt -u nullglob
 
 
 ## Run the command #############################################################
 
-# Run the git command if requested
+# Run the wrapped command if requested
 if [[ "${RUN_COMMAND}" == "true" ]]; then
     run-cmd
     COMMAND_EXIT_CODE=${?}
@@ -915,27 +949,25 @@ fi
 
 ## Post-process ################################################################
 
-# Do other stuff after running the git command
+# Do other stuff after running the wrapped command
 debug "begin post-processing"
-shopt -s nullglob  # don't fail if glob patterns don't match anything
-for EXW_PATH_PART in "${EXW_PATHS[@]}"; do
-    pre_process_dir="${EXW_PATH_PART}/${WRAPPED_COMMAND}/post-process.d"
-    for filepath in "${pre_process_dir}"/*; do
-        run-plugin \
-            --show-plugin-name="${SHOW_SCRIPT_NAME}" \
-            --stdout-label="" \
-            --stderr-label="" \
-            "${filepath}"
-        POST_EXIT_CODE=${?}
+for filepath in "${pre_process_dir}"/*; do
+    run-plugin \
+        --show-plugin-name="${SHOW_SCRIPT_NAME}" \
+        --stdout-label="" \
+        --stderr-label="" \
+        "${filepath}"
+    POST_EXIT_CODE=${?}
 
-        if [[ ${POST_EXIT_CODE} -ne 0 ]]; then
-            echo "post-process script '$(dirname "${filepath}")' failed with exit code ${POST_EXIT_CODE}" >&2
-            if ${EXIT_ON_FAILURE}; then
-                exit ${POST_EXIT_CODE}
-            fi
+    if [[ ${POST_EXIT_CODE} -ne 0 ]]; then
+        echo "post-process script '$(dirname "${filepath}")' failed with exit code ${POST_EXIT_CODE}" >&2
+        if ${EXIT_ON_FAILURE}; then
+            exit ${POST_EXIT_CODE}
         fi
-    done
+    fi
 done
-shopt -u nullglob
+
+
+## Fin #########################################################################
 
 exit ${COMMAND_EXIT_CODE}
