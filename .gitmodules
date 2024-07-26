@@ -1,0 +1,3 @@
+[submodule "sh/lib"]
+	path = sh/lib
+	url = ../bash-libs.git
