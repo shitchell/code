@@ -12,12 +12,16 @@ characters optionally highlighted.
 #   characters written in the text
 
 import re as _re
+from typing import IO as _IO
 
 
-def bytestr(text: str) -> str:
+def bytestr(text: str | bytes, encoding: str = "utf-8") -> str:
     # Convert the text to byte format to show all non-standard character codes
     #   Form feed's (\f) a cool char\n => $'Form feed\'s (\x0c) a cool char\n'
-    text_bytes: bytes = text.encode("utf-8", "surrogatepass")
+    if isinstance(text, str):
+        text_bytes: bytes = text.encode(encoding, "surrogatepass")
+    else:
+        text_bytes = text
     # Convert back to a string to keep the char formatting and remove `b'...'`
     #   $'Form feed\'s (\x0c) a cool char\n' => Form feed\s (\x0c) a cool char\n
     text = str(text_bytes)[2:-1]
@@ -115,40 +119,60 @@ if __name__ == "__main__":
         dest="show_names",
         help="don't show file names",
     )
+    parser.add_argument(
+        "-b",
+        "--bytes",
+        action="store_true",
+        dest="bytes",
+        help="Process the text as a bytes stream instead of a string",
+    )
+    parser.add_argument(
+        "-B",
+        "--no-bytes",
+        action="store_false",
+        dest="bytes",
+        help="Process the text as a string instead of a bytes stream",
+    )
+    parser.add_argument(
+        "-e",
+        "--encoding",
+        type=str,
+        default="utf-8",
+        help="The encoding to use when reading the file",
+    )
     # Add epilog to show the usage message when the user requests help
     parser.epilog = "specifying '-' for a filepath will read from stdin"
     args: Namespace = parser.parse_args()
 
-    text: str
-    # Determine if stdin is being piped or a file is being passed
-    if sys.stdin.isatty():
-        # Loop over each operand and read the text those files
-        for path in args.filepaths:
-            if args.show_names:
-                path_display_name: str = "<stdin>" if path == Path("-") else path.name
-                print(f"--- {path_display_name} ---")
-            if path != Path("-"):
-                if not path.is_file():
-                    print("Error: '{}' does not exist".format(path), file=sys.stderr)
-                    continue
-                # Check if the file is readable
-                if not os.access(path, os.R_OK):
-                    print("Error: '{}' is not readable".format(path), file=sys.stderr)
-                    continue
-            # Read the text from the file
-            if path == Path("-"):
-                text = sys.stdin.read()
-            else:
-                with open(path, "r") as f:
-                    text = f.read()
-    else:
-        # Read from stdin
-        text = sys.stdin.read()
+    # If there are no filepaths and stdin is being piped, add stdin to the filepaths
+    if not sys.stdin.isatty() and Path("-") not in args.filepaths:
+        args.filepaths.append(Path("-"))
 
-    # Convert the text to byte format to show all non-standard character codes
-    text = bytestr(text)
-    # Optionally highlight escape characters
-    if args.video:
-        text = highlight_escape_chars(text)
-    # Finally, print the text
-    print(text, end="")
+    # Process each path
+    for path in args.filepaths:
+        file: _IO
+        if args.show_names:
+            path_display_name: str = "<stdin>" if path == Path("-") else path.name
+            print(f"---- {path_display_name} ----")
+        if path != Path("-"):
+            if not path.is_file():
+                print("error: '{}' does not exist".format(path), file=sys.stderr)
+                continue
+            # Check if the file is readable
+            if not os.access(path, os.R_OK):
+                print("error: '{}' is not readable".format(path), file=sys.stderr)
+                continue
+        # Read the text from the file
+        if path == Path("-"):
+            file = sys.stdin.buffer if args.bytes else sys.stdin
+        else:
+            file = open(path, "rb" if args.bytes else "r")
+        # Process each line of the file
+        for line in file:
+            # Convert the line to a bytestr to show all non-standard character codes
+            text = bytestr(line, args.encoding)
+            # Optionally highlight escape characters
+            if args.video:
+                text = highlight_escape_chars(text)
+            # Finally, print the text
+            print(text, end="")
