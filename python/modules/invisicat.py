@@ -14,18 +14,46 @@ characters optionally highlighted.
 import re as _re
 
 
-def convert_to_bytes_str(text: str) -> str:
+def bytestr(text: str) -> str:
     # Convert the text to byte format to show all non-standard character codes
+    #   Form feed's (\f) a cool char\n => $'Form feed\'s (\x0c) a cool char\n'
     text_bytes: bytes = text.encode("utf-8", "surrogatepass")
     # Convert back to a string to keep the char formatting and remove `b'...'`
+    #   $'Form feed\'s (\x0c) a cool char\n' => Form feed\s (\x0c) a cool char\n
     text = str(text_bytes)[2:-1]
     # Add a newline after each '\n' for easier reading
+    #   Form feed\s (\x0c) a cool char\n => Form feed\s (\x0c) a cool char\\n\n
     text = text.replace("\\n", "\\n\n")
     # Replace escaped single quotes with a single quote
     text = text.replace("\\'", "'")
     # Replace escaped backslashes with a single backslash
-    text = text.replace("\\\\", "\\")
+    # text = text.replace("\\\\", "\\")
     return text
+
+
+def ansi_escape_match(match: _re.Match) -> str:
+    """
+    Given a match object with the groups (backslashes, escape characters), return a
+    string with the ANSI reverse video escape sequence added to the escape characters
+    if the number of backslashes is odd. Else, return the original characters (the
+    groups concatenated).
+    """
+    backslashes: str = match.group(1)
+    escape_chars: str = match.group(2)
+    do_escape: bool = False
+    # print(f"{backslashes=!r}, {escape_chars=!r}")
+    # We want an odd number of backslashes, but since the escape_chars will include one
+    # backslash, we need an even number of backslashes in the `backslashes` group to
+    # total an odd number of overall backslashes.
+    if len(backslashes) % 2 == 0:
+        do_escape = True
+
+    # The backslashes will need to be condensed for proper display
+    backslashes = backslashes.replace("\\\\", "\\")
+
+    if do_escape:
+        return backslashes + "\x1b[7m" + escape_chars + "\x1b[0m"
+    return backslashes + escape_chars
 
 
 def highlight_escape_chars(text: str) -> str:
@@ -36,18 +64,17 @@ def highlight_escape_chars(text: str) -> str:
     # ANSI escape regex adapted from:
     # https://stackoverflow.com/a/14693789/794241
     escape_patterns: list[str] = [
-        # r"(?<!\\)\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]", # ANSI escape characters
-        # r"(?<!\\)\\x(?:(?!1b))[0-9a-zA-Z]{2}", # Hexadecimal escape characters (except \x1b)
-        # r"(?<!\\)\\[nrtbfv0]", # Whitespace
         r"\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]",  # ANSI escape characters
         r"\\x(?:(?!1b))[0-9a-zA-Z]{2}",  # Hexadecimal escape characters (except \x1b)
         r"\\[nrtbfv0]",  # Whitespace
     ]
     # Search for the escape characters and add the ANSI reverse video escape sequence
     for pattern in escape_patterns:
-        text = _re.sub(
-            pattern, lambda match: "\x1b[7m" + match.group(0) + "\x1b[0m", text
-        )
+        # Prepend each pattern to capture any backslashes before the escape character.
+        # Our replacement function will then count the number of backslashes and only
+        # add the ANSI escape sequence if the number of backslashes is odd.
+        pattern = r"(\\*)(" + pattern + ")"
+        text = _re.sub(pattern, ansi_escape_match, text)
     return text
 
 
@@ -119,7 +146,7 @@ if __name__ == "__main__":
         text = sys.stdin.read()
 
     # Convert the text to byte format to show all non-standard character codes
-    text = convert_to_bytes_str(text)
+    text = bytestr(text)
     # Optionally highlight escape characters
     if args.video:
         text = highlight_escape_chars(text)
