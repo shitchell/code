@@ -33,7 +33,7 @@ REGEX_WHITESPACE: _re.Pattern = _re.compile(r"\\[nrtbfv0]")
 def bytestr(text: str | bytes, encoding: str = "utf-8") -> str:
     """
     Given some text, return a string with all non-standard character codes shown
-    escaped in byte format. This is useful for showing invisible characters in text.
+    escaped in bytes format. This is useful for showing invisible characters in text.
 
     The encoding will be ignored if supplied text is a bytes object.
 
@@ -96,7 +96,7 @@ def extract(
     ansi_sequences: bool = True,
     regexes: list[str] | None = None,
 ) -> list[_re.Match]:
-    """
+    r"""
     Extracts escape characters from the text. Checks for:
     - Whitespace escape characters: \n, \r, \t, \b, \f, \v, \0
     - Hexidecimal escape characters: \x00 - \xff
