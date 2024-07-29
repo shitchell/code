@@ -277,7 +277,7 @@ def _main():
         "-i",
         "--highlight",
         action="store_true",
-        default=True,
+        default=False,
         dest="highlight",
         help="highlight invisible characters",
     )
