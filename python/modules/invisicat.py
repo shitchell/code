@@ -16,22 +16,29 @@ from typing import IO as _IO
 
 
 def bytestr(text: str | bytes, encoding: str = "utf-8") -> str:
-    # Convert the text to byte format to show all non-standard character codes
-    #   Form feed's (\f) a cool char\n => $'Form feed\'s (\x0c) a cool char\n'
+    """
+    Given some text, return a string with all non-standard character codes shown
+    escaped in byte format. This is useful for showing invisible characters in text.
+
+    If the text is already in byte format, the encoding will be ignored and the text
+    will be converted to a string with all non-standard character codes shown escaped
+    """
+    # Convert the text to bytes using the specified encoding
+    #   Form feed's (\f) a cool char\n => b"Form feed's (\x0c) a cool char\n"
     if isinstance(text, str):
         text_bytes: bytes = text.encode(encoding, "surrogatepass")
     else:
         text_bytes = text
-    # Convert back to a string to keep the char formatting and remove `b'...'`
-    #   $'Form feed\'s (\x0c) a cool char\n' => Form feed\s (\x0c) a cool char\n
+    # Convert the bytes to its string representation
+    #   b"Form feed's (\x0c) a cool char\n" => 'b"Form feed\'s (\\x0c) a cool char\\n"'
+    text = str(text_bytes)
+    # Remove the 'b' prefix and quotes
+    #   'b"Form feed\'s (\\x0c) a cool char\\n"' => Form feed's (\\x0c) a cool char\\n
     text = str(text_bytes)[2:-1]
-    # Add a newline after each '\n' for easier reading
-    #   Form feed\s (\x0c) a cool char\n => Form feed\s (\x0c) a cool char\\n\n
+    # Add a newline after each '\\n' for easier reading
+    #   Form feed's (\\x0c) a cool char\\n => Form feed's (\\x0c) a cool char\\n\n
     text = text.replace("\\n", "\\n\n")
-    # Replace escaped single quotes with a single quote
-    text = text.replace("\\'", "'")
-    # Replace escaped backslashes with a single backslash
-    # text = text.replace("\\\\", "\\")
+
     return text
 
 
@@ -60,7 +67,7 @@ def ansi_escape_match(match: _re.Match) -> str:
     return backslashes + escape_chars
 
 
-def highlight_escape_chars(text: str) -> str:
+def highlight_escape_chars(text: str, ansi: bool = True) -> str:
     """
     Adds the ANSI reverse video escape sequence to highlight the escape characters
     """
@@ -68,10 +75,20 @@ def highlight_escape_chars(text: str) -> str:
     # ANSI escape regex adapted from:
     # https://stackoverflow.com/a/14693789/794241
     escape_patterns: list[str] = [
-        r"\\x1b[@-Z\\-_]|\\x1b\[[0-?]*[ -/]*[@-~]",  # ANSI escape characters
-        r"\\x(?:(?!1b))[0-9a-zA-Z]{2}",  # Hexadecimal escape characters (except \x1b)
         r"\\[nrtbfv0]",  # Whitespace
     ]
+    if ansi:
+        escape_patterns.extend(
+            [
+                r"\\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])?",  # ANSI escape characters
+                r"\\x(?:(?!1b))[0-9a-zA-Z]{2}",  # Hex escape characters (except \x1b)
+            ]
+        )
+    else:
+        escape_patterns.append(
+            r"\\x[0-9a-zA-Z]{2}",  # Hex escape characters
+        )
+
     # Search for the escape characters and add the ANSI reverse video escape sequence
     for pattern in escape_patterns:
         # Prepend each pattern to capture any backslashes before the escape character.
@@ -94,6 +111,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="View invisible characters in text")
     parser.add_argument(
         "filepaths", nargs="*", type=Path, help="files to read text from. - for stdin"
+    )
+    parser.add_argument(
+        "-a",
+        "--ansi",
+        action="store_true",
+        default=True,
+        dest="ansi",
+        help="highlight ANSI escape characters",
+    )
+    parser.add_argument(
+        "-A",
+        "--no-ansi",
+        action="store_false",
+        dest="ansi",
+        help="don't highlight ANSI escape characters",
     )
     parser.add_argument(
         "-v",
@@ -173,6 +205,6 @@ if __name__ == "__main__":
             text = bytestr(line, args.encoding)
             # Optionally highlight escape characters
             if args.video:
-                text = highlight_escape_chars(text)
+                text = highlight_escape_chars(text, ansi=args.ansi)
             # Finally, print the text
             print(text, end="")
