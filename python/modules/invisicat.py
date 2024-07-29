@@ -180,31 +180,38 @@ if __name__ == "__main__":
     if not sys.stdin.isatty() and Path("-") not in args.filepaths:
         args.filepaths.append(Path("-"))
 
-    # Process each path
-    for path in args.filepaths:
-        file: _IO
-        if args.show_names:
-            path_display_name: str = "<stdin>" if path == Path("-") else path.name
-            print(f"---- {path_display_name} ----")
-        if path != Path("-"):
-            if not path.is_file():
-                print("error: '{}' does not exist".format(path), file=sys.stderr)
-                continue
-            # Check if the file is readable
-            if not os.access(path, os.R_OK):
-                print("error: '{}' is not readable".format(path), file=sys.stderr)
-                continue
-        # Read the text from the file
-        if path == Path("-"):
-            file = sys.stdin.buffer if args.bytes else sys.stdin
-        else:
-            file = open(path, "rb" if args.bytes else "r")
-        # Process each line of the file
-        for line in file:
-            # Convert the line to a bytestr to show all non-standard character codes
-            text = bytestr(line, args.encoding)
-            # Optionally highlight escape characters
-            if args.video:
-                text = highlight_escape_chars(text, ansi=args.ansi)
-            # Finally, print the text
-            print(text, end="")
+    # Set up a function for processing all the filepaths so that we can catch ^C
+    def process_all():
+        # Process each path
+        for path in args.filepaths:
+            file: _IO
+            if args.show_names:
+                path_display_name: str = "<stdin>" if path == Path("-") else path.name
+                print(f"---- {path_display_name} ----")
+            if path != Path("-"):
+                if not path.is_file():
+                    print("error: '{}' does not exist".format(path), file=sys.stderr)
+                    continue
+                # Check if the file is readable
+                if not os.access(path, os.R_OK):
+                    print("error: '{}' is not readable".format(path), file=sys.stderr)
+                    continue
+            # Read the text from the file
+            if path == Path("-"):
+                file = sys.stdin.buffer if args.bytes else sys.stdin
+            else:
+                file = open(path, "rb" if args.bytes else "r")
+            # Process each line of the file
+            for line in file:
+                # Convert the line to a bytestr to show all non-standard character codes
+                text = bytestr(line, args.encoding)
+                # Optionally highlight escape characters
+                if args.video:
+                    text = highlight_escape_chars(text, ansi=args.ansi)
+                # Finally, print the text
+                print(text, end="")
+
+    try:
+        process_all()
+    except KeyboardInterrupt:
+        sys.exit(0)
