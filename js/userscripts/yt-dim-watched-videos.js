@@ -11,8 +11,8 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @license      WTFPL
-// @downloadURL https://update.greasyfork.org/scripts/502576/Dim%20Watched%20YouTube%20Videos.user.js
-// @updateURL https://update.greasyfork.org/scripts/502576/Dim%20Watched%20YouTube%20Videos.meta.js
+// @downloadURL  https://update.greasyfork.org/scripts/502576/Dim%20Watched%20YouTube%20Videos.user.js
+// @updateURL    https://update.greasyfork.org/scripts/502576/Dim%20Watched%20YouTube%20Videos.meta.js
 // ==/UserScript==
 
 /** Dim Watched YouTube Videos *************************************************
@@ -175,12 +175,18 @@ function getConfig(key) {
  * This function will log a message to the console if debug mode is enabled in
  * the configuration. If debug mode is disabled, the message will not be logged.
  *
- * @param {String} mode  The console method to use (e.g. "log", "warn", "error")
- * @param {any[]} args   The arguments to log to the console
+ * @param {String} mode  Console method to use (e.g. "log", "warn", "error")
+ * @param {any[]} args   Arguments to log to the console
  * @returns {void}
  */
 function log(mode, ...args) {
     let debugEnabled = (GM_config.isInit && GM_config.get("debug") === true);
+    // If the first argument is not a console log method, default to "log" and
+    // add "mode" to the arguments list
+    if (!["log", "info", "warn", "error"].includes(mode)) {
+        args.unshift(mode);
+        mode = "log";
+    }
     if (debugEnabled) {
         console[mode](
             `%c[${GM_info.script.name} | ${mode}]`,
@@ -201,10 +207,10 @@ function error(...args) { log("error", ...args); }
  * selector starting from a given node. The search will continue up the DOM tree
  * until a matching parent element is found or the maximum distance is reached.
  *
- * @param {HTMLHtmlElement} node  The starting node to search from
- * @param {String} selector       A selector to match against the parent elements
- * @param {Number} maxDistance    The maximum number of parent elements to search before giving up
- * @return {HTMLHtmlElement}      The matching parent element, or null if none is found
+ * @param {HTMLHtmlElement} node  Starting node to search from
+ * @param {String} selector       CSS selector to match parent elements against
+ * @param {Number} maxDistance    Maximum number of elements before giving up
+ * @return {HTMLHtmlElement}      Matching parent element or null if not found
  */
 function findParent(node, selector, maxDistance = Infinity) {
     let currentElement = node.parentElement;
@@ -214,11 +220,13 @@ function findParent(node, selector, maxDistance = Infinity) {
         if (currentElement.matches(selector)) {
             return currentElement; // Return the matching parent element
         }
-        currentElement = currentElement.parentElement; // Move up to the next parent
-        distance++; // Increment the distance counter
+        // Move up to the next parent
+        currentElement = currentElement.parentElement;
+        // Increment the distance counter
+        distance++;
     }
 
-    // Return null if no matching parent element is found within the max distance
+    // Return null if no match is found within the max distance
     return null;
 }
 
@@ -276,34 +284,65 @@ function waitForElement(selector) {
  *
  * @returns {void}
  */
-function dimWatchedThumbnails() {
+function dimWatchedThumbnails(
+    minWatched,
+    thumbnailOpacity,
+    useRelativeOpacity
+) {
+    if (minWatched === undefined)
+        minWatched = getConfig("min_watched");
+    if (thumbnailOpacity === undefined)
+        thumbnailOpacity = getConfig("thumbnail_opacity");
+    if (useRelativeOpacity === undefined)
+        useRelativeOpacity = getConfig("use_relative_opacity");
+
     // Collect all of the watched progress bars
-    let watchedProgressBars = document.querySelectorAll(seenQuerySelectors.join(", "));
+    let watchedProgressBars = document.querySelectorAll(
+        seenQuerySelectors.join(", ")
+    );
 
     // Create the combined parent selector
     let parentSelector = parentThumbnailSelectors.join(", ");
 
-    debug(`Found ${watchedProgressBars.length} watched videos:`, watchedProgressBars);
+    debug(
+        `Found ${watchedProgressBars.length} watched videos:`,
+        watchedProgressBars
+    );
     // Loop over them and try to get their associated thumbnail, dimming it out
     for (let watchedProgressBar of watchedProgressBars) {
         let watchedPercentage = parseInt(watchedProgressBar.style.width);
 
-        debug(`Searching for parent of progress bar at ${watchedPercentage}%`, watchedProgressBar);
+        debug(
+            `Searching for parent of progress bar at ${watchedPercentage}%`,
+            watchedProgressBar
+        );
         let thumbnail = findParent(watchedProgressBar, parentSelector, 6);
         if (thumbnail === null) {
             error("Could not find parent thumbnail for", watchedProgressBar);
         }
         if (thumbnail) {
             let watchedOpacity;
-            if (watchedPercentage < getConfig("min_watched")) {
-                debug(`Progress bar ${watchedPercentage} < ${getConfig("min_watched")}, resetting`, watchedProgressBar);
+            if (watchedPercentage < minWatched) {
+                debug(
+                    `Progress bar ${watchedPercentage} < ${minWatched},`,
+                    "setting opacity to 1.0",
+                    watchedProgressBar
+                );
                 watchedOpacity = "";
-            } else if (getConfig("use_relative_opacity")) {
-                watchedOpacity = (getConfig("thumbnail_opacity") * (100 - watchedPercentage) / 100) + getConfig("thumbnail_opacity");
+            } else if (useRelativeOpacity) {
+                watchedOpacity = (
+                    (
+                        thumbnailOpacity * (100 - watchedPercentage) / 100
+                    ) + thumbnailOpacity
+                );
             } else {
-                watchedOpacity = getConfig("thumbnail_opacity");
+                watchedOpacity = thumbnailOpacity
             }
-            debug(`Dimming to (${getConfig("thumbnail_opacity")} * (100 - ${watchedPercentage}) / 100) + ${getConfig("thumbnail_opacity")} = ${watchedOpacity}`, thumbnail);
+            debug(
+                `${thumbnailOpacity} * (100 - ${watchedPercentage})`,
+                `/ 100) + ${thumbnailOpacity} = ${watchedOpacity}`,
+                thumbnail
+            );
             thumbnail.style.opacity = watchedOpacity;
         }
     }
@@ -327,8 +366,17 @@ function dimWatchedThumbnails() {
 
         // Dim them again anytime the primary section changes
         let content = document.getElementById("primary");
-        let observer = new MutationObserver(dimWatchedThumbnails);
+        let observer = new MutationObserver( observer => {
+            dimWatchedThumbnails()
+        });
         info("Watching for new thumbnails in", content);
-        observer.observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+        observer.observe(
+            content, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['style']
+            }
+        );
     });
 })();
