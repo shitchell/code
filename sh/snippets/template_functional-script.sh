@@ -6,6 +6,7 @@
 ## imports #####################################################################
 ################################################################################
 
+include-source 'colors.sh'
 include-source 'debug.sh'
 
 
@@ -37,39 +38,6 @@ function trap-exit() {
     restore-output
 }
 trap trap-exit EXIT
-
-
-## colors ######################################################################
-################################################################################
-
-# Determine if we're in a terminal
-[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
-
-# @description Set up color variables
-# @usage setup-colors
-function setup-colors() {
-    C_RED=$'\e[31m'
-    C_GREEN=$'\e[32m'
-    C_YELLOW=$'\e[33m'
-    C_BLUE=$'\e[34m'
-    C_MAGENTA=$'\e[35m'
-    C_CYAN=$'\e[36m'
-    C_WHITE=$'\e[37m'
-    S_RESET=$'\e[0m'
-    S_BOLD=$'\e[1m'
-    S_DIM=$'\e[2m'
-    S_UNDERLINE=$'\e[4m'
-    S_BLINK=$'\e[5m'
-    S_INVERT=$'\e[7m'
-    S_HIDDEN=$'\e[8m'
-}
-
-# @description Unset color variables
-# @usage unset-colors
-function unset-colors() {
-    unset C_RED C_GREEN C_YELLOW C_BLUE C_MAGENTA C_CYAN C_WHITE \
-          S_RESET S_BOLD S_DIM S_UNDERLINE S_BLINK S_INVERT S_HIDDEN
-}
 
 
 ## usage functions #############################################################
