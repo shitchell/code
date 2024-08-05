@@ -1459,18 +1459,43 @@ function _subcommand_list-projects() {
 }
 
 # @description List all repos in the configured organization or project(s)
-# @usage list-repos [<project> [<project> ...]]
+# @usage list-repos [--ssh] [--http] [<project> [<project> ...]]
 function _subcommand_list-repos() {
+    local url_type="http"  # ssh, http
+    local project_enc repo_enc repo_url
     local projects_names=()
+
+    # Parse the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h|--help)
+                _subcommand_help list-repos
+                exit 0
+                ;;
+            --ssh)
+                url_type="ssh"
+                shift
+                ;;
+            --http)
+                url_type="http"
+                shift
+                ;;
+            *)
+                projects_names+=("${1}")
+                shift
+                ;;
+        esac
+    done
+
+    debug-vars url_type projects_names
+
     # Output will be in the format:
     #  <organization>/<project>/<repo> <url>
     #  <organization>/<project>/<repo> <url>
     #  ...
 
     # If projects were provided, then use those, else fetch all projects
-    if [[ ${#} -gt 0 ]]; then
-        projects_names=( "${@}" )
-    else
+    if [[ ${#projects_names[@]} -eq 0 ]]; then
         # Get the list of projects
         # GET https://dev.azure.com/{organization}/_apis/projects?api-version=7.0
         local projects_json=$(
@@ -1484,6 +1509,8 @@ function _subcommand_list-repos() {
                 | grep -Po '"name": "\K[^"]+'
         )
     fi
+
+    debug-vars projects_names
 
     # For each project, get the list of repos
     # GET https://dev.azure.com/{organization}/{project}/_apis/git/repositories?includeLinks={includeLinks}&includeAllUrls={includeAllUrls}&includeHidden={includeHidden}&api-version=7.0
@@ -1500,11 +1527,22 @@ function _subcommand_list-repos() {
                 | awk 'NR%2==1' # Only get every other line (the repo names)
         )
         for repo in "${repos_names[@]}"; do
+            # Form the URL based on the type
+            project_enc="$(urlencode "${project}")"
+            repo_enc="$(urlencode "${repo}")"
+            case "${url_type}" in
+                ssh)
+                    repo_url="git@ssh.dev.azure.com:v3/${ORGANIZATION_ENC}/${project_enc}/${repo_enc}"
+                    ;;
+                http)
+                    repo_url="https://dev.azure.com/${ORGANIZATION_ENC}/${project_enc}/_git/${repo_enc}"
+                    ;;
+            esac
             printf "%s/%s/%s %s\n" \
                 "${ORGANIZATION}" \
                 "${project}" \
                 "${repo}" \
-                "https://dev.azure.com/${ORGANIZATION_ENC}/$(urlencode "${project}")/_git/repositories/$(urlencode "${repo}")"
+                "${repo_url}"
         done
     done
 }
