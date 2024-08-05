@@ -37,26 +37,27 @@ function help-full() {
     echo
     echo "Actions:"
     cat << EOF
-    -o / --open         open the scratch file in the default editor
-    -v / --view <file>  view the specified scratch file
-    -p / --page <file>  view the scratch file in the default pager
-    --rm <file>         remove the specified file from the scratch directory
-    --rmdir             remove the scratch directory
-    --clear             clear the scratch directory
-    --list              list the files in the scratch directory
-    --list-names        list the filenames in the scratch directory
-    *--list-fmt <fmt>    list the files in the scratch directory with the
-                        specified format, where <fmt> is a string with the
-                        following placeholders:
-                          %f:    the filename
-                          %F:    the full path to the file
-                          %s:    the size of the file in human readable format
-                          %b:    the size of the file in bytes
-                          %m:    the last modified time of the file
-                          %a:    the last accessed time of the file
-                          %P:    a preview of the file
-                          %P(n): a preview of the file with a maximum length of
-                                 n characters
+    -o / --open           open the scratch file in the default editor
+    -v / --view <file>    view the specified scratch file
+    -p / --page <file>    view the scratch file in the default pager
+    --rm <file>           remove the specified file from the scratch directory
+    --rmdir               remove the scratch directory
+    --clear               clear the scratch directory
+    --list                list the files in the scratch directory
+    --list-names          list the filenames in the scratch directory
+    --rename <old> <new>  rename the specified file in the scratch directory
+    *--list-fmt <fmt>     list the files in the scratch directory with the
+                          specified format, where <fmt> is a string with the
+                          following placeholders:
+                            %f:    the filename
+                            %F:    the full path to the file
+                            %s:    the size of the file in human readable format
+                            %b:    the size of the file in bytes
+                            %m:    the last modified time of the file
+                            %a:    the last accessed time of the file
+                            %P:    a preview of the file
+                            %P(n): a preview of the file with a maximum length
+                                   of n characters
 EOF
     echo
     echo "Options:"
@@ -88,10 +89,13 @@ function parse-args() {
     FILENAME=$(date +%Y%m%d)
     DO_SUMMARY=1
     DEFAULT_ACTION="scratch"
-    ACTION="${DEFAULT_ACTION}" # scratch, view, exec, clear, rmdir, list, rm, page
+    ACTION="${DEFAULT_ACTION}"
+    # actions: scratch, view, exec, clear, rmdir, list, rm, page, rename
     EXEC_CMD=""
     EXEC_PLACEHOLDER=""
     SUMMARY_LENGTH=50
+    RENAME_OLD=""
+    RENAME_NEW=""
     
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -179,6 +183,20 @@ function parse-args() {
                     echo-formatted -r "invalid summary length: '${SUMMARY_LENGTH}'"
                     exit 1
                 fi
+                shift
+                ;;
+            --rename)
+                if [[ -z "${2}" ]]; then
+                    echo-stderr "no old filename specified"
+                    exit 1
+                fi
+                RENAME_OLD="${2}"
+                if [[ -z "${3}" ]]; then
+                    echo-stderr "no new filename specified"
+                    exit 1
+                fi
+                RENAME_NEW="${3}"
+                ACTION="rename"
                 shift
                 ;;
             -u | --unique)
@@ -454,6 +472,11 @@ function main() {
         return ${?}
     elif [[ "${ACTION}" == "rm" ]]; then
         rm -v "$(get-scratch-filepath "${FILENAME}")"
+        return ${?}
+    elif [[ "${ACTION}" == "rename" ]]; then
+        mv -v \
+            "$(get-scratch-filepath "${RENAME_OLD}")" \
+            "$(get-scratch-filepath "${RENAME_NEW}")"
         return ${?}
     else
         echo-formatted -r "invalid action: ${ACTION}"

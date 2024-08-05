@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Run scripts in an `include-source` environment
+
+# If no LIB_DIR is set, try looking in a few fallback places
+if [ -z "${LIB_DIR}" ]; then
+    FALLBACK_DIRS=(
+        "./"
+        "./lib"
+        "${HOME}/.local/share"
+        "${HOME}/code/sh/lib"
+        "/usr/local/lib"
+    )
+    INCLUDE_HEADER=": 'Module for importing functions"
+
+    for fb in "${FALLBACK_DIRS[@]}"; do
+        if [ -d "${fb}" ]; then
+            # Try to find include.sh
+            readarray -t include_paths < <(
+                find "${fb}" -maxdepth 3 -name 'include.sh'
+            )
+            for include_path in "${include_paths[@]}"; do
+                if [ -f "${include_path}" ]; then
+                    # Try to validate this is the right include.sh
+                    header=$(head -c 33 "${include_path}")
+                    if [ "${header}" == "${INCLUDE_HEADER}" ]; then
+                        # We found the right include.sh, so set LIB_DIR
+                        LIB_DIR="${fb%/}"
+                        break
+                    fi
+                fi
+            done
+        fi
+    done
+fi
+
+# If we still don't have a LIB_DIR, we can't continue
+if [ -z "${LIB_DIR}" ]; then
+    echo "fatal: LIB_DIR is not set" 1>&2
+    exit 1
+fi
+
+# If we have a LIB_DIR, source the include.sh
+if [ -n "${LIB_DIR}" ]; then
+    if [ -f "${LIB_DIR}/include.sh" ]; then
+        source "${LIB_DIR}/include.sh"
+    else
+        echo "fatal: ${LIB_DIR}/include.sh not found" 1>&2
+        exit 1
+    fi
+fi
+
+# If we don't have `include-source` defined, we can't continue
+if ! declare -F include-source &>/dev/null; then
+    echo "fatal: include-source is not defined" 1>&2
+    exit 1
+fi
+
+# If we have `include-source`, go ahead and run the script
+bash "${@}"
