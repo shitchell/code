@@ -25,8 +25,8 @@ This script will dim the thumbnails of watched videos on YouTube.
 
 This makes it easier to identify videos that you haven't watched yet. Especially
 on a channel that you watch frequently, it can be hard to parse through all the
-videos to find the ones you haven't watched yet. This makes those unwatched
-videos stand out while the watched videos fade into the background.
+videos to find the ones you haven't seen. This makes those unwatched videos
+stand out while the watched videos fade into the background.
 
 # Settings
 
@@ -54,7 +54,7 @@ less transparent. e.g.:
     - 75% watched = 0.5 opacity
     - 50% watched = 0.5 opacity
     - 25% watched = 0.5 opacity
-    - 0% watched = 0.5 opacity
+    - 0% watched = 1.0 opacity
 
 ## use_relative_opacity (default: true)
 
@@ -86,7 +86,7 @@ var DEFAULT_CONFIG = {
     use_relative_opacity: true,
     thumbnail_opacity: 0.3,
     min_watched: 0,
-    debug: false
+    debug: false // TODO: SET THIS TO FALSE
 }
 var seenQuerySelectors = [
     "ytd-thumbnail-overlay-resume-playback-renderer > div#progress"
@@ -104,23 +104,35 @@ var parentThumbnailSelectors = [
 /** GM_config setup
 *******************************************************************************/
 
-GM_config.init({
-    id: 'MyScriptConfig',
+var gmc = new GM_config({
+    id: 'GM_config-yt_dwv',
     fields: {
+        SECTION_main: {
+            type: 'hidden',
+            section: ['Main settings']
+        },
         use_relative_opacity: {
             label: 'Use relative opacity',
             type: 'checkbox',
             default: DEFAULT_CONFIG.use_relative_opacity
         },
         thumbnail_opacity: {
-            label: 'Thumnbail opacity',
+            label: 'Thumbnail opacity',
             type: 'float',
-            default: DEFAULT_CONFIG.thumbnail_opacity
+            default: DEFAULT_CONFIG.thumbnail_opacity,
+            min: 0,
+            max: 1
         },
         min_watched: {
             label: 'Minimum percentage watched',
             type: 'int',
-            default: DEFAULT_CONFIG.min_watched
+            default: DEFAULT_CONFIG.min_watched,
+            min: 0,
+            max: 100
+        },
+        SECTION_debugging: {
+            type: 'hidden',
+            section: ['Debugging']
         },
         debug: {
             label: 'Debug mode',
@@ -128,15 +140,109 @@ GM_config.init({
             default: DEFAULT_CONFIG.debug
         }
     },
+    css: `
+        #GM_config-yt_dwv {
+            background-color: #333;
+            color: #FFF;
+            font-family: Arial, sans-serif;
+            padding: 1em;
+        }
+        #GM_config-yt_dwv .section_header {
+            font-size: 1.5em;
+            margin-top: 1em;
+            padding: 0.5em;
+            color: #CF9FFF;
+            border: none;
+        }
+        #GM_config-yt_dwv .reset, #GM_config-yt_dwv .saveclose_buttons {
+            // display: none;
+        }
+        #GM_config-yt_dwv .reset {
+            color: #CF9FFF;
+        }
+        #GM_config-yt_dwv_saveBtn {
+            display: none;
+        }
+        #GM_config-yt_dwv .config_var {
+            margin-bottom: 0.5em;
+        }
+        #GM_config-yt_dwv .field_label {
+            font-weight: bold;
+        }
+        #GM_config-yt_dwv .saveclose_buttons {
+            background-color: #CF9FFF;
+            color: #333;
+            padding: 5px 10px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+        }
+        #GM_config-yt_dwv input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+        }
+    `,
     events: {
-        save: function() {
-            // handle saving the values
+        save: function(config) {
+            debug(`Calling GM_config save event with config:`, config);
+            // We set the fields above with `save: false` so that they will get
+            // passed to this event handler on close (if save is set to true,
+            // the values are just forgotten when the window closes).
+
+            // // Save the values to the GM_config object
+            // for (let key in config) {
+            //     this.setValue(key, config[key]);
+            // }
+        },
+        open: function(frameDocument, frameWindow, frame) {
+            const config = this;
+
+            debug(
+                `Calling GM_config onOpen event with:`,
+                `frameDocument: ${frameDocument}`,
+                `frameWindow: ${frameWindow}`,
+                `frame: ${frame}`
+            );
+
+            // Add an event listener for 'Esc' key within the GM_config iframe
+            frameDocument.addEventListener('keydown', event => {
+                if (event.key === 'Escape') config.close();
+            });
+
+            // Add a click listener on the main document
+            document.addEventListener('mousedown', function clickClose(event) {
+                const configFrame = document.querySelector('#GM_config-yt_dwv');
+                if (configFrame && !configFrame.contains(event.target))
+                    config.close();
+                document.removeEventListener('mousedown', clickClose);
+            });
+
+            // Add an event listener to each field to save the value on change
+            for (let fieldId in config.fields) {
+                let field = config.fields[fieldId];
+                debug(`Adding event listeners to field ${field.id}`);
+                field.node.addEventListener('keyup', function() {
+                    debug(`Field ${field.id} keyup`);
+                    config.save();
+                });
+                field.node.addEventListener('change', function() {
+                    debug(`Field ${field.id} changed`);
+                    config.save();
+                });
+            }
+        },
+        close: function(...args) {
+            debug(`Calling GM_config onClose event with args:`, args);
+
+            // Save all values immediately on close
+            this.save();
         }
     }
 });
+unsafeWindow.gmc = gmc;
 
 // To open the settings panel, navigate to the browser's Userscript manager
-GM_registerMenuCommand('Open Settings', () => GM_config.open(), 'o');
+GM_registerMenuCommand('Open Settings', () => gmc.open(), 'o');
 
 /** GM_config helper function for async/init
 *******************************************************************************/
@@ -153,8 +259,8 @@ GM_registerMenuCommand('Open Settings', () => GM_config.open(), 'o');
 function getConfig(key) {
     let source;
     let value;
-    if (GM_config.isInit) {
-        value = GM_config.get(key);
+    if (gmc.isInit) {
+        value = gmc.get(key);
         source = "GM_config";
     } else {
         value = DEFAULT_CONFIG[key];
@@ -180,10 +286,10 @@ function getConfig(key) {
  * @returns {void}
  */
 function log(mode, ...args) {
-    let debugEnabled = (GM_config.isInit && GM_config.get("debug") === true);
+    let debugEnabled = (gmc.isInit && gmc.get("debug") === true);
     // If the first argument is not a console log method, default to "log" and
     // add "mode" to the arguments list
-    if (!["log", "info", "warn", "error"].includes(mode)) {
+    if (!["debug", "info", "warn", "error"].includes(mode)) {
         args.unshift(mode);
         mode = "log";
     }
@@ -295,6 +401,12 @@ function dimWatchedThumbnails(
         thumbnailOpacity = getConfig("thumbnail_opacity");
     if (useRelativeOpacity === undefined)
         useRelativeOpacity = getConfig("use_relative_opacity");
+
+    debug(
+        `Dimming watched videos with minWatched=${minWatched},`,
+        `thumbnailOpacity=${thumbnailOpacity},`,
+        `useRelativeOpacity=${useRelativeOpacity}`
+    )
 
     // Collect all of the watched progress bars
     let watchedProgressBars = document.querySelectorAll(
