@@ -22,10 +22,10 @@
 UNAME=$(uname -a)
 
 case "${UNAME}" in
-    *qgki*Android*) OS="Android";;     # Starts with "Linux", so comes first
-    *Microsoft*)    OS="Linux WSL";;   # Starts with "Linux", so comes first
-    *microsoft*)    OS="Linux WSL2";;  # Starts with "Linux", so comes first
-    Linux*)         OS="Linux";;
+    *qgki*Android*) OS="Android";;  # Starts with "Linux", so comes first
+    *Microsoft*)    OS="WSL";;      # Starts with "Linux", so comes first
+    *microsoft*)    OS="WSL2";;     # Starts with "Linux", so comes first
+    Linux*)         OS="Linux";;    # Catch-all for Linux
     Darwin*)        OS="Mac";;
     CYGWIN*)        OS="Cygwin";;
     MINGW*)         OS="Windows";; 
@@ -44,7 +44,7 @@ if [[ -f "/etc/os-release" && ! "${OS}" == "UNKNOWN:"* ]]; then
 fi
 
 if [[ "${OS}" == "Android" && -n "${TERMUX_VERSION}" ]]; then
-    OS="Android Termux ${TERMUX_VERSION}"
+    OS="Termux"
 elif [[ "${OS}" == "Mac" ]] && sysctl -n machdep.cpu.brand_string | grep -q 'Apple M1'; then
     OS="MacM1"
 fi
