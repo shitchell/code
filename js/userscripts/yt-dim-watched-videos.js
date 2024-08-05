@@ -361,7 +361,7 @@ function log(mode, ...args) {
         console[mode](
             `%c[${GM_info.script.name} | ${mode}]`,
             "color: #CF9FFF; font-weight: bold;",
-            "",
+            " ",
             ...args);
     }
 }
