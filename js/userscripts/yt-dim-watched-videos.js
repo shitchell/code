@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dim Watched YouTube Videos
 // @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.5
 // @description  Dim the thumbnails of watched videos on YouTube
 // @author       Shaun Mitchell <shaun@shitchell.com>
 // @match        https://www.youtube.com/*
@@ -77,21 +77,26 @@ thumbnail will be set to full opacity. e.g.:
     - 0% watched = not dimmed
 *******************************************************************************/
 
+/** To-do
+ * - [ ] Add a "Saved!" message to the settings page when settings are
+ *       automatically saved
+ */
 
 /*******************************************************************************
  Global variables and default configuration
 *******************************************************************************/
 
-var DEFAULT_CONFIG = {
+const DEFAULT_CONFIG = {
     use_relative_opacity: true,
     thumbnail_opacity: 0.3,
     min_watched: 0,
-    debug: false // TODO: SET THIS TO FALSE
+    debug: false,
+    debounce_ms: 300
 }
-var seenQuerySelectors = [
+const seenQuerySelectors = [
     "ytd-thumbnail-overlay-resume-playback-renderer > div#progress"
 ];
-var parentThumbnailSelectors = [
+const parentThumbnailSelectors = [
     "ytd-thumbnail",
     "div#thumbnail.ytd-rich-grid-media"
 ]
@@ -104,8 +109,9 @@ var parentThumbnailSelectors = [
 /** GM_config setup
 *******************************************************************************/
 
-var gmc = new GM_config({
+const gmc = new GM_config({
     id: 'GM_config-yt_dwv',
+    title: 'Dim Watched YouTube Videos',
     fields: {
         SECTION_main: {
             type: 'hidden',
@@ -130,44 +136,78 @@ var gmc = new GM_config({
             min: 0,
             max: 100
         },
-        SECTION_debugging: {
+        SECTION_dev: {
             type: 'hidden',
-            section: ['Debugging']
+            section: ['Developer options']
         },
         debug: {
             label: 'Debug mode',
             type: 'checkbox',
             default: DEFAULT_CONFIG.debug
+        },
+        debounce_ms: {
+            label: 'Debounce delay (ms)',
+            type: 'int',
+            default: DEFAULT_CONFIG.debounce_ms,
+            min: 0
         }
     },
     css: `
         #GM_config-yt_dwv {
-            background-color: #333;
+            // background-color: #333;
+            background-color: rgba(30, 30, 30, 0.95);
             color: #FFF;
             font-family: Arial, sans-serif;
             padding: 1em;
         }
         #GM_config-yt_dwv .section_header {
             font-size: 1.5em;
-            margin-top: 1em;
+            GM_config-yt_dwv: 1em;
             padding: 0.5em;
             color: #CF9FFF;
             border: none;
+            border-bottom: 1px solid #CF9FFF;
+            text-align: left;
+            background: none;
         }
         #GM_config-yt_dwv .reset, #GM_config-yt_dwv .saveclose_buttons {
-            // display: none;
-        }
-        #GM_config-yt_dwv .reset {
-            color: #CF9FFF;
-        }
-        #GM_config-yt_dwv_saveBtn {
             display: none;
         }
+        // #GM_config-yt_dwv .reset {
+        //     color: #CF9FFF;
+        // }
+        // #GM_config-yt_dwv_saveBtn {
+        //     display: none;
+        // }
         #GM_config-yt_dwv .config_var {
             margin-bottom: 0.5em;
+            font-size: 1em;
+        }
+        #GM_config-yt_dwv .config_var label.field_label,
+        #GM_config-yt_dwv .config_var input,
+        #GM_config-yt_dwv .config_var select,
+        #GM_config-yt_dwv .config_var textarea {
+            font-size: inherit;
+            width: 15em;
+            display: inline-block;
+        }
+        #GM_config-yt_dwv .config_var input,
+        #GM_config-yt_dwv .config_var textarea {
+            outline: none;
+            background: none;
+            color: #FFF;
+            border: none;
+            border-bottom: 1px solid white;
+            transition: border-color 0.2s;
+        }
+        #GM_config-yt_dwv .config_var input:focus,
+        #GM_config-yt_dwv .config_var textarea:focus {
+            border-color: #CF9FFF;
+            outline: none;
         }
         #GM_config-yt_dwv .field_label {
             font-weight: bold;
+            text-align: right;
         }
         #GM_config-yt_dwv .saveclose_buttons {
             background-color: #CF9FFF;
@@ -182,18 +222,35 @@ var gmc = new GM_config({
             height: 20px;
         }
     `,
+    /* default frameStyle
+        bottom: auto; border: 1px solid #000; display: none; height: 75%;
+        left: 0; margin: 0; max-height: 95%; max-width: 95%; opacity: 0;
+        overflow: auto; padding: 0; position: fixed; right: auto; top: 0;
+        width: 75%; z-index: 9999;
+    */
+    frameStyle: `
+        // Default
+        bottom: auto;
+        display: none;
+        margin: 0;
+        padding: 0;
+        overflow: auto;
+        opacity: 0;
+        position: fixed;
+        left: 0;
+        right: auto;
+        top: 0;
+        max-height: 95%;
+        max-width: 95%;
+        z-index: 9999;
+        // Custom
+        border: none;
+        background-color: transparent;
+        height: 50%;
+        width: 69em;
+        border-radius: 1em;
+    `,
     events: {
-        save: function(config) {
-            debug(`Calling GM_config save event with config:`, config);
-            // We set the fields above with `save: false` so that they will get
-            // passed to this event handler on close (if save is set to true,
-            // the values are just forgotten when the window closes).
-
-            // // Save the values to the GM_config object
-            // for (let key in config) {
-            //     this.setValue(key, config[key]);
-            // }
-        },
         open: function(frameDocument, frameWindow, frame) {
             const config = this;
 
@@ -218,8 +275,8 @@ var gmc = new GM_config({
             });
 
             // Add an event listener to each field to save the value on change
-            for (let fieldId in config.fields) {
-                let field = config.fields[fieldId];
+            for (const fieldId in config.fields) {
+                const field = config.fields[fieldId];
                 debug(`Adding event listeners to field ${field.id}`);
                 field.node.addEventListener('keyup', function() {
                     debug(`Field ${field.id} keyup`);
@@ -236,13 +293,20 @@ var gmc = new GM_config({
 
             // Save all values immediately on close
             this.save();
-        }
+        },
+        save: function(config) { },
+        reset: function(config) { },
+        init: function() { }
     }
 });
 unsafeWindow.gmc = gmc;
 
-// To open the settings panel, navigate to the browser's Userscript manager
+// Userscript manager menu items
 GM_registerMenuCommand('Open Settings', () => gmc.open(), 'o');
+GM_registerMenuCommand('Reset Settings', () => {
+    gmc.reset();
+    gmc.save();
+}, 'r');
 
 /** GM_config helper function for async/init
 *******************************************************************************/
@@ -286,7 +350,7 @@ function getConfig(key) {
  * @returns {void}
  */
 function log(mode, ...args) {
-    let debugEnabled = (gmc.isInit && gmc.get("debug") === true);
+    const debugEnabled = (gmc.isInit && gmc.get("debug") === true);
     // If the first argument is not a console log method, default to "log" and
     // add "mode" to the arguments list
     if (!["debug", "info", "warn", "error"].includes(mode)) {
@@ -409,26 +473,26 @@ function dimWatchedThumbnails(
     )
 
     // Collect all of the watched progress bars
-    let watchedProgressBars = document.querySelectorAll(
+    const watchedProgressBars = document.querySelectorAll(
         seenQuerySelectors.join(", ")
     );
 
     // Create the combined parent selector
-    let parentSelector = parentThumbnailSelectors.join(", ");
+    const parentSelector = parentThumbnailSelectors.join(", ");
 
     debug(
         `Found ${watchedProgressBars.length} watched videos:`,
         watchedProgressBars
     );
     // Loop over them and try to get their associated thumbnail, dimming it out
-    for (let watchedProgressBar of watchedProgressBars) {
-        let watchedPercentage = parseInt(watchedProgressBar.style.width);
+    for (const watchedProgressBar of watchedProgressBars) {
+        const watchedPercentage = parseInt(watchedProgressBar.style.width);
 
         debug(
             `Searching for parent of progress bar at ${watchedPercentage}%`,
             watchedProgressBar
         );
-        let thumbnail = findParent(watchedProgressBar, parentSelector, 6);
+        const thumbnail = findParent(watchedProgressBar, parentSelector, 6);
         if (thumbnail === null) {
             error("Could not find parent thumbnail for", watchedProgressBar);
         }
@@ -477,9 +541,14 @@ function dimWatchedThumbnails(
         dimWatchedThumbnails();
 
         // Dim them again anytime the primary section changes
-        let content = document.getElementById("primary");
-        let observer = new MutationObserver( observer => {
-            dimWatchedThumbnails()
+        const content = document.getElementById("primary");
+        let timeout; // debounce
+        const observer = new MutationObserver(() => {
+            clearTimeout(timeout);
+            timeout = setTimeout(
+                dimWatchedThumbnails,
+                getConfig("debounce_ms")
+            );
         });
         info("Watching for new thumbnails in", content);
         observer.observe(
