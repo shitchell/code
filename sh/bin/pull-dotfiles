@@ -11,6 +11,6 @@ fi
 
 # Pull the dotfiles repo
 cd "${DOTFILES_REPO}" || exit 1
-git echo "%C(dim)${DOTFILES_REPO}%C(reset)"
-./update.sh
-./make install
+git echo "%C(dim)${DOTFILES_REPO}%C(reset)" \
+    && ./update.sh \
+    && ./make install
