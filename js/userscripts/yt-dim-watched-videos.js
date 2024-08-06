@@ -100,6 +100,7 @@ const parentThumbnailSelectors = [
 ]
 const seenQuerySelector = seenQuerySelectors.join(", ");
 const parentThumbnailSelector = parentThumbnailSelectors.join(", ");
+const observeParentSelector = "#content";
 
 
 /*******************************************************************************
@@ -577,24 +578,24 @@ function mutationCallback(mutations) {
     'use strict';
 
     // Wait for the primary element to become available
-    debug("waiting for #primary...");
-    waitForElement("#primary").then(el => {
+    debug(`waiting for '${observeParentSelector}'...`);
+    waitForElement(observeParentSelector).then(el => {
         debug("#primary loaded!");
 
         // Dim the progress bars initially
         dimWatchedThumbnails();
 
         // Set up the MutationObserver
-        const content = document.getElementById("primary");
+        const observeParent = document.querySelector(observeParentSelector);
         const observer = new MutationObserver(mutationCallback);
 
-        info("Watching for new thumbnails in", content);
+        info("Watching for new thumbnails in", observeParent);
         observer.observe(
-            content,
+            observeParent,
             {childList: true, subtree: true, attributes: false}
         );
 
         // Expose debug tools if needed
-        unsafeWindow._dev = { observer, content, gmc, GM_config };
+        unsafeWindow._dev = { observer, observeParent, gmc, GM_config };
     });
 })();
