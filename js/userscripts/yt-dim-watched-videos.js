@@ -88,10 +88,10 @@ thumbnail will be set to full opacity. e.g.:
 
 const DEFAULT_CONFIG = {
     use_relative_opacity: true,
-    thumbnail_opacity: 0.3,
-    min_watched: 0,
+    thumbnail_opacity: 0.3, // percentage, 0-1
+    min_watched: 0, // percentage, 0-100
     debug: false,
-    debounce_ms: 300
+    dim_throttling_ms: 0 // ms
 }
 const seenQuerySelectors = [
     "ytd-thumbnail-overlay-resume-playback-renderer > div#progress"
@@ -100,6 +100,8 @@ const parentThumbnailSelectors = [
     "ytd-thumbnail",
     "div#thumbnail.ytd-rich-grid-media"
 ]
+const seenQuerySelector = seenQuerySelectors.join(", ");
+const parentThumbnailSelector = parentThumbnailSelectors.join(", ");
 
 
 /*******************************************************************************
@@ -145,10 +147,10 @@ const gmc = new GM_config({
             type: 'checkbox',
             default: DEFAULT_CONFIG.debug
         },
-        debounce_ms: {
-            label: 'Debounce delay (ms)',
+        dim_throttling_ms: {
+            label: 'Dimming throttling (ms)',
             type: 'int',
-            default: DEFAULT_CONFIG.debounce_ms,
+            default: DEFAULT_CONFIG.dim_throttling_ms,
             min: 0
         }
     },
@@ -473,12 +475,10 @@ function dimWatchedThumbnails(
     )
 
     // Collect all of the watched progress bars
-    const watchedProgressBars = document.querySelectorAll(
-        seenQuerySelectors.join(", ")
-    );
+    const watchedProgressBars = document.querySelectorAll(seenQuerySelector);
 
     // Create the combined parent selector
-    const parentSelector = parentThumbnailSelectors.join(", ");
+    const parentSelector = parentThumbnailSelector
 
     debug(
         `Found ${watchedProgressBars.length} watched videos:`,
@@ -524,6 +524,52 @@ function dimWatchedThumbnails(
     }
 }
 
+/** Mutation Observer for progress bars
+*********************************************************************************/
+
+// Used to throttle the dimming of thumbnails and determine if a dimming is
+// scheduled. While a dimming is scheduled, no new dimmings will be scheduled,
+// and we can take a break from processing new nodes.
+let dimTimeout;
+
+// Throttling function to dim the thumbnails
+function scheduleDimThumbnails() {
+    if (dimTimeout) {
+        debug("Dimming already scheduled, skipping...");
+        return
+    } else {
+        debug("Scheduling dimming...");
+        dimTimeout = setTimeout(() => {
+            dimWatchedThumbnails()
+            dimTimeout = null;
+        }, getConfig("dim_throttling_ms"));
+    }
+}
+
+// Function to process the added nodes
+function processAddedNodes(nodes) {
+    debug("Processing added nodes:", nodes);
+    nodes.forEach(node => {
+        // Check if the node matches the seen progress bar selector
+        // Note: `nodeType === 1` is an element node
+        if (node.nodeType === 1 && node.matches(seenQuerySelector)) {
+            debug("Found a new progress bar:", node);
+            // Queue the dimWatchedThumbnails to run after the dim interval
+            scheduleDimThumbnails();
+        }
+    });
+}
+
+// Mutation observer callback function
+function mutationCallback(mutations) {
+    if (dimTimeout) return;
+    mutations.forEach(mutation => {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+            processAddedNodes(mutation.addedNodes);
+        }
+    });
+}
+
 
 /*******************************************************************************
  Main script
@@ -537,27 +583,20 @@ function dimWatchedThumbnails(
     waitForElement("#primary").then(el => {
         debug("#primary loaded!");
 
-        // Dim the progress bars
+        // Dim the progress bars initially
         dimWatchedThumbnails();
 
-        // Dim them again anytime the primary section changes
+        // Set up the MutationObserver
         const content = document.getElementById("primary");
-        let timeout; // debounce
-        const observer = new MutationObserver(() => {
-            clearTimeout(timeout);
-            timeout = setTimeout(
-                dimWatchedThumbnails,
-                getConfig("debounce_ms")
-            );
-        });
+        const observer = new MutationObserver(mutationCallback);
+
         info("Watching for new thumbnails in", content);
         observer.observe(
-            content, {
-                childList: true,
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['style']
-            }
+            content,
+            {childList: true, subtree: true, attributes: false}
         );
+
+        // Expose debug tools if needed
+        unsafeWindow._dev = { observer, content, gmc, GM_config };
     });
 })();
