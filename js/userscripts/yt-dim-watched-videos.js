@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dim Watched YouTube Videos
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  Dim the thumbnails of watched videos on YouTube
 // @author       Shaun Mitchell <shaun@shitchell.com>
 // @match        https://www.youtube.com/*
@@ -11,8 +11,6 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @license      WTFPL
-// @downloadURL  https://update.greasyfork.org/scripts/502576/Dim%20Watched%20YouTube%20Videos.user.js
-// @updateURL    https://update.greasyfork.org/scripts/502576/Dim%20Watched%20YouTube%20Videos.meta.js
 // ==/UserScript==
 
 /** Dim Watched YouTube Videos *************************************************
