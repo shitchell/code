@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dim Watched YouTube Videos
 // @namespace    http://tampermonkey.net/
-// @version      0.6
+// @version      0.7
 // @description  Dim the thumbnails of watched videos on YouTube
 // @author       Shaun Mitchell <shaun@shitchell.com>
 // @match        https://www.youtube.com/*
