@@ -7,6 +7,7 @@
 // @match        https://www.youtube.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=youtube.com
 // @require      https://openuserjs.org/src/libs/sizzle/GM_config.js
+// @run-at       document-end
 // @grant        GM_registerMenuCommand
 // @grant        GM.getValue
 // @grant        GM.setValue
@@ -88,7 +89,8 @@ const DEFAULT_CONFIG = {
     use_relative_opacity: true,
     thumbnail_opacity: 0.3, // percentage, 0-1
     min_watched: 0, // percentage, 0-100
-    debug: false,
+    opaque_on_hover: true,
+    debug: "error",
     dim_throttling_ms: 0 // ms
 }
 const seenQuerySelectors = [
@@ -101,6 +103,14 @@ const parentThumbnailSelectors = [
 const seenQuerySelector = seenQuerySelectors.join(", ");
 const parentThumbnailSelector = parentThumbnailSelectors.join(", ");
 const observeParentSelector = "#content";
+const logLevels = {
+    none: -1,
+    log: 0,
+    debug: 0,
+    info: 1,
+    warn: 2,
+    error: 3
+}
 
 
 /*******************************************************************************
@@ -137,13 +147,19 @@ const gmc = new GM_config({
             min: 0,
             max: 100
         },
+        opaque_on_hover: {
+            label: 'Opaque on hover',
+            type: 'checkbox',
+            default: DEFAULT_CONFIG.opaque_on_hover
+        },
         SECTION_dev: {
             type: 'hidden',
             section: ['Developer options']
         },
         debug: {
-            label: 'Debug mode',
-            type: 'checkbox',
+            label: 'Log level',
+            type: 'select',
+            options: ['off', 'error', 'warn', 'info', 'debug'],
             default: DEFAULT_CONFIG.debug
         },
         dim_throttling_ms: {
@@ -280,20 +296,17 @@ const gmc = new GM_config({
                 const field = config.fields[fieldId];
                 debug(`Adding event listeners to field ${field.id}`);
                 field.node.addEventListener('keyup', function() {
-                    debug(`Field ${field.id} keyup`);
+                    debug(`Field ${field.id} keyup, saving`);
                     config.save();
                 });
                 field.node.addEventListener('change', function() {
-                    debug(`Field ${field.id} changed`);
+                    debug(`Field ${field.id} changed, saving`);
                     config.save();
                 });
             }
         },
         close: function(...args) {
-            debug(`Calling GM_config onClose event with args:`, args);
-
-            // Save all values immediately on close
-            this.save();
+            info(`Calling GM_config onClose event with args:`, args);
         },
         save: function(config) { },
         reset: function(config) { },
@@ -351,14 +364,20 @@ function getConfig(key) {
  * @returns {void}
  */
 function log(mode, ...args) {
-    const debugEnabled = (gmc.isInit && gmc.get("debug") === true);
-    // If the first argument is not a console log method, default to "log" and
-    // add "mode" to the arguments list
-    if (!["debug", "info", "warn", "error"].includes(mode)) {
-        args.unshift(mode);
-        mode = "log";
-    }
-    if (debugEnabled) {
+    if (gmc.isInit) {
+        const debugConfig = gmc.get("debug");
+        const debugConfigLevel = logLevels[debugConfig];
+        const modeLevel = logLevels[mode] || 0;
+        const debugEnabled = modeLevel >= debugConfigLevel;
+        if (!debugEnabled) return;
+
+        // If the first argument is not a console log method, default to "log" and
+        // add "mode" to the arguments list
+        if (!["debug", "info", "warn", "error"].includes(mode)) {
+            args.unshift(mode);
+            mode = "log";
+        }
+
         console[mode](
             `%c[${GM_info.script.name} | ${mode}]`,
             "color: #CF9FFF; font-weight: bold;",
@@ -458,7 +477,8 @@ function waitForElement(selector) {
 function dimWatchedThumbnails(
     minWatched,
     thumbnailOpacity,
-    useRelativeOpacity
+    useRelativeOpacity,
+    opaqueOnHover
 ) {
     if (minWatched === undefined)
         minWatched = getConfig("min_watched");
@@ -466,6 +486,8 @@ function dimWatchedThumbnails(
         thumbnailOpacity = getConfig("thumbnail_opacity");
     if (useRelativeOpacity === undefined)
         useRelativeOpacity = getConfig("use_relative_opacity");
+    if (opaqueOnHover === undefined)
+        opaqueOnHover = getConfig("opaque_on_hover");
 
     debug(
         `Dimming watched videos with minWatched=${minWatched},`,
@@ -479,10 +501,9 @@ function dimWatchedThumbnails(
     // Create the combined parent selector
     const parentSelector = parentThumbnailSelector
 
-    debug(
-        `Found ${watchedProgressBars.length} watched videos:`,
-        watchedProgressBars
-    );
+    if (watchedProgressBars.length > 0)
+        info(`Dimming ${watchedProgressBars.length} watched videos`);
+    debug('dimming:', watchedProgressBars);
     // Loop over them and try to get their associated thumbnail, dimming it out
     for (const watchedProgressBar of watchedProgressBars) {
         const watchedPercentage = parseInt(watchedProgressBar.style.width);
@@ -519,6 +540,9 @@ function dimWatchedThumbnails(
                 thumbnail
             );
             thumbnail.style.opacity = watchedOpacity;
+            if (opaqueOnHover) {
+                thumbnail.classList.add("opaque-on-hover");
+            }
         }
     }
 }
@@ -552,9 +576,12 @@ function processAddedNodes(nodes) {
         // Check if the node matches the seen progress bar selector
         // Note: `nodeType === 1` is an element node
         if (node.nodeType === 1 && node.matches(seenQuerySelector)) {
-            debug("Found a new progress bar:", node);
+            info("Found a new progress bar:", node);
             // Queue the dimWatchedThumbnails to run after the dim interval
             scheduleDimThumbnails();
+            // Since the scheduled dimming will handle all of the progress bars,
+            // we can break out of the loop early
+            return;
         }
     });
 }
@@ -577,10 +604,24 @@ function mutationCallback(mutations) {
 (function() {
     'use strict';
 
+    // If opaque on hover is enabled, create a class to toggle the opacity
+    if (getConfig("opaque_on_hover")) {
+        const style = document.createElement('style');
+        style.innerHTML = `
+            .opaque-on-hover {
+                transition: opacity 0.2s;
+            }
+            .opaque-on-hover:hover {
+                opacity: 1.0 !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
     // Wait for the primary element to become available
-    debug(`waiting for '${observeParentSelector}'...`);
+    info(`waiting for '${observeParentSelector}'...`);
     waitForElement(observeParentSelector).then(el => {
-        debug("#primary loaded!");
+        info("#primary loaded!");
 
         // Dim the progress bars initially
         dimWatchedThumbnails();
