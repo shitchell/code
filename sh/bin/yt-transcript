@@ -179,16 +179,12 @@ function parse-video-id() {
     echo "${video_id}"
 }
 
-# @description Download a youtube video transcript
-# @usage get-transcript <video id> [<output file>]
-# @arg $1 {string} video id
-# @arg $2 {string} output file
-# @return {string} transcript
-function get-transcript() {
+# @description Build the youtubei request params
+# @usage yt-transcript-build-params <video id> [<lang>]
+function yt-transcript-build-params() {
     local video_id="${1}"
-    local output_file="${2}"
-    local lang="${3}"
-    local response transcript
+    local lang="${2}"
+    local params
 
     # Format the language code
     ## https://stackoverflow.com/a/70013529
@@ -206,7 +202,7 @@ function get-transcript() {
     ##    D=$(printf "\n\x0bVIDEO_ID\x12\x0e$C" | base64)
     ##    => CgtsbzBYMlpkRWxRNBIOQ2dBU0FuSjFHZ0ElM0Q=
     ## 6. Use this params value from the Captions in default language section:
-    ##    curl -s 'https://www.youtube.com/youtubei/v1/get_transcript?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8' -H 'Content-Type: application/--data-raw "{\"context\":{\"client\":{\"clientName\":\"WEB\",\"clientVersion\":\"2.2021111\"}},\"params\":\"$D\"}"
+    ##    curl -s 'https://www.youtube.com/y
     if [[ -n "${lang}" ]]; then
         local A=$(printf '\n\x00\x12\x02%s\x1a\x00' "${lang}" | base64)
         debug "lang_b64.A: ${A}"
@@ -217,23 +213,49 @@ function get-transcript() {
         local lang_b64=$'\x12\x0e'"${C}"
         debug "lang_b64: ${lang_b64}"
     fi
-    local params=$(printf '\n\x0b%s%s' "${video_id}" "${lang_b64}" | base64)
+    params=$(printf '\n\x0b%s%s' "${video_id}" "${lang_b64}" | base64)
     debug "video_id: ${video_id}"
     debug "lang: ${lang}"
     debug "params: ${params}"
+    echo "${params}"
+}
+
+# @description Build the youtubei data payload
+# @usage yt-transcript-build-data <video id> [<lang>]
+function yt-transcript-build-data() {
+    local video_id="${1}"
+    local lang="${2}"
+    local params data
+
+    params=$(yt-transcript-build-params "${video_id}" "${lang}")
+    data='{
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "2.2021111"
+            }
+        },
+        "params": "'"${params}"'"
+    }'
+    debug "data: ${data}"
+    echo "${data}"
+}
+
+# @description Download a youtube video transcript
+# @usage get-transcript <video id> [<output file>]
+# @arg $1 {string} video id
+# @arg $2 {string} output file
+# @return {string} transcript
+function get-transcript() {
+    local video_id="${1}"
+    local output_file="${2}"
+    local lang="${3}"
+    local response transcript
 
     response=$(
         curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
         -H 'Content-Type: application/json' \
-        --data-raw '{
-            "context": {
-                "client": {
-                    "clientName": "WEB",
-                    "clientVersion": "2.2021111"
-                }
-            },
-            "params": "'"${params}"'"
-        }'
+        --data-raw "$(yt-transcript-build-data "${video_id}" "${lang}")"
     )
     debug "response: ${response}"
     transcript=$(
