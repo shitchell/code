@@ -180,8 +180,8 @@ function parse-video-id() {
 }
 
 # @description Build the youtubei request params
-# @usage yt-transcript-build-params <video id> [<lang>]
-function yt-transcript-build-params() {
+# @usage yt-transcript-build-params-old <video id> [<lang>]
+function yt-transcript-build-params-old() {
     local video_id="${1}"
     local lang="${2}"
     local params
@@ -220,6 +220,98 @@ function yt-transcript-build-params() {
     echo "${params}"
 }
 
+# @description Build the youtubei request params
+# @usage yt-transcript-build-params <video id> [<lang>]
+function yt-transcript-build-params() {
+    ## Updated as of 2024-08-07 to conform to the new youtubei API
+    # This is based on the following working request:
+    #   curl 'https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false' \
+    #       -H "content-type: application/json" \
+    #       --data-raw '{
+    #           "context": {
+    #               "client": {
+    #                   "hl": "en",
+    #                   "gl": "US",
+    #                   "clientName": "WEB",
+    #                   "clientVersion": "2.20240806.01.00"
+    #               }
+    #           },
+    #           "params": "CgtiX1RrRmhqOW1naxIOQ2dBU0FtVnVHZ0ElM0QYASozZW5nYWdlbWVudC1wYW5lbC1zZWFyY2hhYmxlLXRyYW5zY3JpcHQtc2VhcmNoLXBhbmVsMAA4AUAB"
+    #           }
+    #       '
+    #
+    # The params value is a base64 encoded string that decodes to the following:
+    #   \n\x0bb_TkFhj9mgk\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    # The segment "CgASAmVuGgA%3D" decodes to:
+    #   \n\x00\x12\x02en\x1a\x00
+    #
+    # This can be broken down as follows:
+    #   - \n\x0b
+    #   - {{VIDEO_ID}} (e.g. b_TkFhj9mgk)
+    #   - \x12\x0e
+    #   - {{LANG_B64}} (e.g. \n\x00\x12\x02en\x1a\x00 => CgASAmVuGgA%3D)
+    #   - \x18\x01
+    #   - *3engagement-panel-searchable-transcript-search-panel0
+    #   - \x00
+    #   - 8 (??)
+    #   - \x01
+    #   - @ (??)
+    #   - \x01
+    #
+    # Note the following changes:
+    #   - The language code is now included in the "context.client" object under
+    #     the "hl" and "gl" keys AS WELL AS the "params" value
+    #   - The "params" value now includes a new field "*3engagement
+    #     -panel-searchable-transcript-search-panel0" with a value of 8
+    #   - The "params" value now includes an 8 and @ for... some reason
+    local video_id="${1}"
+    local lang="${2:-en}"  # Default language to 'en' if not provided
+    local params
+    local lang_b64
+    local engagement_field="*3engagement-panel-searchable-transcript-search-panel0"
+
+    # Step 1: Encode the language initials
+    lang_b64=$(printf '\n\x00\x12\x02%s\x1a\x00' "${lang}" | base64)
+    debug "lang_b64: $(printf '%q' "${lang_b64}")"
+
+    # Step 2: URL encode the base64 encoded language value
+    lang_b64=$(urlencode "${lang_b64}")
+    debug "URL encoded lang_b64: $(printf '%q' "${lang_b64}")"
+
+    # Step 3: Prepare the initial part of the params value
+    params=$(printf '\n\x0b%s\x12\x0e%s' "${video_id}" "${lang_b64}")
+    debug "Initial params: $(printf '%q' "${params}")"
+
+    # Step 4: Append the engagement panel field
+    params+=$(printf '\x18\x01%s' "${engagement_field}")
+    params+=$'\xff0'
+    debug "After adding engagement panel field: $(printf '%q' "${params}")"
+
+    # Step 5: Append the '8' marker
+    params+='8'
+    debug "After adding the '8' marker: $(printf '%q' "${params}")"
+
+    # Step 6: Append the '\x01' marker
+    params+=$(printf '\x01')
+    debug "After adding the '\x01' marker: $(printf '%q' "${params}")"
+
+    # Step 7: Append the '@' marker
+    params+=$(printf '@')
+    debug "After adding the '@' marker: $(printf '%q' "${params}")"
+
+    # Step 8: Append the final \x01 marker
+    params+=$(printf '\x01')
+    debug "Final params with \x01 marker: $(printf '%q' "${params}")"
+    debug "Final params, null byte unescaped: $(printf '%s' "${params}" | cse0 | invisicat.py -I)"
+
+    # Step 9: Encode the entire params value in base64
+    params=$(printf '%s' "${params}" | cse0 | base64)
+    debug "Encoded params: $(printf '%q' "${params}")"
+
+    # Return the final params value
+    echo "${params}"
+}
+
 # @description Build the youtubei data payload
 # @usage yt-transcript-build-data <video id> [<lang>]
 function yt-transcript-build-data() {
@@ -241,6 +333,40 @@ function yt-transcript-build-data() {
     echo "${data}"
 }
 
+# @description Fetch the youtubei JSON response for a video transcript
+# @usage yt-transcript-fetch <video id> [<lang>]
+function yt-transcript-fetch() {
+    local video_id="${1}"
+    local lang="${2}"
+    local response
+
+    # Set up the cache directory and response file
+    local cache_dir="${HOME}/.cache/yt-transcript"
+    local cache_response="${cache_dir}/${video_id}"
+    [[ -n "${lang}" ]] && cache_response+="-${lang}"
+    cache_response+=".json"
+    mkdir -p "${cache_dir}" &>/dev/null
+
+    # Check if a cached response exists
+    if [[ -f "${cache_response}" ]]; then
+        debug "using cached response: ${cache_response}"
+        response=$(<"${cache_response}")
+    else
+        debug "no cached response found, fetching from youtube"
+        response=$(
+            curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
+            -H 'Content-Type: application/json' \
+            --data-raw "$(yt-transcript-build-data "${video_id}" "${lang}")"
+        )
+        debug "response: ${response}"
+        [[ -d "${cache_dir}" && -w "${cache_dir}" ]] && {
+            echo "${response}" >"${cache_response}"
+        }
+    fi
+
+    echo "${response}"
+}
+
 # @description Parse the youtubei response for the transcript
 # @usage yt-transcript-parse <response>
 function yt-transcript-parse() {
@@ -248,7 +374,9 @@ function yt-transcript-parse() {
 
     awk -v color="${DO_COLOR}" -v format="${FORMAT}" \
     -v color_time="${COLOR_TIME}" -v color_text="${COLOR_TEXT}" '
-        # Define a function to convert milliseconds to HH:MM:SS
+        # ---- Functions -------------------------------------------------------
+
+        # Convert milliseconds to HH:MM:SS
         function ms_to_hms(ms) {
             local seconds
             local minutes
@@ -261,6 +389,19 @@ function yt-transcript-parse() {
             minutes = minutes % 60;
             return sprintf("%02d:%02d:%02d", hours, minutes, seconds);
         }
+
+        # Unescape common escape sequences
+        function unescape(text) {
+            gsub(/\\n/, "\n", text);
+            gsub(/\\t/, "\t", text);
+            gsub(/\\r/, "\r", text);
+            gsub(/\\"/, "\"", text);
+            gsub(/\\\\/, "\\", text);
+            return text;
+        }
+
+        # ---- Setup -----------------------------------------------------------
+
         BEGIN {
             ms_start = 0;
             ms_end = 0;
@@ -273,42 +414,89 @@ function yt-transcript-parse() {
                 text_color_end = "\033[0m";
             }
         }
-        {
-            if ($0 ~ /"cues":/) {
-                # Start of a new cue, reset everything
-                ms_offset = 0;
+
+        # ---- Main ------------------------------------------------------------
+
+        # Ignore all lines until we reach this point
+        /"transcriptSegmentListRenderer": {/ {
+            # ---- Stop ignoring lines -----------------------------------------
+            ignore = "false";
+            next;
+        }
+
+        # Once we stop ignoring lines, parse the transcript segments
+        ignore == "false" {
+            if ($0 ~ /"transcriptSegmentRenderer": {/) {
+                # ---- Reset the segment variables -----------------------------
+                ms_start = 0;
+                ms_end = 0;
+                ms_duration = 0;
                 text = "";
-            } else if ($0 ~ /^                      ]/) {
-                # End of a cue, print the text
+            } else if ($0 ~ /"startMs":/) {
+                # ---- ms_start / Start of the segment -------------------------
+                ms_start = gensub(/"startMs": "(.*)",/, "\\1", 1);
+                if (ms_end > 0 && ms_duration == 0) {
+                    ms_duration = ms_end - ms_start;
+                } else if (ms_duration > 0 && ms_end == 0) {
+                    ms_end = ms_start + ms_duration;
+                }
+            } else if ($0 ~ /"durationMs":/) {
+                # --- ms_duration / Duration of the segment --------------------
+                ms_duration = gensub(/.*"durationMs": "(.*)".*/, "\\1", 1);
+                if (ms_start > 0 && ms_end == 0) {
+                    ms_end = ms_start + ms_duration;
+                } else if (ms_end > 0 && ms_start == 0) {
+                    ms_start = ms_end - ms_duration;
+                }
+            } else if ($0 ~ /"endMs":/) {
+                # ---- ms_end / End of the segment -----------------------------
+                ms_end = gensub(/"endMs": "(.*)",/, "\\1", 1);
+                if (ms_start > 0 && ms_duration == 0) {
+                    ms_duration = ms_end - ms_start;
+                } else if (ms_duration > 0 && ms_end == 0) {
+                    ms_end = ms_start + ms_duration;
+                }
+            } else if ($0 ~ /"text":/) {
+                # ---- text / Text of the segment ------------------------------
+                text = gensub(/.*"text" ?: ?/, "", "g", $0);
+                text = gensub(/^"(.*)"$/, "\\1", "g", text);
+            } else if ($0 ~ /^                      },/) {
+                # ---- End of a segment, print the text ------------------------
                 ms_end = ms_start + ms_duration;
                 ms_start = ms_to_hms(ms_start);
                 ms_end = ms_to_hms(ms_end);
                 ms_duration = ms_to_hms(ms_duration);
-                line = gensub(/{timeStart}/, ms_color_start ms_start ms_color_end, "g", format);
-                line = gensub(/{timeEnd}/, ms_color_start ms_end ms_color_end, "g", line);
-                line = gensub(/{timeDuration}/, ms_color_start ms_duration ms_color_end, "g", line);
-                line = gensub(/{text}/, text_color_start text text_color_end, "g", line);
-                line = gensub(/{n}/, "\n", "g", line);
-                line = gensub(/{t}/, "\t", "g", line);
-                print line;
-                # gsub("{timeStart}", ms_color_start ms_start ms_color_end, format);
-                # gsub("{timeEnd}", ms_color_start ms_end ms_color_end, format);
-                # gsub("{timeDuration}", ms_color_start ms_duration ms_color_end, format);
-                # gsub("{text}", text, format);
-                # gsub("{n}", "\n", format);
-                # print format;
-                # print ms_color_start ms_to_hms(ms_start) ms_color_end "  " text_color_start text text_color_end;
-            } else if ($0 ~ /"startOffsetMs":/) {
-                # Start offset of the cue
-                ms_start = gensub(/"startOffsetMs": "(.*)",/, "\\1", 1);
-            } else if ($0 ~ /"durationMs":/) {
-                #                             "durationMs": "3360"
-                # End offset of the cue
-                ms_duration = gensub(/.*"durationMs": "(.*)".*/, "\\1", 1);
-            } else if ($0 ~ /"simpleText":/) {
-                # Text of the cue
-                text = gensub(/.*"simpleText" ?: ?/, "", "g", $0);
-                text = gensub(/^"(.*)"$/, "\\1", "g", text);
+
+                # Validate that we have some text
+                if (text == "") {
+                    next;
+                } else {
+                    text = unescape(text);
+                }
+
+                # Split it on newlines
+                split(text, lines, "\n");
+
+                # Format the lines
+                result = "";
+                for (i = 1; i <= length(lines); i++) {
+                    text = lines[i];
+                    line = format;
+                    gsub(/{timeStart}/, ms_color_start ms_start ms_color_end, line);
+                    gsub(/{timeEnd}/, ms_color_start ms_end ms_color_end, line);
+                    gsub(/{timeDuration}/, ms_color_start ms_duration ms_color_end, line);
+                    gsub(/{text}/, text_color_start text text_color_end, line);
+                    gsub(/{n}/, "\n", line);
+                    gsub(/{t}/, "\t", line);
+                    if (result) {
+                        result = result "\n" line;
+                    } else {
+                        result = line;
+                    }
+                }
+
+                # Print it
+                print result;
             }
         }' <<< "${response}"
 }
@@ -333,6 +521,28 @@ function ms-to-hms() {
     printf "%02d:%02d:%02d" "${hours}" "${minutes}" "${seconds}"
 }
 
+# @description URL encode a string
+# @usage urlencode <string>
+function urlencode() {
+    local string="${1}"
+    local encoded=""
+    local char
+
+    for (( i=0; i<${#string}; i++ )); do
+        char="${string:$i:1}"
+        case "${char}" in
+            [a-zA-Z0-9.~_-]) encoded+="${char}" ;;
+            *) printf -v encoded "%s%%%02X" "${encoded}" "'${char}" ;;
+        esac
+    done
+
+    echo "${encoded}"
+}
+
+# Handle escaping/unescaping null bytes via \xFF
+esc0() { sed 's/\xFF/\xFF\xFF/g; s/\x00/\xFF0/g'; }
+cse0() { sed 's/\xFF0/\xFF\x00/g; s/\xFF\(.\)/\1/g'; }
+
 # @description Download a youtube video transcript
 # @usage get-transcript <video id> [<output file>]
 # @arg $1 {string} video id
@@ -344,12 +554,7 @@ function get-transcript() {
     local lang="${3}"
     local response transcript
 
-    response=$(
-        curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
-        -H 'Content-Type: application/json' \
-        --data-raw "$(yt-transcript-build-data "${video_id}" "${lang}")"
-    )
-    debug "response: ${response}"
+    response=$(yt-transcript-fetch "${video_id}" "${lang}")
     transcript=$(yt-transcript-parse "${response}")
     if [[ -z "${output_file}" ]]; then
         debug "printing transcript to stdout"
