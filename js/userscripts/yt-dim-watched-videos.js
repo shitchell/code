@@ -548,7 +548,7 @@ function dimWatchedThumbnails(
 }
 
 /** Mutation Observer for progress bars
-*********************************************************************************/
+*******************************************************************************/
 
 // Used to throttle the dimming of thumbnails and determine if a dimming is
 // scheduled. While a dimming is scheduled, no new dimmings will be scheduled,
@@ -563,8 +563,8 @@ function scheduleDimThumbnails() {
     } else {
         debug("Scheduling dimming...");
         dimTimeout = setTimeout(() => {
-            dimWatchedThumbnails()
             dimTimeout = null;
+            dimWatchedThumbnails()
         }, getConfig("dim_throttling_ms"));
     }
 }
@@ -604,19 +604,13 @@ function mutationCallback(mutations) {
 (function() {
     'use strict';
 
-    // If opaque on hover is enabled, create a class to toggle the opacity
-    if (getConfig("opaque_on_hover")) {
-        const style = document.createElement('style');
-        style.innerHTML = `
-            .opaque-on-hover {
-                transition: opacity 0.2s;
-            }
-            .opaque-on-hover:hover {
-                opacity: 1.0 !important;
-            }
-        `;
-        document.head.appendChild(style);
-    }
+    // Create a class to toggle the opacity if opaque_on_hover is enabled
+    const style = document.createElement('style');
+    style.innerHTML = `
+        .opaque-on-hover { transition: opacity 0.2s; }
+        .opaque-on-hover:hover { opacity: 1.0 !important; }
+    `;
+    document.head.appendChild(style);
 
     // Wait for the primary element to become available
     info(`waiting for '${observeParentSelector}'...`);
