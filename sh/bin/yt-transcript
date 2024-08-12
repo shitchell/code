@@ -264,6 +264,11 @@ function yt-transcript-build-params() {
     #   - The "params" value now includes a new field "*3engagement
     #     -panel-searchable-transcript-search-panel0" with a value of 8
     #   - The "params" value now includes an 8 and @ for... some reason
+    #
+    # Just got a new params that seems to be different for a different video:
+    #     Cgs3d3pudUIwc0tsdxISQ2dOaGMzSVNBbVZ1R2dBJTNEGAEqM2VuZ2FnZW1lbnQtcGFuZWwtc2VhcmNoYWJsZS10cmFuc2NyaXB0LXNlYXJjaC1wYW5lbDAAOAFAAQ%3D%3D
+    #  => \n\x0b7wznuB0sKlw\x12\x12CgNhc3ISAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+
     local video_id="${1}"
     local lang="${2:-en}"  # Default language to 'en' if not provided
     local params
