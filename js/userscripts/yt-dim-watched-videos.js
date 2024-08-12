@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dim Watched YouTube Videos
 // @namespace    http://tampermonkey.net/
-// @version      0.7
+// @version      0.9
 // @description  Dim the thumbnails of watched videos on YouTube
 // @author       Shaun Mitchell <shaun@shitchell.com>
 // @match        https://www.youtube.com/*
@@ -9,6 +9,7 @@
 // @require      https://openuserjs.org/src/libs/sizzle/GM_config.js
 // @run-at       document-end
 // @grant        GM_registerMenuCommand
+// @grant        GM_addStyle
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @license      WTFPL
@@ -310,7 +311,7 @@ const gmc = new GM_config({
         },
         save: function(config) { },
         reset: function(config) { },
-        init: function() { }
+        init: main // Wait for GM_config to load before running the main script
     }
 });
 unsafeWindow.gmc = gmc;
@@ -601,16 +602,16 @@ function mutationCallback(mutations) {
  Main script
 *******************************************************************************/
 
-(function() {
+function main() {
     'use strict';
 
+    info("Dim Watched YouTube Videos loading...");
+
     // Create a class to toggle the opacity if opaque_on_hover is enabled
-    const style = document.createElement('style');
-    style.innerHTML = `
+    GM_addStyle(`
         .opaque-on-hover { transition: opacity 0.2s; }
         .opaque-on-hover:hover { opacity: 1.0 !important; }
-    `;
-    document.head.appendChild(style);
+    `);
 
     // Wait for the primary element to become available
     info(`waiting for '${observeParentSelector}'...`);
@@ -633,4 +634,4 @@ function mutationCallback(mutations) {
         // Expose debug tools if needed
         unsafeWindow._dev = { observer, observeParent, gmc, GM_config };
     });
-})();
+}
