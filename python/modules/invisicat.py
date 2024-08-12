@@ -229,14 +229,33 @@ def _main():
         help="don't highlight ANSI escape sequences",
     )
     parser.add_argument(
-        "-n", "--names", action="store_true", dest="show_names", help="show file names"
+        "-f",
+        "--filenames",
+        action="store_true",
+        dest="show_names",
+        help="show file names",
     )
     parser.add_argument(
-        "-N",
-        "--no-names",
+        "-F",
+        "--no-filenames",
         action="store_false",
         dest="show_names",
         help="don't show file names",
+    )
+    parser.add_argument(
+        "-n",
+        "--newlines",
+        action="store_true",
+        dest="newlines",
+        default=True,
+        help="add a literal line break after each newline character",
+    )
+    parser.add_argument(
+        "-N",
+        "--no-newlines",
+        action="store_false",
+        dest="newlines",
+        help="do not add a line break after each newline (produces one line of output)",
     )
     parser.add_argument(
         "-b",
@@ -296,6 +315,9 @@ def _main():
     if not sys.stdin.isatty() and Path("-") not in args.filepaths:
         args.filepaths.append(Path("-"))
 
+    # Determine the line ending to use
+    line_ending: str = "\n" if args.newlines else ""
+
     # Process each path
     for path in args.filepaths:
         ## Print the filename if requested
@@ -346,7 +368,7 @@ def _main():
                 text = bytestr(line, args.encoding)
 
             # Finally, print the text
-            print(text)
+            print(text, end=line_ending)
 
 
 if __name__ == "__main__":
