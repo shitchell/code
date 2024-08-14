@@ -30,6 +30,7 @@
 # compiled code
 *.class
 __pycache__/
+__pybuild__/
 *.py[cod]
 *.jar
 
