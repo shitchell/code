@@ -131,14 +131,14 @@ function help-full() {
     -c/--color <when>          when to use color ("auto", "always", "never")
     -s/--silent                suppress all output
     -l/--list                  list all available alarms
+    -n/--name <alarm>          the alarm to use (can be specified multiple times)
     -d/--alarm-dir <dir>       directory containing alarm sounds
-    -w/--when <time>           when to play the alarm
     -r/--repeat <times>        number of times to repeat the alarm (default: 3)
     -S/--snooze <seconds>      interval between alarm repeats (default: 300)
     -v/--volume <percent>      volume of the alarm (default: 100)
     -V/--sys-volume <percent>  system volume to set before playing the alarm
     -f/--failsafe              if no alarm is found, play a built-in alarm
-    [<alarm1> [alarm2 ...]]    alarm sounds to play
+    <time>                     when to play the alarm
 EOF
 }
 
@@ -150,9 +150,11 @@ function parse-args() {
             -c | --config-file)
                 let i++
                 CONFIG_FILE="${!i}"
+                debug "using configuration file '${CONFIG_FILE}'"
                 ;;
         esac
     done
+    debug "looking for config: '${HOME}/.$(basename "${0}").conf'"
     [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
 
     # Default values
@@ -162,13 +164,18 @@ function parse-args() {
     DO_LIST=false
     ALARM_DIR="${ALARM_DIR}"
     ALARM_DIRS=""  # will be set after parsing the arguments
+    DEFAULT_ALARM_DIRS=(
+        "${HOME}/.local/share/alarm"
+        "/usr/local/share/alarm"
+        "/usr/share/alarm"
+    )
     WHEN=""
-    REPEAT=3
-    SNOOZE=300  # 5 minutes
-    ALARM_VOLUME=100
-    SYS_VOLUME=""  # do not set system volume unless specified
+    REPEAT="${REPEAT:-3}"
+    SNOOZE="${SNOOZE:-300}"  # 5 minutes
+    ALARM_VOLUME="${VOLUME:-100}"
+    SYS_VOLUME="${SYS_VOLUME}"  # do not set system volume unless specified
     DO_FAILSAFE=false
-    ALARM_NAMES=()
+    ALARM_NAMES=( "${ALARM_NAMES[@]}" )
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -194,6 +201,10 @@ function parse-args() {
                 ;;
             -l | --list)
                 DO_LIST=true
+                ;;
+            -n | --name)
+                ALARM_NAMES+=("${2}")
+                shift 1
                 ;;
             -d | --alarm-dir)
                 ALARM_DIR="${2}"
@@ -232,7 +243,7 @@ function parse-args() {
                 return ${E_ERROR}
                 ;;
             *)
-                ALARM_NAMES+=("${1}")
+                WHEN="${1}"
                 ;;
         esac
         shift 1
@@ -316,7 +327,7 @@ function parse-args() {
             return ${E_ERROR}
         fi
     fi
-    for dir in "${HOME}/.local/share/alarm" "/usr/share/alarm"; do
+    for dir in "${DEFAULT_ALARM_DIRS[@]}"; do
         if [[ -d "${dir}" ]]; then
             ALARM_DIRS+=("${dir}")
         fi
@@ -404,7 +415,11 @@ function play-alarm() {
         ORIGINAL_VOLUME=$(run-available get-volume)
         export ORIGINAL_VOLUME
         if [[ -n "${ORIGINAL_VOLUME}" ]]; then
-            trap "run-available set-volume ${ORIGINAL_VOLUME}" EXIT
+            function _restore_volume() {
+                debug "restoring volume to original: ${ORIGINAL_VOLUME}"
+                run-available set-volume "${ORIGINAL_VOLUME}"
+            }
+            trap _restore_volume EXIT
         fi
         set-sys-vol "${sys_volume}"
     fi
