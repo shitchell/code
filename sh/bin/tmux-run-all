@@ -6,17 +6,92 @@ include-source 'colors.sh'
 
 SHELLS=(bash zsh fish ksh xonsh)
 
-if [[ ${#} -eq 0 ]]; then
+# Default options
+COMMAND=()
+PANE_GLOB=""
+DO_DRY_RUN=false
+SHOW_SKIPPED=false
+
+# Help text
+function usage() {
+    echo "usage: $(basename "${0}") [-h|--help] [-m|--match <glob>] [-n|--dry-run] [-s|--hide-skipped] [-S|--show-skipped] [--] <command>"
+}
+function help() {
+    usage
+    echo
+    cat <<EOF
+Run a command on all tmux panes that are simply running a shell
+
+Options:
+  -h                   Show usage
+  --help               Show this help text
+  -m/--match <glob>    Only run the command on panes that match the glob pattern
+  -n/--dry-run         Don't do anything, just show what would be done
+  -s/--hide-skipped    Don't show the panes that were skipped
+  -S/--show-skipped    Show the panes that were skipped
+  command              The command to run
+EOF
+}
+
+# Parse options
+while [[ ${#} -gt 0 ]]; do
+    case "${1}" in
+        -h)
+            usage
+            exit 0
+            ;;
+        --help)
+            help
+            exit 0
+            ;;
+        -m | --match | --match-panes)
+            PANE_GLOB="${2}"
+            shift 2
+            ;;
+        -n | --dry-run)
+            DO_DRY_RUN=true
+            shift 1
+            ;;
+        -s | --hide-skipped)
+            SHOW_SKIPPED=false
+            shift 1
+            ;;
+        -S | --show-skipped)
+            SHOW_SKIPPED=true
+            shift 1
+            ;;
+        --)
+            shift 1
+            break
+            ;;
+        *)
+            COMMAND+=("${1}")
+            shift 1
+            ;;
+    esac
+done
+
+# If there are any remaining arguments, they are the command
+if [[ ${#} -gt 0 ]]; then
+    COMMAND+=("${@}")
+fi
+
+if [[ ${#COMMAND[@]} -eq 0 ]]; then
     echo "usage: $(basename "${0}") <command> [<args> ...]" >&2
     exit 1
 fi
 
 # Build the command string
-COMMAND_STR="${1}"
-shift 1
-[[ ${#} -gt 0 ]] && COMMAND_STR+=$(printf ' %q' "${@}")
+COMMAND_STR="${COMMAND[0]}"
+[[ ${#COMMAND[@]} -gt 1 ]] && COMMAND_STR+=$(printf ' %q' "${COMMAND[@]:1}")
 
-echo "> ${C_GREEN}${COMMAND_STR}${S_RESET}"
+echo -n "> ${C_GREEN}${COMMAND_STR}${S_RESET}"
+
+if ${DO_DRY_RUN}; then
+    echo " ${S_DIM}(dry run)${S_RESET}"
+else
+    echo
+fi
 
 # Loop over all of the panes, running the command on those with a shell
 SKIPPED=()
@@ -24,32 +99,60 @@ TMUX_FORMAT_STR=$'#{session_name}:#{window_index}.#{pane_index}\t'
 TMUX_FORMAT_STR+='#{pane_current_command}'
 THIS_PANE_ID=$(tmux display-message -p "${TMUX_FORMAT_STR%$'\t'*}")
 while read -r pane_id command; do
-    echo -n "- ${pane_id}"
-    for shell in "${SHELLS[@]}"; do
-        if [[ "${command}" == "${shell}" ]]; then
-        # if [[ "${command}" == "zsh" ]]; then
-            # Skip (and save for last) the current pane
-            if [[ "${pane_id}" == "${THIS_PANE_ID}" ]]; then
-                echo " ${S_DIM}(skipped: current pane)${S_RESET}"
-                continue 2
-            fi
-            tmux send-keys -t "${pane_id}" "${COMMAND_STR}" Enter
-            echo
-            continue 2
-        fi
-    done
-    echo " ${S_DIM}(skipped: ${C_GREEN}${command}${S_RESET}${S_DIM})${S_RESET}"
-    SKIPPED+=("${pane_id}")
-done < <(tmux list-panes -a -F "${TMUX_FORMAT_STR}")
+    skip_reason=""
+    has_shell=false
 
-if [[ ${#SKIPPED[@]} -gt 0 ]]; then
+    # Determine if this pane has a shell or should be skipped
+    if [[ -n "${PANE_GLOB}" && ! "${pane_id}" == ${PANE_GLOB} ]]; then
+        # Check if the pane matches the glob pattern
+        # echo " ${S_DIM}(skipped: does not match pattern)${S_RESET}"
+        skip_reason="pattern mismatch"
+    elif [[ "${pane_id}" == "${THIS_PANE_ID}" ]]; then
+        # Skip (and save for last) the current pane
+        # echo " ${S_DIM}(skipped: current pane)${S_RESET}"
+        skip_reason="current pane"
+    else
+        # Check if the pane command is a shell
+        for shell in "${SHELLS[@]}"; do
+            if [[ "${command}" == "${shell}" ]]; then
+                has_shell=true
+                break
+            fi
+        done
+        if ! ${has_shell}; then
+            skip_reason="${C_GREEN}${command}${S_RESET}"
+        fi
+    fi
+
+    if ${SHOW_SKIPPED} || (${has_shell} && [[ -z "${skip_reason}" ]]); then
+        printf -- '- %s' "${pane_id}"
+    fi
+
+    if ${has_shell} && [[ -z "${skip_reason}" ]]; then
+        if ${DO_DRY_RUN}; then
+            echo
+        else
+            tmux send-keys -t "${pane_id}" "${COMMAND_STR}" Enter
+        fi
+    elif ! ${SHOW_SKIPPED}; then
+        [[ -n "${skip_reason}" ]] && skip_reason=": ${skip_reason}"
+        echo " ${S_DIM}(skipped${skip_reason})${S_RESET}"
+        SKIPPED+=("${pane_id}")
+    fi
+done < <(tmux list-panes -a -F "${TMUX_FORMAT_STR}")
+echo
+
+if ${SHOW_SKIPPED} && [[ ${#SKIPPED[@]} -gt 0 ]]; then
     echo
     echo "${S_BOLD}Skipped${S_RESET}"
     printf -- "- %s\n" "${SKIPPED[@]}"
 fi
 
-# Run the command on the current pane
+# Skip this pane if it doesn't match the pattern
+if [[ -n "${PANE_GLOB}" && ! "${THIS_PANE_ID}" == ${PANE_GLOB} ]]; then
+    exit 0
+fi
 echo
 echo "${S_BOLD}Running in Current Pane${S_RESET}"
 echo "> ${C_GREEN}${COMMAND_STR}${S_RESET}"
-tmux send-keys -t "${THIS_PANE_ID}" "${COMMAND_STR}" Enter
+! ${DO_DRY_RUN} && tmux send-keys -t "${THIS_PANE_ID}" "${COMMAND_STR}" Enter
