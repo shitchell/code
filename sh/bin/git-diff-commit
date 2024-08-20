@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+opts=( "${@}" )
+[ ${#opts[@]} -eq 0 ] && opts=(-- .)
+
+git add "${opts[@]}" || {
+    echo "fatal: could not add files" >&2
+    exit 1
+}
+
+# Only run if files are staged
+if ! git diff --cached --quiet &>/dev/null; then
+    git --no-pager ds \
+        && read -ep "Commit Message: " msg \
+        && git commit -m "${msg}"
+else
+    echo "nothing to do..."
+fi
