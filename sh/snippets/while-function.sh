@@ -21,6 +21,8 @@
 # - returns 0 when the function is ready for the next iteration to start
 # - returns 1 when the function is done and the loop should exit
 
+## ---- While loop function ----------------------------------------------------
+
 function get-integers() {
     echo "[get-integers] args: ${*}" >&2
     local -- integer
