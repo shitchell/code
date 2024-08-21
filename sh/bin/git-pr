@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+#
+# Show all PR refs or checkout a PR branch (if the git host supports it)
+
+PR_REF="${1}"
+REMOTE=$(git remote)
+readarray -t PR_REFS < <(
+    git ls-remote "${REMOTE}" 'refs/pull/*' | awk '{print $2}'
+)
+
+# If no PR is specified, list all PR refs
+if [ -z "${PR_REF}" ]; then
+    printf "%s\n" "${PR_REFS[@]}"
+    exit 0
+fi
+
+# Validate the PR ref exists, else we'll find the closest match
+exists=false
+for REMOTE_PR in "${PR_REFS[@]}"; do
+    if [[ "${REMOTE_PR}" == "${PR_REF}" ]]; then
+        exists=true
+        break
+    fi
+done
+if ! ${exists}; then
+    # echo "info: PR ref ${PR_REF} not found, searching for closest match"
+    if [[ "${PR_REF}" =~ ([0-9]+)(/[^/]+)? ]]; then
+        PR_NUM="${BASH_REMATCH[1]}"
+        PR_TYPE="${BASH_REMATCH[2]}"
+
+        # Find the closest PR ref
+        matches=()
+        # echo "info: based on PR number ${PR_NUM} and type ${PR_TYPE}"
+        for REMOTE_PR in "${PR_REFS[@]}"; do
+            if [[ "${REMOTE_PR}" =~ ([0-9]+)(/[^/]+)? ]]; then
+                REMOTE_PR_NUM="${BASH_REMATCH[1]}"
+                REMOTE_PR_TYPE="${BASH_REMATCH[2]}"
+                # Check based on number, which should always be present
+                if [[ "${REMOTE_PR_NUM}" == "${PR_NUM}" ]]; then
+                    ## If a PR type was given, check that as well
+                    if [[ -n "${PR_TYPE}" ]]; then
+                        if [[ "${REMOTE_PR_TYPE}" == "${PR_TYPE}" ]]; then
+                            matches+=("${REMOTE_PR}")
+                        fi
+                    else
+                        # If the number matches and no type was given, consider it a match
+                        matches+=("${REMOTE_PR}")
+                    fi
+                fi
+            fi
+        done
+
+        # Check the matches
+        case ${#matches[@]} in
+            0)
+                echo "fatal: no PR ref found for ${PR_REF}" >&2
+                exit 1
+                ;;
+            1)
+                PR_REF="${matches[0]}"
+                echo "info: using PR ref ${PR_REF}"
+                ;;
+            *)
+                echo "fatal: multiple PR refs found for ${PR_REF}:" >&2
+                printf "%s\n" "${matches[@]}"
+                exit 1
+                ;;
+        esac
+    else
+        echo "fatal: invalid PR ref ${PR_REF}" >&2
+        exit 1
+    fi
+fi
+
+# If a PR is specified, create a new pr/* branch pointing to the PR ref
+## Strip the leading 'refs/' from the PR ref if it exists
+PR_REF="${PR_REF/refs\//}"
+## Strip the leading 'pull/' from the PR ref if it exists
+PR_REF="${PR_REF/pull\//}"
+## Create the local branch name
+PR_BRANCH="pr/${PR_REF}"
+## Ensure the PR ref has the 'pull/' prefix
+PR_REF="pull/${PR_REF}"
+## Fetch the PR ref into a new branch and check it out if successful
+if git fetch "${REMOTE}" "${PR_REF}:${PR_BRANCH}"; then
+    # Ensure the upstream is set correctly
+    git branch --set-upstream-to="${REMOTE}/${PR_REF}" "${PR_BRANCH}"
+    git checkout "${PR_BRANCH}"
+else
+    echo "fatal: failed to fetch PR ref ${PR_REF} from ${REMOTE}" >&2
+fi
