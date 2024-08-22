@@ -559,6 +559,10 @@ function __install-util__gpg-ubuntu() {
     update-alternatives --config pinentry
 }
 
+function __install-util__python-dependencies-termux() {
+    # pkg install build-essential libbz2 libffi-static gdbm-static liblzma-static ncurses-ui-libs readline-static libsqlite-static openssl-static python-static python-pip tk xz-utils zlib-static
+}
+
 function __install-util__python-dependencies-ubuntu() {
     require --root --os ubuntu apt
 
