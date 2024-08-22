@@ -560,7 +560,25 @@ function __install-util__gpg-ubuntu() {
 }
 
 function __install-util__python-dependencies-termux() {
-    # pkg install build-essential libbz2 libffi-static gdbm-static liblzma-static ncurses-ui-libs readline-static libsqlite-static openssl-static python-static python-pip tk xz-utils zlib-static
+    require pkg --is-set TERMUX_VERSION
+
+    pkg update
+    pkg install \
+        build-essential \
+        libbz2 \
+        libffi-static \
+        gdbm-static \
+        liblzma-static \
+        ncurses-ui-libs \
+        readline-static \
+        libsqlite-static \
+        openssl-static \
+        openssl \
+        python-static \
+        python-pip \
+        tk \
+        xz-utils \
+        zlib-static
 }
 
 function __install-util__python-dependencies-ubuntu() {
@@ -606,6 +624,41 @@ function __install-util__python-dependencies-rhel() {
         sqlite-devel \
         xz-devel \
         zlib-devel
+}
+
+function __install-util__python-dependencies() {
+    # Attempt to determine which dependencies to install based on the OS
+    case "$(uname -s)" in
+        Linux)
+            if [[ -f /etc/os-release ]]; then
+                case "$(grep -Po '(?<=^ID=).+' /etc/os-release)" in
+                    ubuntu)
+                        __install-util__python-dependencies-ubuntu
+                        ;;
+                    rhel)
+                        __install-util__python-dependencies-rhel
+                        ;;
+                    *)
+                        echo "error: unsupported OS" >&2
+                        return 1
+                        ;;
+                esac
+            elif [[ -n "${TERMUX_VERSION}" ]]; then
+                __install-util__python-dependencies-termux
+            else
+                echo "error: unsupported OS" >&2
+                return 1
+            fi
+            ;;
+        Darwin)
+            echo "error: unsupported OS" >&2
+            return 1
+            ;;
+        *)
+            echo "error: unsupported OS" >&2
+            return 1
+            ;;
+    esac
 }
 
 function __install-util__pyenv-shared() {
