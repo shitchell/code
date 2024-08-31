@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+#
+# Backup files to `/tmp` retaining all permissions, ownership, timestamps, and
+# absolute path.
+
+# Default values
+FILES=()
+FILES_ABS=()
+TAR_ARGS=( --verbose )
+TAR_DIR="/tmp/root-backup"
+TAR_FILENAME="$(hostname)-$(date +%Y-%m-%d).tar"
+TAR_FILE=""  # set after parsing options if not set by options
+DO_LIST=false
+
+# Parse options
+while [[ ${#} -gt 0 ]]; do
+    case "${1}" in
+        -h | --help)
+            echo "Usage: ${0} [OPTIONS] [FILES...]"
+            echo
+            echo "Options:"
+            echo "  -h, --help  Display this help message"
+            echo
+            echo "Arguments:"
+            echo "  FILES  Files to backup"
+            exit
+            ;;
+        -d | --dir)
+            TAR_DIR="${2}"
+            shift 1
+            ;;
+        -f | --file)
+            TAR_FILE="${2}"
+            shift 1
+            ;;
+        --name)
+            TAR_FILENAME="${2}"
+            shift 1
+            ;;
+        --list)
+            DO_LIST=true
+            ;;
+        -*)
+            TAR_ARGS+=("${1}")
+            ;;
+        --)
+            shift 1
+            FILES+=("$@")
+            break
+            ;;
+        *)
+            FILES+=("${1}")
+            ;;
+    esac
+    shift 1
+done
+
+# Set the tarball filepath
+if [[ -z "${TAR_FILE}" ]]; then
+    TAR_FILE="${TAR_DIR}/${TAR_FILENAME}"
+fi
+TAR_DIR=$(dirname "${TAR_FILE}")
+
+# If listing, print the tarball contents and exit
+if ${DO_LIST}; then
+    tar --list --verbose --file="${TAR_FILE}"
+    exit
+fi
+
+# Ensure some files were given
+if [[ ${#FILES[@]} -eq 0 ]]; then
+    echo "error: no files specified" >&2
+    exit 1
+fi
+
+# Ensure the backup directory exists
+mkdir -p "${TAR_DIR}" || {
+    echo "error: failed to create backup directory: ${TAR_DIR}" >&2
+    exit 1
+}
+
+# Convert each of the files to an absolute path
+for FILE in "${FILES[@]}"; do
+    if [[ -e "${FILE}" ]]; then
+        FILES_ABS+=("$(realpath "${FILE}")")
+    else
+        echo "warning: file does not exist, skipping: ${FILE}" >&2
+    fi
+done
+
+# Create or append to the tarball
+[[ -f "${TAR_FILE}" ]] && action=append || action=create
+TAR_CMD=(
+    tar --${action} \
+        --xattrs \
+        --preserve-permissions \
+        --absolute-names \
+        --file="${TAR_FILE}" \
+        "${TAR_ARGS[@]}" \
+        -- "${FILES_ABS[@]}"
+)
+echo "> ${TAR_CMD[*]}"
+"${TAR_CMD[@]}" || {
+    echo "error: failed to append files to tarball: ${TAR_FILE}" >&2
+    exit 1
+}
