@@ -4,15 +4,16 @@
 # a little bit more datums to determine extra information.
 #
 # Possible values:
-# - Android [<name> [<version>]]
-# - Android Termux <version>
-# - Linux WSL [<name> [<version]]      (e.g.: WSL Ubuntu 20.04)
-# - Linux WSL2 [<name [<version]]      (e.g.: WSL2 Ubuntu 20.04)
-# - Linux [<name> [<version>]]         (e.g.: Linux Ubuntu 20.04)
+# - Android
+# - Cygwin
+# - Linux
 # - Mac
 # - MacM1
+# - Termux
+# - WSL
+# - WSL2
 # - Windows
-# - UNKNOWN:`uname -a`
+# - UNKNOWN:<uname -a>
 #
 # Where <name> and <version> appear, they will come from `/etc/os-release`. For
 # any environment except UNKNOWN, if there is an `/etc/os-release` file, it will
