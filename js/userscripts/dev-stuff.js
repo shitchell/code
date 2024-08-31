@@ -18,7 +18,8 @@ function mapToStyle(styles) {
 }
 
 class Debugger {
-    static name = "debugger";
+    // Set the default name to the name of the loaded script
+    static name = GM.info.script.name;
     static level = "debug";
     static levels = ["debug", "info", "warn", "error"];
     static styles = {
