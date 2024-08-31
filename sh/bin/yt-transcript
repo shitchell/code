@@ -241,7 +241,8 @@ function yt-transcript-build-params() {
     #       '
     #
     # The params value is a base64 encoded string that decodes to the following:
-    #   \n\x0bb_TkFhj9mgk\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    #   CgtiX1RrRmhqOW1naxIOQ2dBU0FtVnVHZ0ElM0QYASozZW5nYWdlbWVudC1wYW5lbC1zZWFyY2hhYmxlLXRyYW5zY3JpcHQtc2VhcmNoLXBhbmVsMAA4AUAB
+    #   => \n\x0bb_TkFhj9mgk\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
     # The segment "CgASAmVuGgA%3D" decodes to:
     #   \n\x00\x12\x02en\x1a\x00
     #
@@ -266,8 +267,29 @@ function yt-transcript-build-params() {
     #   - The "params" value now includes an 8 and @ for... some reason
     #
     # Just got a new params that seems to be different for a different video:
-    #     Cgs3d3pudUIwc0tsdxISQ2dOaGMzSVNBbVZ1R2dBJTNEGAEqM2VuZ2FnZW1lbnQtcGFuZWwtc2VhcmNoYWJsZS10cmFuc2NyaXB0LXNlYXJjaC1wYW5lbDAAOAFAAQ%3D%3D
-    #  => \n\x0b7wznuB0sKlw\x12\x12CgNhc3ISAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    #   Cgs3d3pudUIwc0tsdxISQ2dOaGMzSVNBbVZ1R2dBJTNEGAEqM2VuZ2FnZW1lbnQtcGFuZWwtc2VhcmNoYWJsZS10cmFuc2NyaXB0LXNlYXJjaC1wYW5lbDAAOAFAAQ%3D%3D
+    #   => \n\x0b7wznuB0sKlw\x12\x12CgNhc3ISAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    # The above rules incorrectly produced the following:
+    #   => \n\x0b7wznuB0sKlw\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    #   => CgASAmVuGgA%3D = \n\x03asr\x12\x02en\x1a\x00
+    #
+    # All collected decoded params side-by-side:
+    #   b_TkFhj9mgk: \n\x0bb_TkFhj9mgk\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    #   7wznuB0sKlw: \n\x0b7wznuB0sKlw\x12\x12CgNhc3ISAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
+    #
+    # Adjusted rules for the new params:
+    #   - \n\x0b
+    #   - {{VIDEO_ID}} (e.g. 7wznuB0sKlw)
+    #   - \x12
+    #   - (\x0e | \x12) ??
+    #   - {{LANG_B64}} (e.g. \n\x00\x12\x02en\x1a\x00 => CgASAmVuGgA%3D)
+    #   - \x18\x01
+    #   - *3engagement-panel-searchable-transcript-search-panel0
+    #   - \x00
+    #   - 8 (??)
+    #   - \x01
+    #   - @ (??)
+    #   - \x01
 
     local video_id="${1}"
     local lang="${2:-en}"  # Default language to 'en' if not provided
