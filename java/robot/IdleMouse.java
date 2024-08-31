@@ -23,9 +23,10 @@ import java.util.regex.Matcher;
 
 public class IdleMouse
 {
-    int idleTime = 5; // Default idle time in seconds
-    int xOffset = 1; // Default x offset for jiggling the mouse
-    int yOffset = 1; // Default y offset for jiggling the mouse
+    int idleTime = 5;                 // Default idle time in seconds
+    int xOffset = 1;                  // Default x offset for jiggling the mouse
+    int yOffset = 1;                  // Default y offset for jiggling the mouse
+    static final int sleepTime = 250; // Default sleep time for delays
     Robot robot;
     private static boolean DEBUG = false;
     private static String[] timePatterns = {
@@ -339,7 +340,7 @@ public class IdleMouse
             // Sleep for a bit before checking again
             try
             {
-                Thread.sleep(500);
+                Thread.sleep(IdleMouse.sleepTime);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -365,6 +366,17 @@ public class IdleMouse
         timeout *= 1000; // Convert seconds to milliseconds
         long endTime = System.currentTimeMillis() + timeout;
         PointerInfo pointerInfo = MouseInfo.getPointerInfo();
+        // Sometimes pointerInfo is null or becomes null if the mouse is moved
+        // offscreen, the mouse is disconnected, or the system is put to sleep
+        if (pointerInfo == null)
+        {
+            try {
+                Thread.sleep(IdleMouse.sleepTime);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
         int x = pointerInfo.getLocation().x;
         int y = pointerInfo.getLocation().y;
         int xNew = 0;
@@ -398,7 +410,7 @@ public class IdleMouse
             // Sleep for a bit before checking again
             try
             {
-                Thread.sleep(250);
+                Thread.sleep(IdleMouse.sleepTime);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -438,7 +450,7 @@ public class IdleMouse
 
             try
             {
-                Thread.sleep(250);
+                Thread.sleep(IdleMouse.sleepTime);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
