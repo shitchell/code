@@ -20,21 +20,20 @@ declare -ri E_ERROR=1
 ## traps #######################################################################
 ################################################################################
 
-# @description Silence all output
-# @usage silence-output
 function silence-output() {
+    :  'Silence all script output'
     exec 3>&1 4>&2 1>/dev/null 2>&1
 }
 
-# @description Restore stdout and stderr
 # @usage restore-output
 function restore-output() {
+    :  'Restore script output after a call to `silence-output`'
     [[ -t 3 ]] && exec 1>&3 3>&-
     [[ -t 4 ]] && exec 2>&4 4>&-
 }
 
-# @description Exit trap
 function trap-exit() {
+    :  'An exit trap to restore output on script end'
     restore-output
 }
 trap trap-exit EXIT
@@ -60,14 +59,14 @@ function help-full() {
     echo "Some extra info."
     echo
     echo "Options:"
-    cat << EOF
+    cat << '    EOF'
     -h                    display usage
     --config-file <file>  use the specified configuration file
     --help                display this help message
     -c/--color <when>     when to use color ("auto", "always", "never")
     -s/--silent           suppress all output
     {{TODO: INSERT OPTIONS HERE}}
-EOF
+    EOF
 }
 
 function parse-args() {
@@ -169,9 +168,18 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
-# @description Do stuff
-# @usage do-stuff
 function do-stuff() {
+    :  'This function does the stuff
+
+        @usage
+            [<arg>]
+
+        @arg <arg>
+            This arg is very arg-like
+
+        @stdout
+            A message, optionally about <arg>
+    '
     echo -n "i'm doin the stuff"
     [[ -n "${1}" ]] && echo -e " to ${C_CYAN}${1}${S_RESET}" || echo
 }

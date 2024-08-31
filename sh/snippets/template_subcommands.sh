@@ -188,7 +188,7 @@ function parse-args() {
         help-full >&2
         return ${E_INVALID_ACTION}
     fi
-    
+
     # If in silent mode, silence the output
     ${DO_SILENT} && silence-output
 
@@ -272,11 +272,11 @@ function __help-_test() {
     echo "Do stuff."
     echo
     echo "Options:"
-    cat << EOF
+    cat << '    EOF'
     -h                       display usage
     --help                   display this help message
     -m/--message <msg>       the message to print
-EOF
+    EOF
 }
 
 function __action-_test() {
