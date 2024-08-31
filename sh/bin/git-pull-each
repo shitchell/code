@@ -12,12 +12,15 @@ if [ $? -ne 0 ]; then
 fi
 
 # set up colors
-function setup-colors() {
+if [[ -t 1 ]]; then
     C_GREEN='\e[32m'
     S_RESET='\e[0m'
     S_BOLD='\e[1m'
-}
-[[ -t 1 ]] && setup-colors
+else
+    C_GREEN=''
+    S_RESET=''
+    S_BOLD=''
+fi
 
 # if no branches are specified, pull all non-worktree branches that exist both
 # locally and on the remote

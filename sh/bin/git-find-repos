@@ -27,6 +27,8 @@ function help-full() {
     -G/--no-include-git-dir     do not include the '.git/' directory in output
     *-s/--include-submodules     include submodules in the output
     *-S/--no-include-submodules  do not include submodules in the output
+    -w/--include-worktrees      include worktrees in the output
+    -W/--no-include-worktrees   do not include worktrees in the output
     -l/--follow-symlinks        follow symlinks
     -L/--no-follow-symlinks     do not follow symlinks
 
@@ -41,6 +43,7 @@ function parse-args() {
     DO_INCLUDE_GIT_DIR=false
     DO_INCLUDE_SUBMODULES=false
     DO_FOLLOW_SYMLINKS=false
+    DO_INCLUDE_WORKTREES=true
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -76,6 +79,12 @@ function parse-args() {
             -S | --no-include-submodules)
                 DO_INCLUDE_SUBMODULES=false
                 ;;
+            -w | --include-worktrees)
+                DO_INCLUDE_WORKTREES=true
+                ;;
+            -W | --no-include-worktrees)
+                DO_INCLUDE_WORKTREES=false
+                ;;
             -l | --follow-symlinks)
                 DO_FOLLOW_SYMLINKS=true
                 ;;
@@ -109,14 +118,10 @@ function parse-args() {
 function main() {
     parse-args "${@}" || return ${?}
     
-    local find_args bare_repos
+    local find_args bare_repos worktrees
     declare -A bare_repos
 
     # Find all git repositories in the specified directory
-    # local git_repos=()
-    # while IFS= read -r repo; do
-        # git_repos+=("${repo}")
-    # done < <(find -L "${DIRECTORY}" -maxdepth ${MAXDEPTH} -type d -name '\.git' -printf '%h\n')
     find_args=()
     ${DO_FOLLOW_SYMLINKS} && find_args+=("-L")
     find_args+=(
@@ -157,6 +162,30 @@ function main() {
             bare_repos["${repo}"]=false
         fi
     done < <(find "${find_args[@]}")
+    
+    # Find all worktrees
+    if ${DO_INCLUDE_WORKTREES}; then
+        find_args=()
+        worktrees=()
+        ${DO_FOLLOW_SYMLINKS} && find_args+=("-L")
+        find_args+=(
+            "${DIRECTORY}"
+            "-maxdepth" ${MAXDEPTH}
+            "-type" "f"
+            "-name" "\.git"
+        )
+        # ! ${DO_INCLUDE_GIT_DIR} && find_args+=("-printf" "%h\n")
+        while IFS= read -r git_file; do
+            # Minimal check that the file includes "gitdir:"
+            if grep -qE '^gitdir' "${git_file}"; then
+                # Remove the git file if requested
+                ! ${DO_INCLUDE_GIT_DIR} \
+                    && repo="${git_file%/*}" \
+                    || repo="${git_file}"
+                echo "${repo}"
+            fi
+        done < <(find "${find_args[@]}")
+    fi
 }
 
 ## run #########################################################################
