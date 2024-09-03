@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+#
+# Compare contents on the clipboard by either:
+# A) Copying both separately and letting this script know when
+#    1. Begin this program
+#    2. Copy the first snippet
+#    3. Hit <enter> to load the first snippet into memory
+#    4. Copy the second snippet
+#    5. Hit <enter> to load the second snippet into memory
+#    6. Compare the two snippets
+# B) Copying both snippets back-to-back and running this script (note: only
+#    works for clipboard managers that support storing clipboard history)
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'colors.sh'
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+# @description Silence all output
+# @usage silence-output
+function silence-output() {
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @description Restore stdout and stderr
+# @usage restore-output
+function restore-output() {
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+# @description Exit trap
+function trap-exit() {
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## color aliases ###############################################################
+################################################################################
+
+function set-color-aliases() {
+    C_PROMPT="${S_DIM}${S_BOLD}"
+    C_DONE="${C_PROMPT}${C_GREEN}"
+    C_INPUT="${S_DIM}"
+    C_HEADER="${S_BOLD}${C_CYAN}"
+}
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    # {{TODO: UPDATE USAGE}}
+    echo "usage: $(basename "${0}") [-h]"
+}
+
+function help-epilogue() {
+    # {{TODO: UPDATE EPILOGUE}}
+    echo "do stuff"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Some extra info."
+    echo
+    echo "Options:"
+    cat << EOF
+    -h                    display usage
+    --help                display this help message
+    -c/--color <when>     when to use color ("auto", "always", "never")
+    -s/--silent           suppress all output, only return exit status
+   *-A/--hist-a <index>   use the specified index for the first snippet
+   *-B/--hist-b <index>   use the specified index for the second snippet
+   *-H/--history <a,b>    use the specified indices for the snippets (shorthand
+                          for -A <a> -B <b>)
+   *-R/--recent           compare the last two clipboard entries (shorthand for
+                          -H -1,-2)
+    -C/--copy             copy both snippets back-to-back and compare them
+    -P/--paste            paste the clipboard contents to compare
+    -F/--file <file>      compare the clipboard contents to the specified file
+    --git                 use 'git diff --no-index' to compare the clipboard
+                          contents to the specified file
+    --diff-cmd <cmd>      use the specified diff command
+    [diff options]        additional options to pass to the diff command
+
+    * not yet implemented
+EOF
+}
+
+function parse-args() {
+    # Default values
+    FILEPATH=
+    DO_COLOR=false
+    DO_SILENT=false
+    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+    MODE="PASTE" # INDEX, COPY, PASTE
+    INDEX_A=
+    INDEX_B=
+    FILE_CONTENTS_A=  # this will be what we actually compare, clipboard or filepath
+    FILE_CONTENTS_B=  # this will be what we actually compare, clipboard or filepath
+    DIFF_CMD=(diff)
+    DIFF_ARGS=()
+    TMP_DIR=
+    # I'm not sure if 0 and 1 or -1 and -2 will be used for the current and
+    # previous clipboard indices, respectively, so I'm setting a couple
+    # variables to make it easier to change later
+    CLIPBOARD_INDEX_NOW=0
+    CLIPBOARD_INDEX_PREV=1
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
+                ;;
+            -c | --color)
+                color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            -A | --hist-a)
+                MODE="INDEX"
+                INDEX_A="${2}"
+                shift 1
+                ;;
+            -B | --hist-b)
+                MODE="INDEX"
+                INDEX_B="${2}"
+                shift 1
+                ;;
+            -H | --history)
+                MODE="INDEX"
+                if [[ "${2}" == *","* ]]; then
+                    INDEX_A="${2%%,*}"
+                    INDEX_B="${2##*,}"
+                else
+                    echo "error: expected format <A>,<B>, got: ${2}" >&2
+                    exit 1
+                fi
+                shift 1
+                ;;
+            -R | --recent)
+                MODE="INDEX"
+                INDEX_A=${CLIPBOARD_INDEX_NOW}
+                INDEX_B=${CLIPBOARD_INDEX_PREV}
+                ;;
+            -C | --copy)
+                MODE="COPY"
+                ;;
+            -P | --paste)
+                MODE="PASTE"
+                ;;
+            -F | --file)
+                FILEPATH="${2}"
+                shift 1
+                ;;
+            --git)
+                DIFF_CMD=(git diff --no-index)
+                ;;
+            --diff-cmd)
+                DIFF_CMD=(${2})
+                shift 1
+                ;;
+            --)
+                shift 1
+                if [[ ${#} -gt 0 ]]; then
+                    FILEPATH="${1}"
+                fi
+                break
+                ;;
+            -*)
+                # echo "error: unknown option: ${1}" >&2
+                # return ${E_ERROR}
+                DIFF_ARGS+=("${1}")
+                ;;
+            *)
+                FILEPATH="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        if ${DO_COLOR}; then
+            setup-colors && set-color-aliases
+        else
+            unset-colors
+        fi
+    fi
+
+    # If indices are given, ensure they are valid
+    if [[ -n "${INDEX_A}" && ! "${INDEX_A}" =~ ^-?[0-9]+$ ]]; then
+        echo "error: invalid index: ${INDEX_A}" >&2
+        return ${E_ERROR}
+    fi
+    if [[ -n "${INDEX_B}" && ! "${INDEX_B}" =~ ^-?[0-9]+$ ]]; then
+        echo "error: invalid index: ${INDEX_B}" >&2
+        return ${E_ERROR}
+    fi
+
+    # If a file was given, check that it exists and is readable
+    if [[ -n "${FILEPATH}" && ! -r "${FILEPATH}" ]]; then
+        echo "error: file not found or not readable: ${FILEPATH}" >&2
+        return ${E_ERROR}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function get-clipboard() {
+    :  'Get the clipboard contents (as a function to more easily update)'
+    local index="${1}"
+
+    if [[ -n "${index}" ]]; then
+        echo "error: index not yet implemented" >&2
+        return ${E_ERROR}
+    fi
+
+    clipout
+}
+
+function get-clipboard-copy() {
+    :  'Prompt the user to copy some text and press <enter> to continue'
+    local varname="${1:-CLIPBOARD}"
+    local prompt="${2:-Copy some text and press <enter> to continue}"
+    declare -n __var="${varname}"
+
+    echo -n "${C_PROMPT}${prompt} ... ${S_RESET}"
+    # Wait for a single <enter>, but don't echo it
+    read -rs
+    __var=$(clipout)
+    echo "${C_DONE}done${S_RESET}"
+}
+
+function get-clipboard-paste() {
+    :  'Prompt the user to paste some text and press ^D to continue'
+    local varname="${1:-CLIPBOARD}"
+    local prompt="${2:-Paste some text and press ^D to continue:}"
+    declare -n __var="${varname}"
+
+    echo "${C_PROMPT}${prompt}${S_RESET}${C_INPUT}"
+    __var=$(cat)
+    echo -n "${S_RESET}"
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    # Create a temporary directory to store the snippets
+    TMP_DIR=$(mktemp -d --tmpdir "diffclip.XXXXXXXXXX")
+    FILE_A="${TMP_DIR}/a"
+    FILE_B="${TMP_DIR}/b"
+
+    # Set FILE_CONTENTS_A and FILE_CONTENTS_B based on the mode and whether a
+    # file was specified
+    ## FILE_CONTENTS_A
+    if [[ -n "${FILEPATH}" ]]; then
+        # If a filepath is specified, then simply set FILE_A to it
+        FILE_A="${FILEPATH}"
+    else
+        # Else, get the clipboard contents and save it to FILE_A
+        if [[ "${MODE}" == "INDEX" ]]; then
+            FILE_CONTENTS_A=$(get-clipboard "${INDEX_A}")
+        elif [[ "${MODE}" == "COPY" ]]; then
+            get-clipboard-copy "FILE_CONTENTS_A" "Copy the first snippet"
+        elif [[ "${MODE}" == "PASTE" ]]; then
+            get-clipboard-paste "FILE_CONTENTS_A" "Paste the first snippet"
+        fi
+        echo "${FILE_CONTENTS_A}" > "${FILE_A}"
+    fi
+    ## FILE_CONTENTS_B
+    if [[ "${MODE}" == "INDEX" ]]; then
+        FILE_CONTENTS_B=$(get-clipboard "${INDEX_B}")
+    elif [[ "${MODE}" == "COPY" ]]; then
+        get-clipboard-copy "FILE_CONTENTS_B" "Copy the second snippet"
+    elif [[ "${MODE}" == "PASTE" ]]; then
+        get-clipboard-paste "FILE_CONTENTS_B" "Paste the second snippet"
+    fi
+    echo "${FILE_CONTENTS_B}" > "${FILE_B}"
+
+    # If color mode is enabled, try to add color options to the diff command
+    if ${DO_COLOR}; then
+        case "${DIFF_CMD[0]}" in
+            diff)
+                DIFF_ARGS+=("--color=auto")
+                ;;
+            git)
+                DIFF_ARGS+=("--color")
+                ;;
+        esac
+    fi
+
+    # Compare the two snippets
+    echo "${C_HEADER}Comparing:${S_RESET}"
+    "${DIFF_CMD[@]}" "${DIFF_ARGS[@]}" "${FILE_A}" "${FILE_B}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
