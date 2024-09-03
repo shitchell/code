@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# Find all binary files in a directory or directories
+
+if [[ ${#} -eq 0 ]]; then
+    echo "usage: $(basename "${0}") <directory> [<directory2> ...] [find args]"
+    exit 1
+fi
+
+find "${@}" -type f -size +0c -exec file -F $'\1' --mime {} + \
+    | grep -i $'\1.*text/' \
+    | sed $'s/\1.*//'

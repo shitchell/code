@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# Find all binary files in a directory or directories
+
+# Default values
+DEFAULT_DIRECTORIES=(".")
+DIRECTORIES=()
+FIND_ARGS=()
+MIMETYPES=()
+CHARSETS=()
+EXCLUDE_PATTERNS=()
+INCLUDE_PATTERNS=()
+SEPARATOR=$'\t'
+DO_SHOW_MIMETYPE=false
+PATTERN_TYPE="glob"  # glob, regex
+
+# Usage
+function usage() {
+    echo "usage: $(basename "${0}") [-h] [-m/--mimetype <mimetype>] [-c/--charset <charset>] [-x/--exclude <pttern>] [-i/--include <pattern>] [-g/--glob] [-E/--regex] [directory ...]"
+}
+
+# Loop over the arguments
+while [[ ${#} -gt 0 ]]; do
+    case ${1} in
+        -h)
+            usage
+            exit 0
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        -m | --mimetype)
+            MIMETYPES+=("${2}")
+            shift 1
+            ;;
+        -c | --charset)
+            CHARSETS+=("${2}")
+            shift 1
+            ;;
+        -x | --exclude)
+            EXCLUDE_PATTERNS+=("${2}")
+            shift 1
+            ;;
+        -i | --include)
+            INCLUDE_PATTERNS+=("${2}")
+            shift 1
+            ;;
+        -g | --glob)
+            PATTERN_TYPE="glob"
+            ;;
+        -E | --regex)
+            PATTERN_TYPE="regex"
+            ;;
+        -F | --separator)
+            SEPARATOR="${2}"
+            shift 1
+            ;;
+        -M | --show-mimetype)
+            DO_SHOW_MIMETYPE=true
+            ;;
+        --)
+            shift 1
+            [[ ${#} -gt 0 ]] && DIRECTORIES+=("${@}")
+            break
+            ;;
+        -*)
+            echo "fatal: unknown option: ${1}" >&2
+            usage
+            exit 1
+            ;;
+        *)
+            DIRECTORIES+=("${1}")
+            ;;
+    esac
+    shift 1
+done
+
+# Set the directories
+[[ ${#DIRECTORIES[@]} -eq 0 ]] && DIRECTORIES=("${DEFAULT_DIRECTORIES[@]}")
+
+# Set up the match function based on the pattern type
+if [[ ${PATTERN_TYPE} == "glob" ]]; then
+    # function match() {
+    #     local is_match=true
+    #     [[ ${#INCLUDE_PATTERNS[@]} -gt 0 ]] && {
+    #         is_match=false
+    #         for pattern in "${INCLUDE_PATTERNS[@]}"; do
+    #             [[ "${1}" == ${pattern} ]] && is_match=true && break
+    #         done
+    #     }
+    #     [[ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]] && {
+    #         for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    #             [[ "${1}" == ${pattern} ]] && is_match=false && break
+    #         done
+    #     }
+    #     ${is_match}
+    # }
+    function match() {
+        local item="${1}" patterns=("${@:2}") is_match=true
+        if [[ ${#patterns[@]} -gt 0 ]]; then
+            is_match=false
+            for pattern in "${patterns[@]}"; do
+                [[ "${item}" == ${pattern} ]] && is_match=true && break
+            done
+        fi
+        ${is_match}
+    }
+elif [[ ${PATTERN_TYPE} == "regex" ]]; then
+    # function match() {
+    #     local is_match=true
+    #     [[ ${#INCLUDE_PATTERNS[@]} -gt 0 ]] && {
+    #         is_match=false
+    #         for pattern in "${INCLUDE_PATTERNS[@]}"; do
+    #             [[ "${1}" =~ ${pattern} ]] && is_match=true && break
+    #         done
+    #     }
+    #     [[ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]] && {
+    #         for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    #             [[ "${1}" =~ ${pattern} ]] && is_match=false && break
+    #         done
+    #     }
+    #     ${is_match}
+    # }
+    function match() {
+        local item="${1}" patterns=("${@:2}") is_match=true
+        if [[ ${#patterns[@]} -gt 0 ]]; then
+            is_match=false
+            for pattern in "${patterns[@]}"; do
+                [[ "${item}" =~ ${pattern} ]] && is_match=true && break
+            done
+        fi
+        ${is_match}
+    }
+fi
+
+# find "${@}" -type f -size +0c -exec file -F $'\1' --mime {} + | while read -r line; do
+#     filename="${line%$'\1'*}"
+#     mimetype=$(sed -E $'s/[^\1]+\1 *//' <<< "${line}")
+#     filetype="${mimetype%%;*}"
+#     charset="${mimetype##*; }"
+
+#     declare -p filename filetype mimetype charset
+#     echo
+# done
+
+# Use `find` to get the files
+find "${DIRECTORIES[@]}" -exec file -F $'\1' --mime {} + | while read -r line; do
+    filepath="${line%$'\1'*}"
+    mimetype=$(sed -E $'s/[^\1]+\1 *//' <<< "${line}")
+    filetype="${mimetype%%;*}"
+    charset="${mimetype##*; }"
+
+    if [[ ${#MIMETYPES[@]} -gt 0 ]]; then
+        # is_match=false
+        # for mimetype in "${MIMETYPES[@]}"; do
+        #     [[ "${filetype}" == ${mimetype} ]] && is_match=true && break
+        # done
+        # ! ${is_match} && continue
+        match "${filetype}" "${MIMETYPES[@]}" || continue
+    fi
+
+    if [[ ${#CHARSETS[@]} -gt 0 ]]; then
+        # is_match=false
+        # for charset in "${CHARSETS[@]}"; do
+        #     [[ "${charset}" == ${charset} ]] && is_match=true && break
+        # done
+        # ! ${is_match} && continue
+        match "${charset}" "${CHARSETS[@]}" || continue
+    fi
+
+    # if match "${filepath}"; then
+    #     if ${DO_SHOW_MIMETYPE}; then
+    #         printf '%s%s%s\n' "${filepath}" "${SEPARATOR}" "${filetype}"
+    #     else
+    #         echo "${filepath}"
+    #     fi
+    # fi
+    # Check the filepath matches
+    is_match=true
+    [[ ${#INCLUDE_PATTERNS[@]} -gt 0 ]] && {
+        is_match=false
+        match "${filepath}" "${INCLUDE_PATTERNS[@]}" && is_match=true
+    }
+    [[ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]] && {
+        match "${filepath}" "${EXCLUDE_PATTERNS[@]}" && is_match=false
+    }
+    if ${is_match}; then
+        if ${DO_SHOW_MIMETYPE}; then
+            printf '%s%s%s\n' "${filepath}" "${SEPARATOR}" "${filetype}"
+        else
+            echo "${filepath}"
+        fi
+    fi
+done
