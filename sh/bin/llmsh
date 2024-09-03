@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# Start a shell session that uses an LLM for processing some commands
+
+# 1. If a line starts with a '!', then run it in the shell
+# 2. If a line starts with a '#', then pass it to the LLM
+# 3. If a line starts with neither, try to run it in the shell, and if we get
+#    an error that the command is not found, pass it to the LLM
+
+LLMSH_HISTFILE="${LLMSH_HISTFILE:-${HOME}/.llmsh_history}"
+LLMSH_HEADER="${LLMSH_HEADER:-# LLM Shell}"
+
+# Set up the history file
+history -r "${LLMSH_HISTFILE}"
+trap "history -w '${LLMSH_HISTFILE}'" EXIT
+
+[[ -n "${LLMSH_HEADER}" ]] && echo "${LLMSH_HEADER}"
+
+while :; do
+    read -p "${PS1:-$ }" -r -e line || break
+    history -s "${line}"
+    case "${line}" in
+        exit | quit | q)
+            break
+            ;;
+        !*)
+            eval "${line:1}"
+            ;;
+        \#*)
+            echo "${line:1}" | sgpt --shell --interaction
+            ;;
+        *)
+            command="${line%% *}"
+            if type -a "${command}" &>/dev/null; then
+                eval "${line}"
+            else
+                echo "${line}" | sgpt --shell --interaction
+            fi
+            ;;
+    esac
+done
