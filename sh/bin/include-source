@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# Placeholder for the `include.sh` bash lib
+
+[[ -t 1 ]] && {
+    C_GREEN=$'\e[32m'
+    C_BLUE=$'\e[34m'
+    C_CYAN=$'\e[36m'
+    S_RESET=$'\e[0m'
+    S_BOLD=$'\e[1m'
+    S_DIM=$'\e[2m'
+    C_CMD="${C_GREEN}"
+    C_VAR="${C_GREEN}${S_BOLD}"
+    C_VAL="${C_CYAN}"
+    C_URL="${C_BLUE}"
+}
+
+ME=$(realpath "${0}")
+INCLUDE_PATH=""
+IS_ENV_SET=false
+IS_LIB_FOUND=false
+IS_LIB_READABLE=false
+IS_FUNCTION_SET=false
+
+cat << EOF
+Running from: ${ME}
+
+Environment:
+    ${C_VAR}BASH_LIB_PATH${S_RESET}:     ${C_VAL}${BASH_LIB_PATH:-<empty>}${S_RESET}
+    ${C_VAR}LIB_DIR${S_RESET}:           ${C_VAL}${LIB_DIR:-<empty>}${S_RESET}
+EOF
+if [[ -n "${BASH_LIB_PATH}${LIB_DIR}" ]]; then
+    # One of them is set up, so try finding include.sh
+    IS_ENV_SET=true
+    IFS=':' read -r -a LIB_DIRS <<< "${BASH_LIB_PATH}"
+    [[ -n "${LIB_DIR}" ]] && LIB_DIRS+=("${LIB_DIR}")
+    for lib_dir in "${LIB_DIRS[@]}"; do
+        include_path="${lib_dir}/include.sh"
+        if [[ -f "${include_path}" ]]; then
+            # We found it, whoo!
+            INCLUDE_PATH="${include_path}"
+            IS_LIB_FOUND=true
+            [[ -r "${INCLUDE_PATH}" ]] \
+                && IS_LIB_READABLE=true \
+                || IS_LIB_READABLE=false
+        fi
+    done
+fi
+
+echo -n "    ${C_VAR}include.sh${S_RESET}:        ${C_VAL}"
+if ${IS_LIB_FOUND} && ${IS_LIB_READABLE}; then
+    echo -n "${INCLUDE_PATH}"
+elif ${IS_LIB_FOUND} && ! ${IS_LIB_READABLE}; then
+    echo -n "${INCLUDE_PATH} (no read permission)"
+elif ! ${IS_LIB_FOUND}; then
+    echo -n "<not found>"
+fi
+echo "${S_RESET}"
+
+# Check if the include-source function is defined
+if declare -F "include-source" &>/dev/null; then
+    IS_FUNCTION_SET=true
+fi
+
+echo -n "    include-source():  "
+${IS_FUNCTION_SET} && echo "<set>" || echo "<unset>"
+
+echo
+
+# If the function is set and all is well, we should be fine
+if ${IS_LIB_FOUND} && ${IS_LIB_READABLE} && ${IS_ENV_SET} && ${IS_FUNCTION_SET}; then
+    echo 'All `include` components are loaded and set. I am guessing you called'
+    echo 'this script manually. This is what it outputs! Now you know.'
+    echo
+    echo 'If you did NOT call this script manually and were trying to call'
+    echo '`include-source` to load a lib, I have no idea how you got here...'
+    echo 'Ensure you have followed all of the instructions in the lib header:'
+    echo "    ${C_CMD}less ${INCLUDE_PATH}${S_RESET}"
+else
+    # Something is not configured correctly, so give instructions for each
+    echo -n "* environment check: "
+    if ! ${IS_ENV_SET}; then
+        echo "error"
+        echo "  Neither ${C_VAR}BASH_LIB_PATH${S_RESET} or ${C_VAR}LIB_DIR${S_RESET} is set. Set one of these in"
+        echo '  your shell startup scripts (e.g.: bashrc) or pass the `${C_CMD}--auto${S_RESET}`'
+        echo '  option when sourcing `include.sh`:'
+        echo "    ${C_CMD}source '${INCLUDE_PATH:-path/to/include.sh}' --auto${S_RESET}"
+    else
+        echo "passed"
+    fi
+    echo -n "* include.sh installed: "
+    if ! ${IS_LIB_FOUND}; then
+        echo "error"
+        echo '  Could not find `include.sh`. This could simply be because'
+        echo '  BASH_LIB_PATH or LIB_DIR is not set. Ensure that `include.sh`'
+        echo '  is installed, or install it from:'
+        echo "      ${C_URL}https://github.com/shitchell/bash-libs${S_RESET}"
+    else
+        echo "passed"
+        # Don't both doing the readable summary unless include.sh is installed
+        echo -n "* include.sh is readable: "
+        if ! ${IS_LIB_READABLE}; then
+            echo "error"
+            echo '  `include.sh` is installed but not readable. Try running:'
+            echo "      ${C_CMD}chmod +x '${INCLUDE_PATH}'${S_RESET}"
+        else
+            echo "passed"
+        fi
+    fi
+    echo -n "* `include-source()` check: "
+    if ! ${IS_FUNCTION_SET}; then
+        echo "error"
+        echo '  The `include-source` function is not set. Ensure `include.sh`'
+        echo '  is installed and sourced in your shell startup scripts:'
+        echo "      ${C_CMD}source '${INCLUDE_PATH:-path/to/include.sh}'${S_RESET}"
+    else
+        echo "passed"
+    fi
+fi
