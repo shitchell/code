@@ -667,6 +667,12 @@ function __install-util__pyenv-shared() {
     CONFIGURE_OPTS="--enable-shared" PYTHON_CONFIGURE_OPTS="${CONFIGURE_OPTS}" pyenv install -v "${1}"
 }
 
+function __install-util__textual() {
+    require pip
+
+    pip install textual textual-dev rich rich-cli
+}
+
 function __install-util__wtfutil() {
     require --one-of downloader="curl wget" tar --write "${INSTALL_DIR}"
 
@@ -825,7 +831,7 @@ function __install-util__code() {
         git -C "${install_dir}/code" pull
         return 0
     fi
-    
+
     (
         cd "${install_dir}"
         git clone git@github.com:shitchell/code.git ./code
@@ -941,7 +947,7 @@ function main() {
             echo "error: no installation candidate for '${package}'" >&2
             return 1
         fi
-        
+
         if [[ ${package_exit_code} -ne 0 ]]; then
             echo "error: failed to install ${package}" >&2
             return 1
