@@ -1079,6 +1079,34 @@ function _subcommand_pr-create() {
             | python -m json.tool
 }
 
+# @description Resolve PR conflicts with the given strategy
+# @usage pr-resolve-conflicts <pr id> <strategy>
+function _subcommand_pr-resolve-conflicts() {
+    local pr_id="${1}"
+    local strategy="${2}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests/${pr_id}/autoComplete?api-version=6.0" \
+        --silent \
+        --request PATCH \
+        --header "Content-Type: application/json" \
+        --user ":${TOKEN}" \
+        --data '{ "strategy": "'"${strategy}"'" }' \
+            | python -m json.tool
+}
+
+# @description Get PR info
+# @usage: pr-info <pr id>
+function _subcommand_pr-info() {
+    local pr_id="${1}"
+
+    # Parse the arguments
+    curl "https://dev.azure.com/${ORGANIZATION_ENC}/${PROJECT_ENC}/_apis/git/repositories/${REPO_ENC}/pullrequests/${pr_id}?api-version=6.0" \
+        --silent \
+        --user ":${TOKEN}" \
+            | python -m json.tool
+}
+
 # @description Generate a link to a pull request given its id
 # @usage pr-link <pr id>
 function _subcommand_pr-link() {
@@ -1180,7 +1208,7 @@ function _subcommand_pr-complete() {
 function _subcommand_pr() {
     local source_branch="${1}"
     local target_branch="${2}"
-    local title="${3}"
+    local title="${3:-${source_branch} to ${target_branch}}"
     local description="${4}"
     local pr_id
 
