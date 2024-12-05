@@ -71,6 +71,8 @@ function help-full() {
     -I/--from-indent <int>    the original indentation level to change from
                               (default: "detect")
     -c/--to-char <char>       the character to use for indentation
+    -n/--dry-run              do not make any changes, just print to stdout
+    -d/--detect               detect the indentation level and exit
     <file>...                 the file(s) to change the indentation level of
 EOF
 }
@@ -89,13 +91,15 @@ function parse-args() {
     [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
 
     # Default values
-    TO_INDENT_CHAR="${INDENT_CHAR:-' '}"
+    TO_INDENT_CHAR="${INDENT_CHAR:- }"
     TO_INDENT_LEVEL="${INDENT_LEVEL:-4}"
     FROM_INDENT_LEVEL='detect'
     FROM_INDENT_LEVEL_SPACE=''  # Used if there are mixed spaces and tabs
     FROM_INDENT_LEVEL_TAB=''    # Used if there are mixed spaces and tabs
     FILEPATHS=()
     DO_SILENT=false
+    DO_DRY_RUN=false
+    DO_DETECT_AND_EXIT=false
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -114,6 +118,7 @@ function parse-args() {
                 ;;
             -s | --silent)
                 DO_SILENT=true
+                shift 1
                 ;;
             -i | --to-indent)
                 TO_INDENT_LEVEL="${2}"
@@ -129,6 +134,14 @@ function parse-args() {
                 TO_INDENT_CHAR="${2}"
                 shift 2
                 ;;
+            -n | --dry-run)
+                DO_DRY_RUN=true
+                shift 1
+                ;;
+            -d | --detect)
+                DO_DETECT_AND_EXIT=true
+                shift 1
+                ;;
             --)
                 shift 1
                 if [[ ${#} -gt 0 ]]; then
@@ -142,9 +155,9 @@ function parse-args() {
                 ;;
             *)
                 FILEPATHS+=("${1}")
+                shift 1
                 ;;
         esac
-        shift 1
     done
 
     # If in silent mode, silence the output
@@ -205,7 +218,7 @@ function detect-indentation() {
     # separately and replace them separately based on their respective levels.
     ## Collect the first 10 lines with leading whitespace
     while IFS='' read -r line && (( ${#collected_lines[@]} < ${max_lines} )); do
-        # echo "processing line: ${line}" >&2
+        debug "processing line: ${line}"
         if [[ "${line}" =~ ^([$'\t ']+) ]]; then
             indent_char="${BASH_REMATCH[1]:0:1}"
             indent_count=${#BASH_REMATCH[1]}
@@ -218,7 +231,7 @@ function detect-indentation() {
         fi
     done < <(cat "${file}")
 
-    # declare -p indent_sizes_space indent_sizes_tabs >&2
+    debug-vars indent_sizes_space indent_sizes_tabs
 
     ## Detect the indentation levels for spaces and tabs
     indent_level_space=${indent_sizes_space[0]}
@@ -243,8 +256,8 @@ function detect-indentation() {
         if ! (( indent_level % indent_level_tabs == 0 )); then
             # This line is not a multiple, so find the GCD of all the lines
             gcd_tabs=$(gcd "${indent_sizes_tabs[@]}")
-            # If the GCD is 0 or 1, return an error
-            if (( gcd_tabs == 0 || gcd_tabs == 1 )); then
+            # Tabs are allowed to have a GCD of 1 (they usually do), but not 0
+            if (( gcd_tabs == 0 )); then
                 echo "error: invalid tab indent level: ${gcd_tabs}" >&2
                 echo >&2
                 echo "Check for consistent indentation and try again or set" >&2
@@ -254,7 +267,7 @@ function detect-indentation() {
         fi
     done
 
-    # declare -p indent_level_space indent_level_tabs >&2
+    debug-vars indent_level_space indent_level_tabs
     FROM_INDENT_LEVEL_SPACE=${indent_level_space}
     FROM_INDENT_LEVEL_TAB=${indent_level_tabs}
     echo "INDENT_SPACE=${FROM_INDENT_LEVEL_SPACE}"
@@ -268,13 +281,121 @@ function detect-indentation() {
 function main() {
     parse-args "${@}" || return ${?}
 
+    # If this isn't a dry run or detect and exit, we'll need a temporary
+    # directory to write the output to
+    local tmp_dir
+    if ! ${DO_DRY_RUN} && ! ${DO_DETECT_AND_EXIT}; then
+        tmp_dir=$(mktemp -d -t change-indent.XXXXXXXXXX)
+        trap "rm -rf ${tmp_dir}" EXIT
+    fi
+
+    debug-vars TO_INDENT_CHAR TO_INDENT_LEVEL FROM_INDENT_LEVEL FILEPATHS
+
+    local is_first=true
     for filepath in "${FILEPATHS[@]}"; do
-        echo "Processing file: ${filepath}"
+        # Print a newline between files
+        ${is_first} && is_first=false || echo
+
+        echo "${S_BOLD}${S_DIM}${filepath}${S_RESET}"
+        # Determine if we are printing the result to:
+        # - stdout (dry run)
+        # - /dev/null (detect and exit)
+        # - a temporary file (default)
+        if ${DO_DETECT_AND_EXIT}; then
+            detect-indentation "${filepath}" || return ${?}
+            continue
+        elif ${DO_DRY_RUN}; then
+            # Print the result to stdout
+            write_file='/dev/stdout'
+        else
+            # Write the result to a temporary file
+            write_file=$(mktemp -p "${tmp_dir}")
+        fi
         if [[ "${FROM_INDENT_LEVEL}" == 'detect' ]]; then
             detect-indentation "${filepath}" || return ${?}
         fi
         # Replace all leading whitespace with the new indentation level
-        sed "s/^\([${FROM_INDENT_LEVEL_SPACE}${FROM_INDENT_LEVEL_TAB}]\+\)/$(printf "%${TO_INDENT_LEVEL}s" | tr ' ' "${TO_INDENT_CHAR}")/g" "${filepath}"
+        awk -v space_level=${FROM_INDENT_LEVEL_SPACE} \
+            -v tab_level=${FROM_INDENT_LEVEL_TAB} \
+            -v new_indent_level=${TO_INDENT_LEVEL} \
+            -v new_indent_char="${TO_INDENT_CHAR}" \
+            '
+            function count_leading_whitespace(line) {
+                # Count the number of leading spaces and tabs
+                match(line, /^[\t ]+/)
+                return RLENGTH
+            }
+
+            # a debug function
+            function debug(msg) {
+                if (DEBUG == "true" || DEBUG == 1 || DEBUG_LOG) {
+                    # Determine the log file
+                    logfile="/dev/stderr"
+                    if (DEBUG_LOG) {
+                    logfile=DEBUG_LOG
+                    }
+
+                    # Print a timestamp, the file line number, and the message
+                    printf("%s[%s] (%s:LN%03d)  %s%s\n",
+                        dim, strftime("%Y-%m-%d %H:%M:%S"), FILENAME, NR, msg, rst) > logfile
+                    fflush();
+                }
+            }
+
+            # For now, do not support mixed spaces and tabs on the same line
+            /^( +\t|\t+ )/ {
+                print "error: mixed spaces and tabs on the same line" > "/dev/stderr"
+                exit 1
+            }
+
+            # Replace leading whitespace with the new level
+            {
+                if ($0 ~ /^[\t ]+/) {
+                    # Leading whitespace, so update it to the new indentation
+                    line = $0
+                    content = $0
+
+                    # indent_char: the first character of the leading whitespace
+                    indent_char = substr(line, 1, 1)
+
+                    # content: line with leading whitespace removed
+                    sub(/^[\t ]+/, "", content)
+
+                    # indent_level: the number of groups of indent characters
+                    whitespace_count = count_leading_whitespace(line)
+                    if (indent_char == " ") {
+                        debug("original indent_char is space")
+                        indent_level = whitespace_count / space_level
+                    } else if (indent_char == "\t") {
+                        debug("original indent_char is tab")
+                        indent_level = whitespace_count / tab_level
+                    } else {
+                        print "error: unknown indent character: " indent_char > "/dev/stderr"
+                        exit 1
+                    }
+
+                    # new_indent: the new leading whitespace, based on the
+                    # original indent level, the new number of chars per indent,
+                    # and the new indent character
+                    new_indent = ""
+                    for (i = 0; i < new_indent_level * indent_level; i++) {
+                        new_indent = new_indent new_indent_char
+                    }
+
+                    # Print the new line
+                    print new_indent content
+                } else {
+                    # No leading whitespace, so print the line as is
+                    print
+                }
+            }' "${filepath}" > "${write_file}"
+
+            # If our output is to a temporary file, move it back to the original
+            # file path
+            if ! ${DO_DRY_RUN} && ! ${DO_DETECT_AND_EXIT}; then
+                cp "${filepath}" "${filepath}.orig"
+                mv "${write_file}" "${filepath}"
+            fi
     done
 }
 
