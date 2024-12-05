@@ -1,18 +1,61 @@
 #!/usr/bin/env bash
+#
+# Show a diff, prompt for a commit, and then commit the changes. With limited
+# exception, all arguments are passed to `git add`. The `-m` or `--message`
+# flag can be used to specify a commit message for the `git commit` command.
+#
+# If no files are specified, all changes in the repository are staged.
 
-opts=( "${@}" )
-[ ${#opts[@]} -eq 0 ] && opts=(-- .)
+GIT_ADD_ARGS=()
+GIT_COMMIT_ARGS=()
+COMMIT_MESSAGE=""
+REPO_ROOT=$(git rev-parse --show-toplevel)
 
-git add "${opts[@]}" || {
+while [[ ${#} -gt 0 ]]; do
+    case ${1} in
+        -m | --message)
+            COMMIT_MESSAGE="${2}"
+            shift
+            ;;
+        *)
+            GIT_ADD_ARGS+=( "${1}" )
+            ;;
+    esac
+    shift
+done
+
+if [[ -n "${COMMIT_MESSAGE}" ]]; then
+    GIT_COMMIT_ARGS+=( -m "${COMMIT_MESSAGE}" )
+fi
+
+# If there are not
+[ ${#GIT_ADD_ARGS[@]} -eq 0 ] && GIT_ADD_ARGS=(-- "${REPO_ROOT}")
+
+git add "${GIT_ADD_ARGS[@]}" || {
     echo "fatal: could not add files" >&2
     exit 1
 }
 
 # Only run if files are staged
 if ! git diff --cached --quiet &>/dev/null; then
-    git --no-pager ds \
-        && read -ep "Commit Message: " msg \
-        && git commit -m "${msg}"
+    if git --no-pager diff --staged 2>/dev/null; then
+        echo "${output}"
+
+        # Ensure we have a commit message
+        if [[ -z "${COMMIT_MESSAGE}" ]]; then
+            read -ep "Commit Message: " COMMIT_MESSAGE
+            GIT_COMMIT_ARGS=( -m "${COMMIT_MESSAGE}" )
+        fi
+
+        # Commit the changes
+        if ! git commit "${GIT_COMMIT_ARGS[@]}"; then
+            echo "error: could not commit changes: ${output}" >&2
+            exit 1
+        fi
+    else
+        echo "error: could not show diff: ${output}" >&2
+        exit 1
+    fi
 else
     echo "nothing to do..."
 fi
