@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# Convert a PPK to an OpenSSH key
+
+PPK_FILE="${1}"
+
+if [[ -z "${PPK_FILE}" ]]; then
+    echo "usage: $(basename "${0}" <mykey.ppk>)" >&2
+    exit 1
+fi
+
+# Ensure puttygen exists
+if ! command -v puttygen &>/dev/null; then
+    echo "fatal: puttygen must be installed to convert PPKs to SSH keys" >&2
+    exit 1
+fi
+
+# Set up the target paths
+# - private key: the PPK path without the extension
+# - public key: the private key path + ".pub"
+SSH_PRIVATE_KEY_FILE="${PPK_FILE%.*}"
+SSH_PUBLIC_KEY_FILE="${SSH_PRIVATE_KEY_FILE}.pub"
+
+# Do the things
+echo -n "* creating private key '$(basename "${SSH_PRIVATE_KEY_FILE}")' ... "
+if output=$(puttygen "${PPK_FILE}" -O private-openssh -o "${SSH_PRIVATE_KEY_FILE}" 2>&1); then
+    echo "done"
+else
+    echo "error"
+    echo "${output}" >&2
+    exit 1
+fi
+
+echo -n "* creating public key '$(basename "${SSH_PUBLIC_KEY_FILE}")' ... "
+if output=$(puttygen "${PPK_FILE}" -O public-openssh -o "${SSH_PUBLIC_KEY_FILE}" 2>&1); then
+    echo "done"
+else
+    echo "error"
+    echo "${output}" >&2
+    exit 1
+fi
+
+# If the ssh-keygen command is installed, show some info
+if command -v ssh-keygen &>/dev/null; then
+    ssh-keygen -v -l -f "${SSH_PRIVATE_KEY_FILE}"
+fi
+
+# If the target directory is not the ~/.ssh directory, echo a message about
+# moving them there
+TARGET_DIR=$(realpath "$(dirname "${SSH_PRIVATE_KEY_FILE}")")
+SSH_DIR=$(realpath "${HOME}/.ssh")
+
+if [[ "${TARGET_DIR}" != "${SSH_DIR}" ]]; then
+    echo "warning: target directory is not ~/.ssh: ${TARGET_DIR}" >&2
+fi
