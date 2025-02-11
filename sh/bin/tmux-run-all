@@ -2,6 +2,7 @@
 #
 # Run a command on all tmux panes that are simply running a shell
 
+include-source 'debug.sh'
 include-source 'colors.sh'
 
 SHELLS=(bash zsh fish ksh xonsh)
@@ -10,7 +11,7 @@ SHELLS=(bash zsh fish ksh xonsh)
 COMMAND=()
 PANE_GLOB=""
 DO_DRY_RUN=false
-SHOW_SKIPPED=false
+SHOW_SKIPPED=true
 
 # Help text
 function usage() {
@@ -129,12 +130,11 @@ while read -r pane_id command; do
     fi
 
     if ${has_shell} && [[ -z "${skip_reason}" ]]; then
-        if ${DO_DRY_RUN}; then
-            echo
-        else
+        if ! ${DO_DRY_RUN}; then
             tmux send-keys -t "${pane_id}" "${COMMAND_STR}" Enter
         fi
-    elif ! ${SHOW_SKIPPED}; then
+        echo
+    elif ${SHOW_SKIPPED}; then
         [[ -n "${skip_reason}" ]] && skip_reason=": ${skip_reason}"
         echo " ${S_DIM}(skipped${skip_reason})${S_RESET}"
         SKIPPED+=("${pane_id}")
