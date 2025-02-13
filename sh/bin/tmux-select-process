@@ -1,31 +1,197 @@
 #!/usr/bin/env bash
+#
+# tmux-select-process
+#
+# Usage:
+#   tmux-select-process "<extended_regex>"
+#
+# If multiple matches are found, user is prompted to pick one.
+# Exits 1 on no matches or user cancellation, 0 on success.
 
-# Determine the pid of the process
-pids=$(pidof $1)
+exec > >(tee "${HOME}/.tsp.log") 2>&1
 
-if [ -z $pids ]; then
-	echo "No such process!"
-	exit 1
+# Optional: If you have a separate "colors" library with `include-source 'colors'`,
+# you can source it here. Example (commented out):
+# include-source 'colors' || true
+
+# For inline demonstration, define a few color/style vars here:
+S_RESET="\033[0m"
+S_BOLD="\033[1m"
+S_DIM="\033[2m"
+C_GREEN="\033[32m"
+C_YELLOW="\033[33m"
+C_CYAN="\033[36m"
+
+# set -euo pipefail
+
+REGEX="${1:-}"
+THIS_TTY=$(tty)
+
+if [[ -z "${REGEX}" ]]; then
+  echo "Usage: $0 <extended_regex>"
+  exit 1
 fi
 
-# Grab a list of all tmux panes and their pseudo terminals
-panes=$(tmux list-panes -a -F '#{pane_id} #{pane_tty}')
+# 1) Must be run inside tmux:
+if [[ -z "${TMUX:-}" ]]; then
+    echo "fatal: must be run within a tmux session" >&2
+    exit 1
+fi
 
-# Loop over each process (if multiple exist)
-for pid in $pids; do
-	# Determine the pseduo terminal the process running in
-	pty=$(ps -o tty= -p $pid)
+# 2) Build a map of TTY -> "pane_id <tab> session_and_window_description"
+declare -A TMUX_PANES
+readarray -t ALL_PANES < <(
+    tmux list-panes -aF $'#{pane_tty}\t#{pane_id}\t#{session_name} > #{window_index}:#{window_name} > #{pane_index}:#{pane_title}'
+)
 
-	# Determine the id of the pane attached to the pty
-	pane=$(echo "$panes" | grep $pty | awk -F ' ' '{print $1}')
+for PANE_INFO in "${ALL_PANES[@]}"; do
+    # Format is: "pts/42   %0   mySession > 0:myWin > 0:myShell"
+    # or sometimes: "/dev/pts/42"
+    # Split on the first tab:
+    TTY="${PANE_INFO%%$'\t'*}"
+    REST="${PANE_INFO#*$'\t'}"  # pane_id + session info
 
-	# If the pane exists, switch to it
-	if [ -n "$pane" ]; then
-		tmux switch-client -t $pane
-	fi
+    # TTY might be "pts/42" or "/dev/pts/42", so let's unify by stripping "/dev/"
+    TTY="${TTY#/dev/}"
+    
+    # Skip this tty
+    [[ "${THIS_TTY#/dev/}" == "${TTY}" ]] && continue
 
-	exit 0
+    TMUX_PANES["${TTY}"]="${REST}"
 done
 
-echo "$1 is not running inside a tmux pane!"
-exit 1
+# declare -p TMUX_PANES ALL_PANES
+
+# 3) Build a list of processes (pid, TTY, command) that are children of the tmux server
+#    This might exclude processes if they're not direct children.
+#    If you want absolutely everything on those TTYs, consider `ps ax -o pid,tty,command`.
+declare -a TMUX_PROCESSES
+TMUX_SERVER_PID="$(tmux run-shell 'echo #{pid}')"
+
+# # On some systems, `tmux run-shell 'echo #{pid}'` might produce an extra line or empty line,
+# # so let's strip that carefully:
+# TMUX_SERVER_PID="$(echo "${TMUX_SERVER_PID}" | sed 's/[^0-9].*//g')"
+
+readarray -t PS_PROCS < <(
+    # pid \t tty \t command
+    # ps --no-headers -a --ppid "${TMUX_SERVER_PID}" -o $'%p\t%y\t%a' 2>/dev/null || true
+    ps --no-headers ax -o $'%p\t%y\t%a' 2>/dev/null
+)
+
+for PS_PROC in "${PS_PROCS[@]}"; do
+    # Each line: "12345  pts/42  bash some_script.sh"
+    # Let's parse:
+    PID="${PS_PROC%%$'\t'*}"        # 12345
+    REST="${PS_PROC#*$'\t'}"        # "pts/42 <tab> bash some_script.sh"
+    TTY="${REST%%$'\t'*}"           # "pts/42"
+    CMD="${REST#*$'\t'}"            # "bash some_script.sh"
+
+    # remove extraneous whitespace
+    PID="${PID//[[:space:]]/}"
+    TTY="${TTY//[[:space:]]/}"
+
+    # Look up TTY in TMUX_PANES:
+    if [[ -v "TMUX_PANES[${TTY}]" ]]; then
+        PANE_DATA="${TMUX_PANES[${TTY}]}"
+    else
+        # Not found => not associated with a known tmux pane
+        continue
+    fi
+
+    # PANE_DATA format: "pane_id <tab> session_name > window:... > pane:...title"
+    PANE_ID="${PANE_DATA%%$'\t'*}"                # e.g. %0
+    PANE_PRETTY_NAME="${PANE_DATA#*$'\t'}"        # e.g. "mySession > 0:myWin > 0:myShell"
+
+    # Save them in a single array using a unit separator:
+    TMUX_PROCESSES+=(
+        "${PANE_ID}"$'\x1f'"${PID}"$'\x1f'"${PANE_PRETTY_NAME}"$'\x1f'"${CMD}"
+    )
+done
+
+# Now we have an array of lines, each 0x1F separated: PANE_ID PID PANE_NAME CMD
+# Let's filter them against the user's regex.
+
+MATCHES=()
+declare -A MATCHING_PANES
+for entry in "${TMUX_PROCESSES[@]}"; do
+    # parse out fields
+    IFS=$'\x1f' read -r _pane_id _pid _pane_pretty _command <<< "${entry}"
+    
+    # declare -p _pane_id _pid _pane_pretty _command
+    # echo
+
+    if [[ "${_command}" =~ ${REGEX} ]]; then
+        MATCHES+=( "${entry}" )
+        MATCHING_PANES["${_pane_id}"]="${_pane_pretty}"
+    fi
+done
+
+COUNT="${#MATCHES[@]}"
+if (( COUNT == 0 )); then
+    tmux display-message "No matches for regex: ${REGEX}"
+    exit 1
+
+elif (( ${#MATCHING_PANES[@]} == 1 )); then
+    # Jump straight to that pane
+    IFS=$'\x1f' read -r mpane mpid mpname mcmd <<< "${MATCHES[0]}"
+
+    # Switch to that pane. We can do:
+    #   tmux switch-client -t <session>
+    #   tmux select-window  -t <session:window>
+    #   tmux select-pane    -t <pane_id>
+    #
+    # The simplest approach is to rely on tmux's ability
+    # to interpret the pane ID directly in "select-pane -t".
+    tmux select-pane -t "${mpane}"
+    exit 0
+
+else
+    valid_choice_selected=false
+    exit_selected=false
+    choice=""
+    while ! (${valid_choice_selected} || ${exit_selected}); do
+        # Show a text-based menu in the current pane.
+        # If you want to do a tmux command-prompt menu instead,
+        # you'd have to build a dynamic "display-menu" or prompt logic.
+        #
+        echo -e "${C_YELLOW}Multiple matches found for:${S_RESET} \"${S_BOLD}${REGEX}${S_RESET}\"\n"
+
+        local_index=1
+        for match in "${MATCHES[@]}"; do
+            IFS=$'\x1f' read -r mpane mpid mpname mcmd <<< "${match}"
+            
+            # Fancy output example:
+            #  1) micro foo/bar.txt
+            #     mySession > 0:myWin > 0:myShell
+            echo -e "${S_BOLD}${local_index}.${S_RESET} ${C_GREEN}${mcmd}${S_RESET}"
+            echo -e "   ${S_DIM}${mpname}${S_RESET}"
+            echo
+
+            (( local_index++ ))
+        done
+
+        # Prompt user
+        read -rp "Select an index (1..${COUNT}), or q to cancel: " choice
+
+        # If empty or q => bail
+        if [[ -z "${choice}" || "${choice}" =~ ^[Qq]$ ]]; then
+            exit_selected=true
+        elif ! [[ "${choice}" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > COUNT )); then
+            echo "Invalid choice."
+        else
+            valid_choice_selected=true
+        fi
+    done
+
+    if ${valid_choice_selected}; then
+        # zero-based index
+        choice_index=$((choice - 1))
+        IFS=$'\x1f' read -r mpane mpid mpname mcmd <<< "${MATCHES[choice_index]}"
+
+        # declare -p match choice choice_index mpane mpname mcmd
+
+        tmux switch-client -t "${mpane}"
+        exit 0
+    fi
+fi
+
