@@ -8,6 +8,8 @@
 # If multiple matches are found, user is prompted to pick one.
 # Exits 1 on no matches or user cancellation, 0 on success.
 
+include-source debug
+
 exec > >(tee "${HOME}/.tsp.log") 2>&1
 
 # Optional: If you have a separate "colors" library with `include-source 'colors'`,
@@ -28,7 +30,7 @@ REGEX="${1:-}"
 THIS_TTY=$(tty)
 
 if [[ -z "${REGEX}" ]]; then
-  echo "Usage: $0 <extended_regex>"
+  echo "usage: $(basename "${0}") <extended_regex>"
   exit 1
 fi
 
@@ -41,7 +43,8 @@ fi
 # 2) Build a map of TTY -> "pane_id <tab> session_and_window_description"
 declare -A TMUX_PANES
 readarray -t ALL_PANES < <(
-    tmux list-panes -aF $'#{pane_tty}\t#{pane_id}\t#{session_name} > #{window_index}:#{window_name} > #{pane_index}:#{pane_title}'
+    tmux list-panes -aF \
+        $'#{pane_tty}\t#{pane_id}\t#{session_name} > #{window_index}:#{window_name} > #{pane_index}:#{pane_title}'
 )
 
 for PANE_INFO in "${ALL_PANES[@]}"; do
@@ -51,7 +54,7 @@ for PANE_INFO in "${ALL_PANES[@]}"; do
     TTY="${PANE_INFO%%$'\t'*}"
     REST="${PANE_INFO#*$'\t'}"  # pane_id + session info
 
-    # TTY might be "pts/42" or "/dev/pts/42", so let's unify by stripping "/dev/"
+    # TTY might be "pts/42" or "/dev/pts/42", so normalize by stripping "/dev/"
     TTY="${TTY#/dev/}"
     
     # Skip this tty
@@ -60,17 +63,19 @@ for PANE_INFO in "${ALL_PANES[@]}"; do
     TMUX_PANES["${TTY}"]="${REST}"
 done
 
+debug-vars TMUX_PANES
+
 # declare -p TMUX_PANES ALL_PANES
 
 # 3) Build a list of processes (pid, TTY, command) that are children of the tmux server
 #    This might exclude processes if they're not direct children.
 #    If you want absolutely everything on those TTYs, consider `ps ax -o pid,tty,command`.
 declare -a TMUX_PROCESSES
-TMUX_SERVER_PID="$(tmux run-shell 'echo #{pid}')"
 
 # # On some systems, `tmux run-shell 'echo #{pid}'` might produce an extra line or empty line,
 # # so let's strip that carefully:
-# TMUX_SERVER_PID="$(echo "${TMUX_SERVER_PID}" | sed 's/[^0-9].*//g')"
+# TMUX_SERVER_PID=$(tmux run-shell 'echo #{pid}')
+# TMUX_SERVER_PID=$(sed 's/[^0-9].*//g' <<< "${TMUX_SERVER_PID}")
 
 readarray -t PS_PROCS < <(
     # pid \t tty \t command
@@ -81,10 +86,11 @@ readarray -t PS_PROCS < <(
 for PS_PROC in "${PS_PROCS[@]}"; do
     # Each line: "12345  pts/42  bash some_script.sh"
     # Let's parse:
-    PID="${PS_PROC%%$'\t'*}"        # 12345
-    REST="${PS_PROC#*$'\t'}"        # "pts/42 <tab> bash some_script.sh"
-    TTY="${REST%%$'\t'*}"           # "pts/42"
-    CMD="${REST#*$'\t'}"            # "bash some_script.sh"
+    PID="${PS_PROC%%$'\t'*}"  # 12345
+    REST="${PS_PROC#*$'\t'}"  # "pts/42 <tab> bash some_script.sh"
+    TTY="${REST%%$'\t'*}"     # "pts/42"
+    CMD="${REST#*$'\t'}"      # "bash some_script.sh"
+    # IFS=$'\t' read -r PID TTY CMD <<< "${PS_PROC}"
 
     # remove extraneous whitespace
     PID="${PID//[[:space:]]/}"
@@ -108,6 +114,8 @@ for PS_PROC in "${PS_PROCS[@]}"; do
     )
 done
 
+debug-vars TMUX_PROCESSES
+
 # Now we have an array of lines, each 0x1F separated: PANE_ID PID PANE_NAME CMD
 # Let's filter them against the user's regex.
 
@@ -126,23 +134,21 @@ for entry in "${TMUX_PROCESSES[@]}"; do
     fi
 done
 
+debug-vars MATCHES MATCHING_PANES
+
 COUNT="${#MATCHES[@]}"
 if (( COUNT == 0 )); then
     tmux display-message "No matches for regex: ${REGEX}"
     exit 1
 
 elif (( ${#MATCHING_PANES[@]} == 1 )); then
-    # Jump straight to that pane
+    # Only one match found, so switch to it directly
     IFS=$'\x1f' read -r mpane mpid mpname mcmd <<< "${MATCHES[0]}"
+    debug "One match found:"
+    debug-vars mpane mpid mpname mcmd
 
-    # Switch to that pane. We can do:
-    #   tmux switch-client -t <session>
-    #   tmux select-window  -t <session:window>
-    #   tmux select-pane    -t <pane_id>
-    #
-    # The simplest approach is to rely on tmux's ability
-    # to interpret the pane ID directly in "select-pane -t".
-    tmux select-pane -t "${mpane}"
+    # Switch to the pane
+    tmux switch-client -t "${mpane}"
     exit 0
 
 else
@@ -154,7 +160,7 @@ else
         # If you want to do a tmux command-prompt menu instead,
         # you'd have to build a dynamic "display-menu" or prompt logic.
         #
-        echo -e "${C_YELLOW}Multiple matches found for:${S_RESET} \"${S_BOLD}${REGEX}${S_RESET}\"\n"
+        echo -e "${C_YELLOW}Multiple matches found for:${S_RESET} /${S_BOLD}${REGEX//\/\\/}${S_RESET}/\n"
 
         local_index=1
         for match in "${MATCHES[@]}"; do
