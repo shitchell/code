@@ -179,12 +179,42 @@ function parse-args() {
 
     # If no refs are provided, use HEAD
     if [ ${#REFS[@]} -eq 0 ]; then
-        REFS+=("HEAD")
+        if [ ${#FILEPATHS[@]} -gt 0 ]; then
+            # If no refs are provided but files are provided, then search for
+            # all refs which have modified those files
+            debug "no refs, but files are provided: fetching their refs"
+            readarray -t REFS < <(
+                git log --pretty=format:%H -- "${FILEPATHS[@]}"
+            )
+            debug-vars REFS
+        else
+            # If no refs or files are provided, then use HEAD
+            REFS+=("HEAD")
+        fi
+    fi
+
+    # If no files are provided, then check if the ref is a commit. If it is, use
+    # the files modified in that commit.
+    debug "checking for files..."
+    if [ ${#FILEPATHS[@]} -eq 0 ]; then
+        debug "no files provided"
+        if [ ${#REFS[@]} -eq 1 ]; then
+            local ref="${REFS[0]}"
+            if [ $(get-ref-type "${ref}") == "commit" ]; then
+                debug "only one ref/commit provided, using it for files"
+                readarray -t FILEPATHS < <(
+                    git log -1 --pretty=format: --name-only "${ref}"
+                )
+                USE_REL_PATH=0
+                cd "$(git rev-parse --show-toplevel)"
+            fi
+        fi
     fi
 
     # If a specific number of commits is requested, replace REFS with the
     # appropriate number of commits
     if [ ${NUM_COMMITS} != 1 ]; then
+        debug "fetching ${NUM_COMMITS} commits for each ref"
         local new_refs=()
         for ref in "${REFS[@]}"; do
             local commits
@@ -194,7 +224,14 @@ function parse-args() {
             else
                 commits_arg="-n ${NUM_COMMITS}"
             fi
-            commits=$(git log "${ref}" --format="%h" -n "${NUM_COMMITS}")
+            commits=$(
+                git log \
+                    --format="%h" \
+                    -n "${NUM_COMMITS}" \
+                    "${ref}" \
+                    -- "${FILEPATHS[@]}"
+            )
+            debug "fetched commits: ${commits}"
             if [ ${NUM_COMMITS} = 'all' ]; then
                 new_refs+=(${commits})
             else
@@ -202,22 +239,6 @@ function parse-args() {
             fi
         done
         REFS=("${new_refs[@]}")
-    fi
-
-    # If no files are provided, then check if the ref is a commit. If it is, use
-    # the files modified in that commit.
-    debug "checking for files..."
-    if [ ${#FILEPATHS[@]} -eq 0 ]; then
-        if [ ${#REFS[@]} -eq 1 ]; then
-            local ref="${REFS[0]}"
-            if [ $(get-ref-type "${ref}") == "commit" ]; then
-                readarray -t FILEPATHS < <(
-                    git log -1 --pretty=format: --name-only "${ref}"
-                )
-                USE_REL_PATH=0
-                cd "$(git rev-parse --show-toplevel)"
-            fi
-        fi
     fi
 
     # Determine whether to use echo-formatted or git log to print the output
