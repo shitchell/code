@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+#
+# Converts my quotes note from the format:
+#
+#   Make mo' money
+#   --Abraham Lincoln
+#
+#   -=-=-=-
+#
+#   Get some
+#   --George Washington
+#
+# to JSON
+
+import sys
+import json
+import argparse
+from pathlib import Path
+
+parser = argparse.ArgumentParser(description="convert quotes note to JSON")
+p_output = parser.add_argument_group("output")
+parser.add_argument(
+    "files", nargs="+", type=Path, help="the notes file(s) to read"
+)
+parser.add_argument(
+    "-i",
+    "--indent",
+    dest="json_indent",
+    type=int,
+    default=4,
+    help="the indent to use for the JSON output"
+)
+parser.add_argument(
+    "-v",
+    "--verbose",
+    dest="verbose",
+    action="store_true",
+    default=False,
+    help="show more verbose output"
+)
+parser.add_argument(
+    "-o",
+    "--output",
+    dest="output_file",
+    type=Path,
+    default=None,
+    help="the JSON output file (defaults to stdout)"
+)
+args = parser.parse_args()
+
+def print_verbose(*a, **k) -> None:
+    if "file" not in k:
+        k["file"] = sys.stderr
+    if args.verbose:
+        print(*a, **k)
+
+all_quotes: list[str] = []
+
+for filepath in args.files:
+    data: str = ""
+    file_quotes: list[str] = []
+
+    print_verbose(f"* loading '{filepath}' ... ", end="")
+    try:
+        data = open(filepath).read().strip()
+    except Exception as e:
+        print_verbose("error")
+        print_verbose(e, file=sys.stderr)
+        continue
+    else:
+        print_verbose("done")
+    print_verbose(f"  * {len(data):,} bytes")
+    if data:
+        file_quotes = data.split('\n\n-=-=-=-\n\n')
+        print_verbose(f"  * {len(file_quotes):,} quotes")
+        all_quotes.extend(file_quotes)
+
+print_verbose("* converting loaded quotes to JSON ... ", end="")
+json_output: str = ""
+try:
+    json_output = json.dumps(all_quotes, indent=args.json_indent)
+except Exception as e:
+    print_verbose("error")
+    print_verbose(e)
+    sys.exit(1)
+print_verbose("success")
+
+if args.output_file:
+    print_verbose(
+        f"* writing {len(json_output):,} bytes to '{args.output_file}' ... ",
+        end=""
+    )
+    try:
+        args.output_file.write_text(json_output)
+    except Exception as e:
+        print_verbose("error")
+        print_verbose(e, file=sys.stderr)
+    else:
+        print_verbose("done")
+else:
+    print(json_output)
