@@ -17,6 +17,16 @@ declare -ri E_SUCCESS=0
 declare -ri E_ERROR=1
 
 
+## colors ######################################################################
+################################################################################
+function custom-colors() {
+    # {{TODO: DEFINE CUSTOM COLORS HERE}}
+    # See colors.sh for help on color variable names
+    C_TITLE="${S_BOLD}${C_BLUE}"
+    C_FILENAME="${C_CYAN}"
+    C_COMMENT="${S_BOLD}${S_DIM}"
+}
+
 ## traps #######################################################################
 ################################################################################
 
@@ -87,7 +97,7 @@ function parse-args() {
     FILEPATHS=()
     DO_COLOR=false
     DO_SILENT=false
-    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+    local __color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -105,7 +115,7 @@ function parse-args() {
                 shift 1
                 ;;
             -c | --color)
-                color_when="${2}"
+                __color_when="${2}"
                 shift 1
                 ;;
             -s | --silent)
@@ -137,7 +147,7 @@ function parse-args() {
 
     # Set up colors
     if ! ${DO_SILENT}; then
-        case "${color_when}" in
+        case "${__color_when}" in
             on | yes | always)
                 DO_COLOR=true
                 ;;
@@ -152,7 +162,7 @@ function parse-args() {
                 fi
                 ;;
             *)
-                echo "error: invalid color mode: ${color_when}" >&2
+                echo "error: invalid color mode: ${__color_when}" >&2
                 return ${E_ERROR}
                 ;;
         esac
@@ -180,8 +190,14 @@ function do-stuff() {
         @stdout
             A message, optionally about <arg>
     '
+    # Standard for functions:
+    # 1. Declare all local variables at the top of the function
+    # 2. Declare them with their type (e.g.: `--` or `-i` or `-a`...)
+    # 3. Use a `__` prefix
+    # 4. All lowercase
+    local -- __myvar="${1}"
     echo -n "i'm doin the stuff"
-    [[ -n "${1}" ]] && echo -e " to ${C_CYAN}${1}${S_RESET}" || echo
+    [[ -n "${__myvar}" ]] && echo -e " to ${C_CYAN}${__myvar}${S_RESET}" || echo
 }
 
 
