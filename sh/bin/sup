@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Show or translate superscript characters
+
+declare -A SUPERSCRIPT_CHARS=(
+    [1]=$'\u00B9'
+    [2]=$'\u00B2'
+    [3]=$'\u00B3'
+    [4]=$'\u2074'
+    [5]=$'\u2075'
+    [6]=$'\u2076'
+    [7]=$'\u2077'
+    [8]=$'\u2078'
+    [9]=$'\u2079'
+    [0]=$'\u2070'
+    [+]=$'\u207A'
+    [-]=$'\u207B'
+    [=]=$'\u207C'
+    [\(]=$'\u207D'
+    [\)]=$'\u207E'
+)
+ARGS=( "${@}" )
+
+# If no arguments given, just list all the superscript characters
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    for key in "${!SUPERSCRIPT_CHARS[@]}"; do
+        echo "${key}: ${SUPERSCRIPT_CHARS[${key}]}"
+    done
+    exit 0
+else
+    # Translate the given arguments character by character
+    ARG_STRING="${ARGS[*]}"
+    for ((i=0; i<"${#ARG_STRING}"; i++)); do
+        char="${ARG_STRING:$i:1}"
+        if [[ -n "${SUPERSCRIPT_CHARS[${char}]}" ]]; then
+            printf "%s" "${SUPERSCRIPT_CHARS[${char}]}"
+        else
+            printf "%s" "${char}"
+        fi
+    done
+    printf "\n"
+fi

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Show or translate subscript characters
+
+declare -A SUBSCRIPT_CHARS=(
+    [0]=$'\u2080'
+    [1]=$'\u2081'
+    [2]=$'\u2082'
+    [3]=$'\u2083'
+    [4]=$'\u2084'
+    [5]=$'\u2085'
+    [6]=$'\u2086'
+    [7]=$'\u2087'
+    [8]=$'\u2088'
+    [9]=$'\u2089'
+    [+]=$'\u208A'
+    [-]=$'\u208B'
+    [=]=$'\u208C'
+    [\(]=$'\u208D'
+    [\)]=$'\u208E'
+)
+ARGS=( "${@}" )
+
+# If no arguments given, just list all the superscript characters
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    for key in "${!SUBSCRIPT_CHARS[@]}"; do
+        echo "${key}: ${SUBSCRIPT_CHARS[${key}]}"
+    done
+    exit 0
+else
+    # Translate the given arguments character by character
+    ARG_STRING="${ARGS[*]}"
+    for ((i=0; i<"${#ARG_STRING}"; i++)); do
+        char="${ARG_STRING:$i:1}"
+        if [[ -n "${SUBSCRIPT_CHARS[${char}]}" ]]; then
+            printf "%s" "${SUBSCRIPT_CHARS[${char}]}"
+        else
+            printf "%s" "${char}"
+        fi
+    done
+    printf "\n"
+fi

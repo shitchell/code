@@ -18,6 +18,7 @@ include-source 'exit-codes'
 
 declare -ri E_SUCCESS=0
 declare -ri E_ERROR=1
+declare -ri E_TIME_IN_PAST=2
 
 
 ## traps #######################################################################
@@ -123,6 +124,11 @@ function help-full() {
     echo "If multiple alarms are specified, they will be played in order each"
     echo "time the alarm is repeated."
     echo
+    echo "By default, the requested time will be for today. If the time has"
+    echo "already passed, the alarm will exit with an error. You can change"
+    echo "this behavior to look for the next occurrence of the time by using"
+    echo "the -x/--next option."
+    echo
     echo "Options:"
     cat << EOF
     -h                         display usage
@@ -138,6 +144,7 @@ function help-full() {
     -v/--volume <percent>      volume of the alarm (default: 100)
     -V/--sys-volume <percent>  system volume to set before playing the alarm
     -f/--failsafe              if no alarm is found, play a built-in alarm
+    -x/--next                  find the next occurrence of the time
     <time>                     when to play the alarm
 EOF
 }
@@ -162,6 +169,7 @@ function parse-args() {
     DO_SILENT=false
     local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
     DO_LIST=false
+    DO_NEXT="${DO_NEXT:-false}"
     ALARM_DIR="${ALARM_DIR}"
     ALARM_DIRS=""  # will be set after parsing the arguments
     DEFAULT_ALARM_DIRS=(
@@ -174,7 +182,7 @@ function parse-args() {
     SNOOZE="${SNOOZE:-300}"  # 5 minutes
     ALARM_VOLUME="${VOLUME:-100}"
     SYS_VOLUME="${SYS_VOLUME}"  # do not set system volume unless specified
-    DO_FAILSAFE=false
+    DO_FAILSAFE="${DO_FAILSAFE:-false}"
     ALARM_NAMES=( "${ALARM_NAMES[@]}" )
 
     # Loop over the arguments
@@ -233,6 +241,12 @@ function parse-args() {
             -f | --failsafe)
                 # TODO: add --failsafe[=<duration>] option
                 DO_FAILSAFE=true
+                ;;
+            -x | --next)
+                DO_NEXT=true
+                ;;
+            -X | --no-next)
+                DO_NEXT=false
                 ;;
             --)
                 shift 1
@@ -347,6 +361,22 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
+function get-next-time() {
+    local when="${1}"
+    local next_time_epoch now_epoch
+
+    # We do the date comparison using epoch, but our time input must be a string
+    next_time_epoch=$(date -d "${when}" "+%s")
+    now_epoch=$(date "+%s")
+    if ((next_time_epoch < now_epoch)); then
+        # Return the date for tomorrow
+        date -d "tomorrow ${when}" "+%F %T"
+    else
+        # Return the original date
+        echo "${when}"
+    fi
+}
+
 function find-alarm() {
     local name="${1}"
     local filename filetype
@@ -456,7 +486,7 @@ ra_countdown_date() {
     # Exit with an error if the duration is negative
     if ((duration < 0)); then
         echo "${C_ERROR}error: time has already passed${S_RESET}" >&2
-        return ${E_ERROR}
+        return ${E_TIME_IN_PAST}
     fi
 
     while ((duration > 0)); do
@@ -489,11 +519,15 @@ function main() {
     parse-args "${@}" || return ${?}
 
     debug-vars DO_COLOR DO_SILENT ALARM_DIR ALARM_DIRS WHEN REPEAT SNOOZE \
-               ALARM_VOLUME SYS_VOLUME DO_FAILSAFE ALARM_NAMES
+               ALARM_VOLUME SYS_VOLUME DO_FAILSAFE ALARM_NAMES DO_LIST DO_NEXT
 
     if ${DO_LIST}; then
         list-alarms
         return ${E_SUCCESS}
+    fi
+
+    if ${DO_NEXT}; then
+        WHEN=$(get-next-time "${WHEN}")
     fi
 
     if [[ -n "${WHEN}" ]]; then

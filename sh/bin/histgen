@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+#
+# This script generates a bash script from recent command history using AI
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'colors.sh'
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## traps #######################################################################
+################################################################################
+
+function silence-output() {
+    :  'Silence all script output'
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+function restore-output() {
+    :  'Restore script output after a call to `silence-output`'
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+function trap-exit() {
+    :  'An exit trap to restore output on script end'
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename \"${0}\") [-h] [-n num] [-p param] [-o name] <prompt>"
+}
+
+function help-epilogue() {
+    echo "Generate a bash script based on recent command history and AI tools."
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Options:"
+    cat << '    EOF'
+    -h                    display usage
+    -n <num>              number of recent commands to search (default: 20)
+    -p <param>            parameter to include (can specify multiple times)
+    -o <name>             output script name
+    EOF
+}
+
+function parse-args() {
+    NUM=20
+    PARAMS=()
+    OUTPUT=""
+    PROMPT=""
+
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            -n)
+                NUM="${2}"
+                shift 1
+                ;;
+            -p)
+                PARAMS+=("${2}")
+                shift 1
+                ;;
+            -o)
+                OUTPUT="${2}"
+                shift 1
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                PROMPT+=" ${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    PROMPT="${PROMPT# }"
+
+    if [[ -z "${PROMPT}" ]]; then
+        echo "error: prompt required" >&2
+        return ${E_ERROR}
+    fi
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function ai() {
+    :  'Select an available command-line AI tool to generate a script
+
+        @usage ai <prompt>
+
+        @arg <prompt> The prompt for AI to generate the script
+
+        @stdout Generated bash script
+    '
+    local -- __prompt="${1}" __output
+
+    if command -v claude >/dev/null; then
+        __output=$(claude --prompt "${__prompt}")
+    elif command -v sgpt >/dev/null; then
+        __output=$(sgpt --code "${__prompt}")
+    elif command -v aichat >/dev/null; then
+        __output=$(aichat generate --prompt "${__prompt}")
+    elif command -v chatgpt >/dev/null; then
+        __output=$(chatgpt "${__prompt}")
+    elif command -v gpt >/dev/null; then
+        __output=$(gpt -p "${__prompt}")
+    else
+        echo "No supported AI tools (claude, sgpt, aichat, chatgpt, gpt) found." >&2
+        exit ${E_ERROR}
+    fi
+
+    echo "${__output}"
+}
+
+function generate-script() {
+    :  'Generate and save the bash script based on recent commands and prompt'
+    local -- __recent_cmds __full_prompt __generated_script
+    __recent_cmds=$(history | tail -n "${NUM}" | sed 's/^ *[0-9]* *//')
+
+    __full_prompt="Given the recent bash commands:\n${__recent_cmds}\n\n"
+
+    if [[ ${#PARAMS[@]} -gt 0 ]]; then
+        __full_prompt+="Include parameters/options: ${PARAMS[*]}\n\n"
+    fi
+
+    __full_prompt+="Task: ${PROMPT}\n\nGenerate a complete bash script:"
+
+    __generated_script=$(ai "${__full_prompt}")
+
+    if [[ -z "${OUTPUT}" ]]; then
+        OUTPUT=$(echo "${__generated_script}" | grep -m1 -oP '(?<=^#\s?[Nn]ame:?\s).*' | tr ' ' '_' | sed 's/[^a-zA-Z0-9_-]//g')
+        [[ -z "${OUTPUT}" ]] && OUTPUT="generated_script"
+        OUTPUT+=".sh"
+    fi
+
+    if [[ -e "${OUTPUT}" ]]; then
+        read -p "File '${OUTPUT}' already exists. Overwrite? [y/N]: " -r reply
+        [[ ! ${reply,,} =~ ^y(es)?$ ]] && { echo "Aborted."; exit ${E_ERROR}; }
+    fi
+
+    echo "${__generated_script}" > "${OUTPUT}"
+    chmod +x "${OUTPUT}"
+    echo "Script saved to: ${OUTPUT}"
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+    generate-script
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

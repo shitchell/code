@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+#
+# Watch the output of `du`
+
+import 'debug'
+
+ARGS=( "${@}" )
+DEFAULT_ARGS=( -cmd1 . )
+
+if (( ${#ARGS[@]} == 0 )); then
+    ARGS=( "${DEFAULT_ARGS[@]}" )
+fi
+
+watch -n 1 du "${ARGS[@]}"

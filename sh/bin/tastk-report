@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+TASTK_USER="${TASTK_USER:-tastk}"
+TASTK_PASS="${TASTK_PASS:-password}"
+EMPLOYEE=""
+EMPLOYEE_ID=""
+
+# Usage
+function usage() {
+    echo "usage: $(basename "${0}") [-h] [-u/--user <user>] [-p/--pass <pass>]"
+}
+
+# Loop over the arguments
+while [[ ${#} -gt 0 ]]; do
+    case ${1} in
+        -h)
+            usage
+            exit 0
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        -u | --user)
+            TASTK_USER="${2}"
+            shift 1
+            ;;
+        -p | --pass)
+            TASTK_PASS="${2}"
+            shift 1
+            ;;
+        -e | --employee)
+            EMPLOYEE="${2}"
+            shift 1
+            ;;
+        -i | --id)
+            EMPLOYEE_ID="${2}"
+            shift 1
+            ;;
+        -*)
+            echo "error: unknown option: ${1}" >&2
+            exit 1
+            ;;
+        *)
+            echo "error: unknown argument: ${1}" >&2
+            exit 1
+            ;;
+    esac
+    shift 1
+done
+
+# Create a temporary cookie jar
+COOKIE_JAR=$(mktemp)
+
+# Create a curl function to make requests
+function curl-tastk() {
+    curl -s -c "${COOKIE_JAR}" -b "${COOKIE_JAR}" "${@}"
+}
+

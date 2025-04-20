@@ -45,7 +45,8 @@ function help-full() {
     -d/--directory      the directory to organize files into
     -c/--copy           copy files instead of moving them
     -m/--move           move files instead of copying them
-    -n/--dry-run        don't actually do anything
+    -n/--dry-run        do not actually do anything
+    <filepaths>
 EOF
 }
 

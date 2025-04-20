@@ -1,18 +1,66 @@
 #!/usr/bin/env bash
-directory="/sys/class/backlight/intel_backlight/"
-file=$directory"brightness"
-level=$(cat $file)
-inc=100
+#
+# Change screen brightness
+#
+# Usage:
+#   brightness [up|down] [increment]
+#   brightness [percent]
+#   brightness
+#
+# Examples:
+#   brightness up        # up by 10%
+#   brightness up 20     # up by 20%
+#   brightness down      # down by 10%
+#   brightness down 20   # down by 20%
+#   brightness 50        # set to 50%
+#   brightness 50%       # set to 50%
+#   brightness           # show the current brightness level
 
-if [ -z "$1" ]; then
-	cat $file
-	exit 0
-fi
+declare -- BRIGHTESS_DIR="/sys/class/backlight/intel_backlight"
+declare -- BRIGHTNESS_FILE="${BRIGHTESS_DIR}/brightness"
+declare -- MAX_BRIGHTNESS_FILE="${BRIGHTESS_DIR}/max_brightness"
+declare -i MAX_BRIGHTNESS=$(cat "${MAX_BRIGHTNESS_FILE}")
+declare -i CUR_BRIGHTNESS=$(cat "${BRIGHTNESS_FILE}")
 
-if [ $level -lt "600" ]; then
-	inc=50
-fi
+# Strip a trailing '%' if present
+ARG="${ARG%\%}"
 
+# convert brightness (0 - $max_brightness) to percent (0 - 100)
+function brightness_to_percent(){
+	local __brightness="${1}"
+	echo "$(( 100 * __brightness / max_brightness ))"
+	# echo "scale=2; (${__brightness} / ${max_brightness}) * 100" | bc
+}
+
+# convert percent (0 - 100) to brightness (0 - $max_brightness)
+function percent_to_brightness(){
+	local __percent="${1}"
+	echo "$(( __percent * max_brightness / 100 ))"
+	# echo "scale=2; (${__percent} / 100) * ${max_brightness}" | bc
+}
+
+# Case: brightness up/down -- set increment to +/- 10
+case "${ARG}" in
+	up)
+		inc=+10
+		;;
+	down)
+		inc=-10
+		;;
+	"")
+		echo "$(brightness_to_percent ${current_brightness})%"
+		exit 0
+		;;
+	*)
+		# Test if the argument is a number
+		regex="^[-+]?[0-9]+%?$"
+		if [[ ! "${ARG}" =~ ${regex} ]]; then
+			echo "fatal: invalid argument: ${ARG}" >&2
+			exit 1
+		fi
+		# Extract 
+		;;
+esac
 function up(){
 	newlevel=$(($level+$inc))
 	echo $newlevel

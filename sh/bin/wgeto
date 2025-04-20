@@ -21,7 +21,7 @@ function _wgeto() {
         name="${name%%\?*}"
     fi
 
-    wget "${url}" -O "${name}"
+    wget --continue "${url}" -O "${name}"
 }
 
 for url in "${@}"; do
