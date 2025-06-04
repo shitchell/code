@@ -2,7 +2,21 @@
 #
 # Get the latest micro binary
 
-DIRECTORY="${1:-.}"
+VERSION=""
+DIRECTORY="./"
+
+while [[ ${#} -gt 0 ]]; do
+    case "${1}" in
+        -d | --directory)
+            DIRECTORY="${2}"
+            shift 1
+            ;;
+        *)
+            VERSION="${1}"
+            shift 1
+            ;;
+    esac
+done
 
 if ! [[ -d "${DIRECTORY}" ]]; then
     echo "error: not a directory: ${DIRECTORY}" >&2
@@ -12,4 +26,9 @@ fi
 
 cd "${DIRECTORY}"
 
-curl https://getmic.ro | bash
+if wget https://getmic.ro -O /tmp/getmicro.sh &>/dev/null; then
+    bash /tmp/getmicro.sh "${VERSION}"
+else
+    echo "fatal: could not fetch getmicro.sh" >&2
+    exit 1
+fi
