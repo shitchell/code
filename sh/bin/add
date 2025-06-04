@@ -1,0 +1,43 @@
+#!/bin/bash
+
+function _add() {
+    local sum=0
+    
+    # Check if bc is available
+    if command -v bc >/dev/null 2>&1; then
+        # Use bc for float support
+        for num in "$@"; do
+            if [[ $num =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+                sum=$(echo "$sum + $num" | bc -l)
+            else
+                echo "Error: '$num' is not a valid number" >&2
+                return 1
+            fi
+        done
+        echo "$sum"
+    else
+        # Fall back to bash arithmetic (integers only)
+        for num in "$@"; do
+            if [[ $num =~ ^-?[0-9]+$ ]]; then
+                sum=$((sum + num))
+            else
+                echo "Error: '$num' is not a valid integer (bc not available for float support)" >&2
+                return 1
+            fi
+        done
+        echo "$sum"
+    fi
+}
+
+# Collect numbers from arguments or stdin
+numbers=()
+
+if [ $# -gt 0 ]; then
+    numbers=("$@")
+else
+    while read -r line; do
+        numbers+=("$line")
+    done
+fi
+
+_add "${numbers[@]}"
