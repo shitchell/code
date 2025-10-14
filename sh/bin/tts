@@ -1,0 +1,81 @@
+#!/bin/bash
+# Shared tmux session manager - intelligently attaches to main or creates grouped sessions
+
+SESSION="${1:-main}"
+BASE_SESSION="main"
+
+# Check if we're inside tmux
+if [ -n "$TMUX" ]; then
+    INSIDE_TMUX=1
+    ATTACH_CMD="tmux switch-client -t"
+else
+    INSIDE_TMUX=0
+    ATTACH_CMD="tmux attach -t"
+fi
+
+# Function to check if anyone is attached to a session
+is_attached() {
+    local session="$1"
+    [ -n "$(tmux list-clients -t "$session" 2>/dev/null)" ]
+}
+
+# Function to create or attach to a session
+attach_to() {
+    local target="$1"
+    if [ $INSIDE_TMUX -eq 1 ]; then
+        tmux switch-client -t "$target"
+    else
+        tmux attach -t "$target"
+    fi
+}
+
+# If user specified a non-main session, just use tt-like behavior
+if [ "$SESSION" != "main" ]; then
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        attach_to "$SESSION"
+    else
+        tmux new-session -s "$SESSION"
+    fi
+    exit 0
+fi
+
+# Ensure main session exists
+if ! tmux has-session -t "$BASE_SESSION" 2>/dev/null; then
+    # Main doesn't exist, create it
+    if [ $INSIDE_TMUX -eq 1 ]; then
+        # Can't create new session from inside tmux, create and switch
+        tmux new-session -d -s "$BASE_SESSION"
+        tmux switch-client -t "$BASE_SESSION"
+    else
+        tmux new-session -s "$BASE_SESSION"
+    fi
+    exit 0
+fi
+
+# Main exists - check if anyone is attached
+if ! is_attached "$BASE_SESSION"; then
+    # No one on main, attach to it
+    attach_to "$BASE_SESSION"
+    exit 0
+fi
+
+# Main is occupied, find first available numbered session
+i=1
+while true; do
+    if ! tmux has-session -t "$i" 2>/dev/null; then
+        # Session doesn't exist, create grouped session
+        if [ $INSIDE_TMUX -eq 1 ]; then
+            tmux new-session -d -t "$BASE_SESSION" -s "$i"
+            tmux switch-client -t "$i"
+        else
+            tmux new-session -t "$BASE_SESSION" -s "$i"
+        fi
+        exit 0
+    elif ! is_attached "$i"; then
+        # Session exists but no one attached, use it
+        attach_to "$i"
+        exit 0
+    fi
+    # This session is occupied, try next number
+    ((i++))
+done
