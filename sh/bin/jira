@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+
+# Simple LLM-friendly Jira CLI utility
+# Usage:
+#   jira auth [status | login | logout]
+#   jira [get | post | put | delete] [-d/--data <json>] <endpoint>
+
+set -e
+
+SCRIPT_NAME="$(basename "$0")"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/jira"
+CONFIG_FILE="${CONFIG_DIR}/config"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Error handling
+error() {
+    echo -e "${RED}Error: $*${NC}" >&2
+    exit 1
+}
+
+success() {
+    echo -e "${GREEN}$*${NC}"
+}
+
+warn() {
+    echo -e "${YELLOW}$*${NC}"
+}
+
+# Load config
+load_config() {
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        source "${CONFIG_FILE}"
+    fi
+}
+
+# Save config
+save_config() {
+    mkdir -p "${CONFIG_DIR}"
+    cat > "${CONFIG_FILE}" << EOF
+JIRA_URL="${JIRA_URL}"
+JIRA_EMAIL="${JIRA_EMAIL}"
+JIRA_TOKEN="${JIRA_TOKEN}"
+EOF
+    chmod 600 "${CONFIG_FILE}"
+}
+
+# Auth commands
+cmd_auth_status() {
+    load_config
+    if [[ -n "${JIRA_URL}" && -n "${JIRA_EMAIL}" && -n "${JIRA_TOKEN}" ]]; then
+        echo "URL: ${JIRA_URL}"
+        echo "Email: ${JIRA_EMAIL}"
+        echo "Token: ${JIRA_TOKEN:0:4}...${JIRA_TOKEN: -4}"
+
+        # Perform actual auth test request
+        echo -n "Testing authentication... "
+        if curl -sf \
+            -u "${JIRA_EMAIL}:${JIRA_TOKEN}" \
+            -H "Accept: application/json" \
+            "${JIRA_URL}/rest/api/3/myself" > /dev/null; then
+            success "Authenticated and verified"
+            return 0
+        else
+            error "Authentication failed - credentials may be invalid"
+        fi
+    else
+        warn "Not authenticated"
+        return 1
+    fi
+}
+
+cmd_auth_login() {
+    echo "Jira Authentication"
+    echo "==================="
+
+    # Get URL
+    read -p "Jira URL (e.g., https://company.atlassian.net): " JIRA_URL
+    JIRA_URL="${JIRA_URL%/}"  # Remove trailing slash
+
+    # Get email
+    read -p "Email: " JIRA_EMAIL
+
+    # Get API token
+    echo "API Token (create at: https://id.atlassian.com/manage-profile/security/api-tokens)"
+    read -s -p "Token: " JIRA_TOKEN
+    echo
+
+    # Validate by making a test request
+    echo -n "Validating credentials... "
+    if curl -sf \
+        -u "${JIRA_EMAIL}:${JIRA_TOKEN}" \
+        -H "Accept: application/json" \
+        "${JIRA_URL}/rest/api/3/myself" > /dev/null; then
+        success "Success!"
+        save_config
+    else
+        error "Authentication failed"
+    fi
+}
+
+cmd_auth_logout() {
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        rm -f "${CONFIG_FILE}"
+        success "Logged out"
+    else
+        warn "Not logged in"
+    fi
+}
+
+cmd_auth() {
+    case "${1:-status}" in
+        status)
+            cmd_auth_status
+            ;;
+        login)
+            cmd_auth_login
+            ;;
+        logout)
+            cmd_auth_logout
+            ;;
+        *)
+            error "Unknown auth command: $1. Use: status, login, or logout"
+            ;;
+    esac
+}
+
+# HTTP request commands
+make_request() {
+    local method="$1"
+    shift
+
+    load_config
+
+    # Check if authenticated
+    if [[ -z "${JIRA_URL}" || -z "${JIRA_EMAIL}" || -z "${JIRA_TOKEN}" ]]; then
+        error "Not authenticated. Run: ${SCRIPT_NAME} auth login"
+    fi
+
+    local data=""
+    local endpoint=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -d|--data)
+                data="$2"
+                shift 2
+                ;;
+            *)
+                endpoint="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "${endpoint}" ]]; then
+        error "Endpoint required"
+    fi
+
+    # Ensure endpoint starts with /
+    if [[ ! "${endpoint}" =~ ^/ ]]; then
+        endpoint="/${endpoint}"
+    fi
+
+    # Build URL - if endpoint doesn't contain /rest/api, prepend it
+    local url
+    if [[ "${endpoint}" =~ ^/rest/ ]]; then
+        url="${JIRA_URL}${endpoint}"
+    else
+        url="${JIRA_URL}/rest/api/3${endpoint}"
+    fi
+
+    # Build curl command
+    local curl_cmd=(
+        curl -s
+        -u "${JIRA_EMAIL}:${JIRA_TOKEN}"
+        -H "Accept: application/json"
+        -X "${method}"
+    )
+
+    # Add data if provided
+    if [[ -n "${data}" ]]; then
+        curl_cmd+=(-H "Content-Type: application/json")
+        curl_cmd+=(-d "${data}")
+    fi
+
+    curl_cmd+=("${url}")
+
+    # Make request and format JSON output
+    "${curl_cmd[@]}" | jq -r '.' 2>/dev/null || "${curl_cmd[@]}"
+}
+
+cmd_get() {
+    make_request GET "$@"
+}
+
+cmd_post() {
+    make_request POST "$@"
+}
+
+cmd_put() {
+    make_request PUT "$@"
+}
+
+cmd_delete() {
+    make_request DELETE "$@"
+}
+
+# Show usage
+usage() {
+    cat << EOF
+Usage: ${SCRIPT_NAME} <command> [options]
+
+Authentication:
+  ${SCRIPT_NAME} auth [status | login | logout]
+
+API Requests:
+  ${SCRIPT_NAME} get <endpoint>
+  ${SCRIPT_NAME} post [-d/--data <json>] <endpoint>
+  ${SCRIPT_NAME} put [-d/--data <json>] <endpoint>
+  ${SCRIPT_NAME} delete <endpoint>
+
+Examples:
+  # Login
+  ${SCRIPT_NAME} auth login
+
+  # Get issue
+  ${SCRIPT_NAME} get /issue/DEVOPS-405
+
+  # Search issues
+  ${SCRIPT_NAME} post -d '{"jql":"project=DEVOPS","maxResults":10}' /search
+
+  # Update issue
+  ${SCRIPT_NAME} put -d '{"fields":{"summary":"New summary"}}' /issue/DEVOPS-405
+
+  # Add comment
+  ${SCRIPT_NAME} post -d '{"body":"My comment"}' /issue/DEVOPS-405/comment
+
+Endpoints can be specified with or without /rest/api/3 prefix.
+EOF
+}
+
+# Main command dispatcher
+main() {
+    if [[ $# -eq 0 ]]; then
+        usage
+        exit 0
+    fi
+
+    case "$1" in
+        auth)
+            shift
+            cmd_auth "$@"
+            ;;
+        get|post|put|delete)
+            local cmd="$1"
+            shift
+            "cmd_${cmd,,}" "$@"
+            ;;
+        -h|--help|help)
+            usage
+            ;;
+        *)
+            error "Unknown command: $1. Run '${SCRIPT_NAME} --help' for usage."
+            ;;
+    esac
+}
+
+main "$@"
