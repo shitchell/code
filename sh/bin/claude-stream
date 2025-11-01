@@ -1,0 +1,872 @@
+#!/usr/bin/env bash
+#
+# Parse and prettify Claude Code JSONL stream output
+
+# Bootstrap include-source if not already available
+if ! command -v include-source &>/dev/null; then
+    # Try to find and source include.sh
+    for libdir in "${BASH_LIB_PATH//:/ }" "${HOME}/code/sh/lib" "${HOME}/.local/lib/bash"; do
+        if [[ -f "${libdir}/include.sh" ]]; then
+            source "${libdir}/include.sh"
+            break
+        fi
+    done
+fi
+
+## imports #####################################################################
+################################################################################
+
+include-source 'colors.sh'
+include-source 'debug.sh'
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_MISSING_DEPENDENCY=2
+declare -ri E_INVALID_ARGS=3
+
+## colors ######################################################################
+################################################################################
+
+function custom-colors() {
+    # System messages
+    C_SYSTEM="${C_BLUE}"
+    C_SYSTEM_DIM="${C_BLUE}${S_DIM}"
+
+    # Assistant messages
+    C_ASSISTANT="${S_RESET}"
+    C_TOOL="${C_YELLOW}"
+    C_THINKING="${S_DIM}${S_ITALIC}"
+
+    # User messages
+    C_USER="${C_GREEN}"
+    C_ERROR="${C_RED}"
+
+    # Metadata
+    C_METADATA="${S_DIM}"
+    C_TIMESTAMP="${C_CYAN}"
+    C_COST="${C_MAGENTA}"
+
+    # Labels
+    C_LABEL="${S_BOLD}${C_CYAN}"
+    C_VALUE="${C_WHITE}"
+}
+
+## traps #######################################################################
+################################################################################
+
+function silence-output() {
+    :  'Silence all script output'
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+function restore-output() {
+    :  'Restore script output after a call to `silence-output`'
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+function trap-exit() {
+    :  'An exit trap to restore output on script end'
+    restore-output
+}
+trap trap-exit EXIT
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [--file <jsonl>] [--prompt <text>] [options]"
+    echo "       claude --output-format stream-json | $(basename "${0}")"
+}
+
+function help-epilogue() {
+    echo "parse and prettify Claude Code JSONL stream output"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << 'EOF'
+Parse Claude Code session JSONL streams and display them in a human-readable
+format. Can read from files, stdin, or execute Claude with a prompt.
+
+Input Sources (mutually exclusive, stdin auto-detected):
+    --file <path>         read from JSONL file
+    --prompt <text>       execute claude with prompt and parse output
+    (default)             read from stdin if available
+
+Output Format:
+    --format <type>       output format: text (default), json
+    --line-numbers        show message numbers in output
+
+Visibility Controls:
+    --show-thinking       show thinking blocks (default)
+    --hide-thinking       hide thinking blocks
+    --show-tool-results   show tool execution results (default)
+    --hide-tool-results   hide tool execution results
+    --show-metadata       show message metadata
+    --hide-metadata       hide message metadata (default)
+    --compact             shorthand for --hide-metadata --hide-thinking
+                          --hide-tool-results --show-type assistant,user
+
+Filtering (repeatable, comma-separated):
+    --show-type <type>    show only these message types
+                          (system, assistant, user, file-history-snapshot,
+                          summary, queue-operation, result)
+    --show-subtype <sub>  show only these subtypes
+                          (init, compact_boundary, local_command, text,
+                          tool_use, thinking, tool_result)
+    --show-tool <tool>    show only these tools
+                          (Bash, Read, Write, Edit, Grep, etc.)
+    --grep <pattern>      include only messages matching pattern (repeatable)
+    --exclude <pattern>   exclude messages matching pattern (repeatable)
+    --since <timestamp>   show messages after ISO 8601 timestamp
+    --until <timestamp>   show messages before ISO 8601 timestamp
+
+Session Support:
+    --session <uuid>      find and parse session by UUID
+    --latest              parse most recent session file
+
+Streaming:
+    -F, --no-follow       disable follow mode (wait for new input)
+                          (default: follow mode enabled)
+
+General Options:
+    -h                    display usage
+    --help                display this help message
+    -c, --color <when>    when to use color ("auto", "always", "never")
+    -s, --silent          suppress all output
+
+Examples:
+    # Parse a session file
+    claude-stream --file ~/.claude/projects/*/session.jsonl
+
+    # Parse latest session with compact output
+    claude-stream --latest --compact
+
+    # Stream live Claude output
+    claude --output-format stream-json | claude-stream
+
+    # Execute Claude and parse
+    claude-stream --prompt "write a hello world script"
+
+    # Filter to show only tool uses
+    claude-stream --file session.jsonl --show-subtype tool_use
+
+    # Show only Bash tool calls from assistant
+    claude-stream --latest --show-type assistant --show-tool Bash
+
+    # Exclude thinking blocks and errors
+    claude-stream --file session.jsonl --exclude "thinking|error"
+
+    # Show messages in last hour
+    claude-stream --latest --since "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+EOF
+}
+
+function parse-args() {
+    # Check for required dependencies
+    if ! command -v jq &>/dev/null; then
+        echo "error: jq is required but not installed" >&2
+        return ${E_MISSING_DEPENDENCY}
+    fi
+
+    # Default values
+    INPUT_FILE=""
+    INPUT_PROMPT=""
+    INPUT_SESSION=""
+    DO_LATEST=false
+    OUTPUT_FORMAT="text"
+    DO_FOLLOW=true
+    DO_SHOW_THINKING=true
+    DO_SHOW_TOOL_RESULTS=true
+    DO_SHOW_METADATA=false
+    DO_SHOW_LINE_NUMBERS=false
+    DO_COLOR=false
+    DO_SILENT=false
+
+    # Filtering arrays
+    declare -ga SHOW_TYPE=()
+    declare -ga SHOW_SUBTYPE=()
+    declare -ga SHOW_TOOL=()
+    declare -ga GREP_PATTERNS=()
+    declare -ga EXCLUDE_PATTERNS=()
+    SINCE_TIMESTAMP=""
+    UNTIL_TIMESTAMP=""
+
+    # Default show types (used if user doesn't specify any filters)
+    local -a __default_show_type=(system assistant user file-history-snapshot summary queue-operation result)
+
+    local __color_when="${COLOR:-auto}"
+
+    # Parse arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --file)
+                INPUT_FILE="${2}"
+                shift 1
+                ;;
+            --prompt)
+                INPUT_PROMPT="${2}"
+                shift 1
+                ;;
+            --session)
+                INPUT_SESSION="${2}"
+                shift 1
+                ;;
+            --latest)
+                DO_LATEST=true
+                ;;
+            --format)
+                OUTPUT_FORMAT="${2}"
+                shift 1
+                ;;
+            --line-numbers)
+                DO_SHOW_LINE_NUMBERS=true
+                ;;
+            --show-thinking)
+                DO_SHOW_THINKING=true
+                ;;
+            --hide-thinking)
+                DO_SHOW_THINKING=false
+                ;;
+            --show-tool-results)
+                DO_SHOW_TOOL_RESULTS=true
+                ;;
+            --hide-tool-results)
+                DO_SHOW_TOOL_RESULTS=false
+                ;;
+            --show-metadata)
+                DO_SHOW_METADATA=true
+                ;;
+            --hide-metadata)
+                DO_SHOW_METADATA=false
+                ;;
+            --compact)
+                DO_SHOW_METADATA=false
+                DO_SHOW_THINKING=false
+                DO_SHOW_TOOL_RESULTS=false
+                # Override default to show only assistant and user
+                SHOW_TYPE=(assistant user)
+                ;;
+            --show-type)
+                IFS=',' read -ra types <<< "${2}"
+                SHOW_TYPE+=("${types[@]}")
+                shift 1
+                ;;
+            --show-subtype)
+                IFS=',' read -ra subtypes <<< "${2}"
+                SHOW_SUBTYPE+=("${subtypes[@]}")
+                shift 1
+                ;;
+            --show-tool)
+                IFS=',' read -ra tools <<< "${2}"
+                SHOW_TOOL+=("${tools[@]}")
+                shift 1
+                ;;
+            --grep)
+                GREP_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            --exclude)
+                EXCLUDE_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            --since)
+                SINCE_TIMESTAMP="${2}"
+                shift 1
+                ;;
+            --until)
+                UNTIL_TIMESTAMP="${2}"
+                shift 1
+                ;;
+            -F | --no-follow)
+                DO_FOLLOW=false
+                ;;
+            -c | --color)
+                __color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        shift 1
+    done
+
+    # Validate mutually exclusive input sources
+    local -i input_count=0
+    [[ -n "${INPUT_FILE}" ]] && (( input_count++ ))
+    [[ -n "${INPUT_PROMPT}" ]] && (( input_count++ ))
+    [[ -n "${INPUT_SESSION}" ]] && (( input_count++ ))
+    ${DO_LATEST} && (( input_count++ ))
+
+    if (( input_count > 1 )); then
+        echo "error: --file, --prompt, --session, and --latest are mutually exclusive" >&2
+        return ${E_INVALID_ARGS}
+    fi
+
+    # If no filters specified, use defaults
+    if (( ${#SHOW_TYPE[@]} == 0 && ${#SHOW_SUBTYPE[@]} == 0 && ${#SHOW_TOOL[@]} == 0 )); then
+        SHOW_TYPE=("${__default_show_type[@]}")
+    fi
+
+    # Validate output format
+    case "${OUTPUT_FORMAT}" in
+        text|json)
+            ;;
+        *)
+            echo "error: invalid output format: ${OUTPUT_FORMAT}" >&2
+            echo "       valid formats: text, json" >&2
+            return ${E_INVALID_ARGS}
+            ;;
+    esac
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${__color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if [[ -t 1 ]]; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${__color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && { setup-colors; custom-colors; } || unset-colors
+    fi
+
+    return ${E_SUCCESS}
+}
+
+## session functions ###########################################################
+################################################################################
+
+function find-session-file() {
+    :  'Find a session file by UUID or get the latest
+
+        @usage
+            <uuid> | --latest
+
+        @arg <uuid>
+            Session UUID to find
+
+        @option --latest
+            Find most recent session file
+
+        @stdout
+            Absolute path to session JSONL file
+    '
+    local -- __uuid="${1}"
+    local -- __projects_dir="${HOME}/.claude/projects"
+
+    if [[ "${__uuid}" == "--latest" ]]; then
+        find "${__projects_dir}" -name "*.jsonl" -type f -printf '%T@ %p\n' 2>/dev/null | \
+            sort -rn | head -1 | cut -d' ' -f2-
+    else
+        find "${__projects_dir}" -name "${__uuid}.jsonl" -type f -print -quit 2>/dev/null
+    fi
+}
+
+## filtering functions #########################################################
+################################################################################
+
+function should-show-message() {
+    :  'Determine if a message should be displayed based on filters
+
+        @usage
+            <json>
+
+        @arg <json>
+            JSON message object
+
+        @return
+            0 if message should be shown, 1 otherwise
+    '
+    local -- __json="${1}"
+    local -- __type __subtype __tool __timestamp __content
+
+    # Extract fields
+    __type=$(jq -r '.type // empty' <<< "${__json}")
+    __timestamp=$(jq -r '.timestamp // .message.timestamp // empty' <<< "${__json}")
+
+    # Check type filter
+    if (( ${#SHOW_TYPE[@]} > 0 )); then
+        local -i __found=0
+        for type in "${SHOW_TYPE[@]}"; do
+            [[ "${__type}" == "${type}" ]] && { __found=1; break; }
+        done
+        (( __found == 0 )) && return 1
+    fi
+
+    # Check subtype filter
+    if (( ${#SHOW_SUBTYPE[@]} > 0 )); then
+        __subtype=$(jq -r '.subtype // .message.content[]?.type // empty' <<< "${__json}")
+        local -i __found=0
+        for subtype in "${SHOW_SUBTYPE[@]}"; do
+            [[ "${__subtype}" == *"${subtype}"* ]] && { __found=1; break; }
+        done
+        (( __found == 0 )) && return 1
+    fi
+
+    # Check tool filter
+    if (( ${#SHOW_TOOL[@]} > 0 )); then
+        __tool=$(jq -r '.message.content[]? | select(.type == "tool_use") | .name' <<< "${__json}")
+        [[ -z "${__tool}" ]] && return 1
+        local -i __found=0
+        for tool in "${SHOW_TOOL[@]}"; do
+            [[ "${__tool}" == "${tool}" ]] && { __found=1; break; }
+        done
+        (( __found == 0 )) && return 1
+    fi
+
+    # Check timestamp filters
+    if [[ -n "${SINCE_TIMESTAMP}" && -n "${__timestamp}" ]]; then
+        [[ "${__timestamp}" < "${SINCE_TIMESTAMP}" ]] && return 1
+    fi
+    if [[ -n "${UNTIL_TIMESTAMP}" && -n "${__timestamp}" ]]; then
+        [[ "${__timestamp}" > "${UNTIL_TIMESTAMP}" ]] && return 1
+    fi
+
+    # Check grep patterns
+    if (( ${#GREP_PATTERNS[@]} > 0 )); then
+        __content=$(jq -c '.' <<< "${__json}")
+        local -i __found=0
+        for pattern in "${GREP_PATTERNS[@]}"; do
+            grep -qE "${pattern}" <<< "${__content}" && { __found=1; break; }
+        done
+        (( __found == 0 )) && return 1
+    fi
+
+    # Check exclude patterns
+    if (( ${#EXCLUDE_PATTERNS[@]} > 0 )); then
+        __content=$(jq -c '.' <<< "${__json}")
+        for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+            grep -qE "${pattern}" <<< "${__content}" && return 1
+        done
+    fi
+
+    return 0
+}
+
+## output format functions #####################################################
+################################################################################
+
+function __output_format_text() {
+    :  'Format message as human-readable text
+
+        @usage
+            <json> <line_number>
+
+        @arg <json>
+            JSON message object
+
+        @arg <line_number>
+            Message number in stream
+    '
+    local -- __json="${1}"
+    local -i __line_num="${2}"
+    local -- __type __timestamp __prefix
+
+    __type=$(jq -r '.type' <<< "${__json}")
+    __timestamp=$(jq -r '.timestamp // empty' <<< "${__json}")
+
+    # Line number prefix
+    __prefix=""
+    if ${DO_SHOW_LINE_NUMBERS}; then
+        __prefix="${C_METADATA}[${__line_num}]${S_RESET} "
+    fi
+
+    case "${__type}" in
+        system)
+            __output_format_text_system "${__json}" "${__prefix}"
+            ;;
+        assistant)
+            __output_format_text_assistant "${__json}" "${__prefix}"
+            ;;
+        user)
+            __output_format_text_user "${__json}" "${__prefix}"
+            ;;
+        file-history-snapshot)
+            __output_format_text_snapshot "${__json}" "${__prefix}"
+            ;;
+        summary)
+            __output_format_text_summary "${__json}" "${__prefix}"
+            ;;
+        queue-operation)
+            __output_format_text_queue "${__json}" "${__prefix}"
+            ;;
+        result)
+            __output_format_text_result "${__json}" "${__prefix}"
+            ;;
+        *)
+            echo "${__prefix}${C_METADATA}Unknown message type: ${__type}${S_RESET}"
+            ;;
+    esac
+
+    echo  # Blank line between messages
+}
+
+function __output_format_text_system() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __subtype __content
+
+    __subtype=$(jq -r '.subtype // "unknown"' <<< "${__json}")
+    __content=$(jq -r '.content // empty' <<< "${__json}")
+
+    echo "${__prefix}${C_SYSTEM}▸ SYSTEM${S_RESET} ${C_SYSTEM_DIM}(${__subtype})${S_RESET}"
+
+    case "${__subtype}" in
+        init)
+            local -- __model __version __cwd
+            __model=$(jq -r '.model' <<< "${__json}")
+            __version=$(jq -r '.claude_code_version' <<< "${__json}")
+            __cwd=$(jq -r '.cwd' <<< "${__json}")
+            echo "  ${C_LABEL}Model:${S_RESET} ${__model}"
+            echo "  ${C_LABEL}Version:${S_RESET} ${__version}"
+            echo "  ${C_LABEL}Directory:${S_RESET} ${__cwd}"
+            ;;
+        compact_boundary)
+            local -i __pre_tokens
+            __pre_tokens=$(jq -r '.compactMetadata.preTokens // 0' <<< "${__json}")
+            echo "  ${__content} (${__pre_tokens} tokens before compaction)"
+            ;;
+        local_command)
+            echo "  ${__content}"
+            ;;
+    esac
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_assistant() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __model_id __is_sidechain
+
+    __model_id=$(jq -r '.message.id // "unknown"' <<< "${__json}")
+    __is_sidechain=$(jq -r '.isSidechain' <<< "${__json}")
+
+    if [[ "${__is_sidechain}" == "true" ]]; then
+        echo "${__prefix}${C_ASSISTANT}${S_BOLD}◆ ASSISTANT (Task Agent)${S_RESET}"
+    else
+        echo "${__prefix}${C_ASSISTANT}${S_BOLD}◆ ASSISTANT${S_RESET}"
+    fi
+
+    # Process content array
+    jq -c '.message.content[]? // empty' <<< "${__json}" | while IFS= read -r content; do
+        local -- __content_type
+        __content_type=$(jq -r '.type' <<< "${content}")
+
+        case "${__content_type}" in
+            text)
+                local -- __text
+                __text=$(jq -r '.text' <<< "${content}")
+                echo "${__text}" | sed 's/^/  /'
+                ;;
+            tool_use)
+                local -- __tool_name __tool_id
+                __tool_name=$(jq -r '.name' <<< "${content}")
+                __tool_id=$(jq -r '.id' <<< "${content}")
+                echo "  ${C_TOOL}▸ Tool: ${__tool_name}${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
+
+                if ${DO_SHOW_TOOL_RESULTS}; then
+                    jq -r '.input | to_entries[] | "    \(.key): \(.value)"' <<< "${content}"
+                fi
+                ;;
+            thinking)
+                if ${DO_SHOW_THINKING}; then
+                    local -- __thinking
+                    __thinking=$(jq -r '.thinking' <<< "${content}")
+                    echo "  ${C_THINKING}💭 Thinking:${S_RESET}"
+                    echo "${__thinking}" | sed 's/^/    /' | sed "s/^/${C_THINKING}/" | sed "s/$/${S_RESET}/"
+                fi
+                ;;
+        esac
+    done
+
+    # Token usage
+    local -i __in_tokens __out_tokens __cache_read
+    __in_tokens=$(jq -r '.message.usage.input_tokens // 0' <<< "${__json}")
+    __out_tokens=$(jq -r '.message.usage.output_tokens // 0' <<< "${__json}")
+    __cache_read=$(jq -r '.message.usage.cache_read_input_tokens // 0' <<< "${__json}")
+
+    if (( __in_tokens > 0 || __out_tokens > 0 )); then
+        echo "  ${C_METADATA}Tokens: in=${__in_tokens} out=${__out_tokens} cache=${__cache_read}${S_RESET}"
+    fi
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_user() {
+    local -- __json="${1}" __prefix="${2}"
+
+    echo "${__prefix}${C_USER}◂ USER${S_RESET}"
+
+    # Process tool results
+    jq -c '.message.content[]? // empty' <<< "${__json}" | while IFS= read -r content; do
+        local -- __content_type __tool_id __is_error
+        __content_type=$(jq -r '.type' <<< "${content}")
+
+        case "${__content_type}" in
+            tool_result)
+                __tool_id=$(jq -r '.tool_use_id' <<< "${content}")
+                __is_error=$(jq -r '.is_error' <<< "${content}")
+
+                if [[ "${__is_error}" == "true" ]]; then
+                    echo "  ${C_ERROR}✗ Error${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
+                else
+                    echo "  ${C_USER}✓ Result${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
+                fi
+
+                if ${DO_SHOW_TOOL_RESULTS}; then
+                    local -- __result_content
+                    __result_content=$(jq -r '.content' <<< "${content}")
+                    if [[ "${__result_content}" != "null" && -n "${__result_content}" ]]; then
+                        echo "${__result_content}" | head -20 | sed 's/^/    /'
+                        local -i __line_count
+                        __line_count=$(echo "${__result_content}" | wc -l)
+                        (( __line_count > 20 )) && echo "    ${C_METADATA}... (${__line_count} lines total)${S_RESET}"
+                    fi
+                fi
+                ;;
+            image)
+                local -- __media_type
+                __media_type=$(jq -r '.source.media_type // "unknown"' <<< "${content}")
+                echo "  ${C_USER}🖼  Image${S_RESET} ${C_METADATA}(${__media_type})${S_RESET}"
+                ;;
+        esac
+    done
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_snapshot() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __timestamp
+
+    __timestamp=$(jq -r '.snapshot.timestamp' <<< "${__json}")
+    echo "${__prefix}${C_SYSTEM}📸 File History Snapshot${S_RESET} ${C_METADATA}(${__timestamp})${S_RESET}"
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_summary() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __summary
+
+    __summary=$(jq -r '.summary' <<< "${__json}")
+    echo "${__prefix}${C_LABEL}📋 Summary:${S_RESET} ${__summary}"
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_queue() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __operation __content
+
+    __operation=$(jq -r '.operation' <<< "${__json}")
+    __content=$(jq -r '.content // empty' <<< "${__json}")
+
+    echo "${__prefix}${C_SYSTEM}⚙  Queue: ${__operation}${S_RESET}"
+    [[ -n "${__content}" ]] && echo "${__content}" | sed 's/^/  /'
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_result() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __subtype __cost
+    local -i __duration_ms __num_turns
+
+    __subtype=$(jq -r '.subtype' <<< "${__json}")
+    __cost=$(jq -r '.total_cost_usd' <<< "${__json}")
+    __duration_ms=$(jq -r '.duration_ms // 0' <<< "${__json}")
+    __num_turns=$(jq -r '.num_turns // 0' <<< "${__json}")
+
+    echo "${__prefix}${C_LABEL}${S_BOLD}═══ SESSION COMPLETE ═══${S_RESET}"
+    echo "  ${C_LABEL}Status:${S_RESET} ${__subtype}"
+    echo "  ${C_LABEL}Turns:${S_RESET} ${__num_turns}"
+    echo "  ${C_LABEL}Duration:${S_RESET} $(((__duration_ms + 500) / 1000))s"
+    echo "  ${C_COST}${C_LABEL}Cost:${S_RESET} ${C_COST}\$${__cost}${S_RESET}"
+
+    # Token usage breakdown
+    local -i __input __output __cache_read
+    __input=$(jq -r '.usage.input_tokens // 0' <<< "${__json}")
+    __output=$(jq -r '.usage.output_tokens // 0' <<< "${__json}")
+    __cache_read=$(jq -r '.usage.cache_read_input_tokens // 0' <<< "${__json}")
+
+    echo "  ${C_LABEL}Tokens:${S_RESET} in=${__input} out=${__output} cache=${__cache_read}"
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __show_metadata() {
+    local -- __json="${1}"
+    local -- __uuid __session_id __timestamp
+
+    __uuid=$(jq -r '.uuid // empty' <<< "${__json}")
+    __session_id=$(jq -r '.sessionId // .session_id // empty' <<< "${__json}")
+    __timestamp=$(jq -r '.timestamp // empty' <<< "${__json}")
+
+    echo "  ${C_METADATA}┌─ Metadata${S_RESET}"
+    [[ -n "${__uuid}" ]] && echo "  ${C_METADATA}│ uuid: ${__uuid}${S_RESET}"
+    [[ -n "${__session_id}" ]] && echo "  ${C_METADATA}│ session: ${__session_id}${S_RESET}"
+    [[ -n "${__timestamp}" ]] && echo "  ${C_METADATA}│ timestamp: ${__timestamp}${S_RESET}"
+    echo "  ${C_METADATA}└─${S_RESET}"
+}
+
+function __output_format_json() {
+    :  'Format message as JSON (pass through with optional filtering)
+
+        @usage
+            <json> <line_number>
+    '
+    local -- __json="${1}"
+    jq -c '.' <<< "${__json}"
+}
+
+## processing functions ########################################################
+################################################################################
+
+function process-stream() {
+    :  'Process JSONL stream and output formatted messages
+
+        @usage
+            [<input_file>]
+
+        @arg <input_file>
+            Input file path (default: stdin)
+    '
+    local -- __input="${1:-/dev/stdin}"
+    local -i __line_num=0
+    local -- __format_func="__output_format_${OUTPUT_FORMAT}"
+
+    # Verify format function exists
+    if ! declare -f "${__format_func}" &>/dev/null; then
+        echo "error: output format '${OUTPUT_FORMAT}' not implemented" >&2
+        return ${E_ERROR}
+    fi
+
+    # Process stream
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        (( __line_num++ ))
+
+        # Skip empty lines
+        [[ -z "${line}" ]] && continue
+
+        # Validate JSON
+        if ! jq -e '.' &>/dev/null <<< "${line}"; then
+            ${DO_SILENT} || echo "warning: invalid JSON on line ${__line_num}" >&2
+            continue
+        fi
+
+        # Apply filters
+        if should-show-message "${line}"; then
+            "${__format_func}" "${line}" "${__line_num}"
+        fi
+    done < <(
+        if ${DO_FOLLOW}; then
+            tail -f -n +1 "${__input}" 2>/dev/null || cat "${__input}"
+        else
+            cat "${__input}"
+        fi
+    )
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    # Determine input source
+    local -- __input_source
+
+    if [[ -n "${INPUT_FILE}" ]]; then
+        # Read from file
+        if [[ ! -f "${INPUT_FILE}" ]]; then
+            echo "error: file not found: ${INPUT_FILE}" >&2
+            return ${E_ERROR}
+        fi
+        __input_source="${INPUT_FILE}"
+
+    elif [[ -n "${INPUT_SESSION}" ]]; then
+        # Find session by UUID
+        __input_source=$(find-session-file "${INPUT_SESSION}")
+        if [[ -z "${__input_source}" ]]; then
+            echo "error: session not found: ${INPUT_SESSION}" >&2
+            return ${E_ERROR}
+        fi
+
+    elif ${DO_LATEST}; then
+        # Find latest session
+        __input_source=$(find-session-file --latest)
+        if [[ -z "${__input_source}" ]]; then
+            echo "error: no sessions found" >&2
+            return ${E_ERROR}
+        fi
+
+    elif [[ -n "${INPUT_PROMPT}" ]]; then
+        # Execute claude and pipe output
+        if ! command -v claude &>/dev/null; then
+            echo "error: claude command not found" >&2
+            return ${E_MISSING_DEPENDENCY}
+        fi
+        claude --output-format stream-json --prompt "${INPUT_PROMPT}" | process-stream
+        return ${?}
+
+    elif [[ ! -t 0 ]]; then
+        # Read from stdin
+        __input_source="/dev/stdin"
+
+    else
+        echo "error: no input source specified" >&2
+        help-usage >&2
+        return ${E_INVALID_ARGS}
+    fi
+
+    process-stream "${__input_source}"
+}
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
