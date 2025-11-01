@@ -97,6 +97,7 @@ format. Can read from files, stdin, or execute Claude with a prompt.
 Input Sources (mutually exclusive, stdin auto-detected):
     --file <path>         read from JSONL file
     --prompt <text>       execute claude with prompt and parse output
+    --prompt-file <path>  execute claude with prompt from file
     (default)             read from stdin if available
 
 Output Format:
@@ -167,6 +168,9 @@ Examples:
     # Execute Claude and parse
     claude-stream --prompt "write a hello world script"
 
+    # Execute Claude with prompt from file
+    claude-stream --prompt-file my-task.txt --model opus
+
     # Execute Claude with custom model and skip permissions
     claude-stream --prompt "fix the bug" --model opus --dangerously-skip-permissions
 
@@ -197,6 +201,7 @@ function parse-args() {
     # Default values
     INPUT_FILE=""
     INPUT_PROMPT=""
+    INPUT_PROMPT_FILE=""
     INPUT_SESSION=""
     DO_LATEST=false
     OUTPUT_FORMAT="text"
@@ -243,6 +248,10 @@ function parse-args() {
                 ;;
             --prompt)
                 INPUT_PROMPT="${2}"
+                shift 1
+                ;;
+            --prompt-file)
+                INPUT_PROMPT_FILE="${2}"
                 shift 1
                 ;;
             --session)
@@ -372,11 +381,12 @@ function parse-args() {
     local -i input_count=0
     [[ -n "${INPUT_FILE}" ]] && (( input_count++ ))
     [[ -n "${INPUT_PROMPT}" ]] && (( input_count++ ))
+    [[ -n "${INPUT_PROMPT_FILE}" ]] && (( input_count++ ))
     [[ -n "${INPUT_SESSION}" ]] && (( input_count++ ))
     ${DO_LATEST} && (( input_count++ ))
 
     if (( input_count > 1 )); then
-        echo "error: --file, --prompt, --session, and --latest are mutually exclusive" >&2
+        echo "error: --file, --prompt, --prompt-file, --session, and --latest are mutually exclusive" >&2
         return ${E_INVALID_ARGS}
     fi
 
@@ -893,6 +903,24 @@ function main() {
             echo "error: no sessions found" >&2
             return ${E_ERROR}
         fi
+
+    elif [[ -n "${INPUT_PROMPT_FILE}" ]]; then
+        # Read prompt from file and execute claude
+        if [[ ! -f "${INPUT_PROMPT_FILE}" ]]; then
+            echo "error: prompt file not found: ${INPUT_PROMPT_FILE}" >&2
+            return ${E_ERROR}
+        fi
+        if [[ ! -r "${INPUT_PROMPT_FILE}" ]]; then
+            echo "error: prompt file not readable: ${INPUT_PROMPT_FILE}" >&2
+            return ${E_ERROR}
+        fi
+        if ! command -v claude &>/dev/null; then
+            echo "error: claude command not found" >&2
+            return ${E_MISSING_DEPENDENCY}
+        fi
+        INPUT_PROMPT=$(cat "${INPUT_PROMPT_FILE}")
+        claude --output-format stream-json "${CLAUDE_ARGS[@]}" --prompt "${INPUT_PROMPT}" | process-stream
+        return ${?}
 
     elif [[ -n "${INPUT_PROMPT}" ]]; then
         # Execute claude and pipe output
