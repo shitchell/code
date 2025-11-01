@@ -861,14 +861,7 @@ function process-stream() {
         if should-show-message "${line}"; then
             "${__format_func}" "${line}" "${__line_num}"
         fi
-    done < <(
-        # Only use tail -f for regular files, not for stdin/pipes
-        if ${DO_FOLLOW} && [[ -f "${__input}" ]] && [[ "${__input}" != "/dev/stdin" ]]; then
-            tail -f -n +1 "${__input}" 2>/dev/null || cat "${__input}"
-        else
-            cat "${__input}"
-        fi
-    )
+    done < "${__input}"
 }
 
 ## main ########################################################################
