@@ -803,7 +803,8 @@ function process-stream() {
             "${__format_func}" "${line}" "${__line_num}"
         fi
     done < <(
-        if ${DO_FOLLOW}; then
+        # Only use tail -f for regular files, not for stdin/pipes
+        if ${DO_FOLLOW} && [[ -f "${__input}" ]] && [[ "${__input}" != "/dev/stdin" ]]; then
             tail -f -n +1 "${__input}" 2>/dev/null || cat "${__input}"
         else
             cat "${__input}"
