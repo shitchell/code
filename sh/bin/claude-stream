@@ -135,6 +135,19 @@ Streaming:
     -F, --no-follow       disable follow mode (wait for new input)
                           (default: follow mode enabled)
 
+Claude Options (only used with --prompt):
+    --dangerously-skip-permissions
+                          skip permission prompts when executing Claude
+    --system-prompt <text>
+                          set system prompt for Claude execution
+    --append-system-prompt <text>
+                          append to system prompt for Claude execution
+    --permission-mode <mode>
+                          set permission mode (ask, bypassPermissions, etc.)
+    --resume <sessionId>  resume from existing Claude session
+    --model <model>       specify Claude model to use
+    --add-dir <dir>       add directory to context (repeatable)
+
 General Options:
     -h                    display usage
     --help                display this help message
@@ -153,6 +166,12 @@ Examples:
 
     # Execute Claude and parse
     claude-stream --prompt "write a hello world script"
+
+    # Execute Claude with custom model and skip permissions
+    claude-stream --prompt "fix the bug" --model opus --dangerously-skip-permissions
+
+    # Execute Claude with custom directories added to context
+    claude-stream --prompt "analyze the code" --add-dir src --add-dir tests
 
     # Filter to show only tool uses
     claude-stream --file session.jsonl --show-subtype tool_use
@@ -197,6 +216,9 @@ function parse-args() {
     declare -ga EXCLUDE_PATTERNS=()
     SINCE_TIMESTAMP=""
     UNTIL_TIMESTAMP=""
+
+    # Claude-specific arguments (only used with --prompt)
+    declare -ga CLAUDE_ARGS=()
 
     # Default show types (used if user doesn't specify any filters)
     local -a __default_show_type=(system assistant user file-history-snapshot summary queue-operation result)
@@ -295,6 +317,33 @@ function parse-args() {
                 ;;
             -F | --no-follow)
                 DO_FOLLOW=false
+                ;;
+            --dangerously-skip-permissions)
+                CLAUDE_ARGS+=(--dangerously-skip-permissions)
+                ;;
+            --system-prompt)
+                CLAUDE_ARGS+=(--system-prompt "${2}")
+                shift 1
+                ;;
+            --append-system-prompt)
+                CLAUDE_ARGS+=(--append-system-prompt "${2}")
+                shift 1
+                ;;
+            --permission-mode)
+                CLAUDE_ARGS+=(--permission-mode "${2}")
+                shift 1
+                ;;
+            --resume)
+                CLAUDE_ARGS+=(--resume "${2}")
+                shift 1
+                ;;
+            --model)
+                CLAUDE_ARGS+=(--model "${2}")
+                shift 1
+                ;;
+            --add-dir)
+                CLAUDE_ARGS+=(--add-dir "${2}")
+                shift 1
                 ;;
             -c | --color)
                 __color_when="${2}"
@@ -851,7 +900,7 @@ function main() {
             echo "error: claude command not found" >&2
             return ${E_MISSING_DEPENDENCY}
         fi
-        claude --output-format stream-json --prompt "${INPUT_PROMPT}" | process-stream
+        claude --output-format stream-json "${CLAUDE_ARGS[@]}" --prompt "${INPUT_PROMPT}" | process-stream
         return ${?}
 
     elif [[ ! -t 0 ]]; then
