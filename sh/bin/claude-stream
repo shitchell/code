@@ -609,11 +609,35 @@ function __output_format_text() {
             ;;
         user)
             # Check if this is actually a sub-agent response (has agentId in toolUseResult)
-            local -- __has_subagent __agent_id __has_tool_result
-            __has_subagent=$(jq -r 'if .toolUseResult.agentId then "true" else "false" end' <<< "${__json}" 2>/dev/null)
-            __has_tool_result=$(jq -r 'if .toolUseResult then (if .toolUseResult.agentId then "false" else "true" end) else "false" end' <<< "${__json}" 2>/dev/null)
+            local -- __has_subagent __agent_id __has_tool_result __content_type __has_toolUseResult __toolUseResult_type
+
+            # First check if toolUseResult exists and what type it is
+            __has_toolUseResult=$(jq -r 'if .toolUseResult then "true" else "false" end' <<< "${__json}" 2>/dev/null)
+            __toolUseResult_type=$(jq -r '.toolUseResult | type' <<< "${__json}" 2>/dev/null)
+            __content_type=$(jq -r '.message.content | type' <<< "${__json}" 2>/dev/null)
+
+            # Only check for agentId if toolUseResult is an object
+            if [[ "${__toolUseResult_type}" == "object" ]]; then
+                __has_subagent=$(jq -r 'if .toolUseResult.agentId then "true" else "false" end' <<< "${__json}" 2>/dev/null)
+                if [[ "${__has_subagent}" != "true" ]]; then
+                    __has_tool_result="true"
+                else
+                    __has_tool_result="false"
+                fi
+            elif [[ "${__has_toolUseResult}" == "true" ]]; then
+                # toolUseResult exists but is not an object (probably a string error message)
+                __has_subagent="false"
+                __has_tool_result="true"
+            else
+                __has_subagent="false"
+                __has_tool_result="false"
+            fi
+
+            debug "JSONL line ${__line_num}: type=user"
+            debug-vars __has_subagent __has_tool_result __content_type __has_toolUseResult __toolUseResult_type __json
 
             if [[ "${__has_subagent}" == "true" ]]; then
+                debug "  -> Routing to SUB-AGENT handler"
                 # Transform sub-agent JSON to look like an assistant message
                 __agent_id=$(jq -r '.toolUseResult.agentId // "unknown"' <<< "${__json}")
                 local -- __transformed
@@ -627,9 +651,11 @@ function __output_format_text() {
                     echo "  ${C_METADATA}Total tokens: ${__total_tokens}${S_RESET}"
                 fi
             elif [[ "${__has_tool_result}" == "true" ]]; then
+                debug "  -> Routing to TOOL-RESULT handler (suppressing USER header)"
                 # This is a tool result - suppress the USER header
                 __output_format_text_user "${__json}" "${__prefix}" "TOOL-RESULT"
             else
+                debug "  -> Routing to USER handler (human input)"
                 # This is actual human user input
                 __output_format_text_user "${__json}" "${__prefix}"
             fi
