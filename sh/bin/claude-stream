@@ -135,6 +135,7 @@ Session Support:
 Streaming:
     -F, --no-follow       disable follow mode (wait for new input)
                           (default: follow mode enabled)
+    --stream <log>        append all formatted lines to log file
 
 Claude Options (only used with --prompt):
     --dangerously-skip-permissions
@@ -188,6 +189,9 @@ Examples:
 
     # Show messages in last hour
     claude-stream --latest --since "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+
+    # Stream and save all output to a log file
+    claude --output-format stream-json | claude-stream --stream claude.log
 EOF
 }
 
@@ -212,6 +216,8 @@ function parse-args() {
     DO_SHOW_LINE_NUMBERS=false
     DO_COLOR=false
     DO_SILENT=false
+    DO_STREAM_LOG=false
+    STREAM_LOG_FILE=""
 
     # Filtering arrays
     declare -ga SHOW_TYPE=()
@@ -232,6 +238,7 @@ function parse-args() {
 
     # Parse arguments
     while [[ ${#} -gt 0 ]]; do
+       debug "parsing: ${1}"
         case ${1} in
             -h)
                 help-usage
@@ -246,12 +253,12 @@ function parse-args() {
                 INPUT_FILE="${2}"
                 shift 1
                 ;;
-            --prompt)
-                INPUT_PROMPT="${2}"
-                shift 1
-                ;;
             --prompt-file)
                 INPUT_PROMPT_FILE="${2}"
+                shift 1
+                ;;
+            --prompt)
+                INPUT_PROMPT="${2}"
                 shift 1
                 ;;
             --session)
@@ -327,6 +334,11 @@ function parse-args() {
             -F | --no-follow)
                 DO_FOLLOW=false
                 ;;
+            --stream)
+                DO_STREAM_LOG=true
+                STREAM_LOG_FILE="${2}"
+                shift 1
+                ;;
             --dangerously-skip-permissions)
                 CLAUDE_ARGS+=(--dangerously-skip-permissions)
                 ;;
@@ -389,7 +401,7 @@ function parse-args() {
         echo "error: --file, --prompt, --prompt-file, --session, and --latest are mutually exclusive" >&2
         return ${E_INVALID_ARGS}
     fi
-
+    
     # If no filters specified, use defaults
     if (( ${#SHOW_TYPE[@]} == 0 && ${#SHOW_SUBTYPE[@]} == 0 && ${#SHOW_TOOL[@]} == 0 )); then
         SHOW_TYPE=("${__default_show_type[@]}")
@@ -432,6 +444,15 @@ function parse-args() {
         esac
         ${DO_COLOR} && { setup-colors; custom-colors; } || unset-colors
     fi
+    
+    debug-vars \
+        INPUT_FILE INPUT_PROMPT INPUT_PROMPT_FILE INPUT_SESSION \
+        DO_LATEST DO_FOLLOW DO_SHOW_THINKING DO_SHOW_TOOL_RESULTS \
+        DO_SHOW_METADATA DO_SHOW_LINE_NUMBERS DO_COLOR DO_SILENT \
+        DO_STREAM_LOG STREAM_LOG_FILE \
+        OUTPUT_FORMAT SHOW_TYPE SHOW_SUBTYPE SHOW_TOOL \
+        GREP_PATTERNS EXCLUDE_PATTERNS SINCE_TIMESTAMP UNTIL_TIMESTAMP \
+        CLAUDE_ARGS
 
     return ${E_SUCCESS}
 }
@@ -566,6 +587,11 @@ function __output_format_text() {
     local -- __type __timestamp __prefix
 
     __type=$(jq -r '.type' <<< "${__json}")
+    if [[ -z "${__type}" ]]; then
+      if [[ "$(jq -r '.userType')" == "external" ]]; then
+        __type="user"
+      fi
+    fi
     __timestamp=$(jq -r '.timestamp // empty' <<< "${__json}")
 
     # Line number prefix
@@ -582,7 +608,31 @@ function __output_format_text() {
             __output_format_text_assistant "${__json}" "${__prefix}"
             ;;
         user)
-            __output_format_text_user "${__json}" "${__prefix}"
+            # Check if this is actually a sub-agent response (has agentId in toolUseResult)
+            local -- __has_subagent __agent_id __has_tool_result
+            __has_subagent=$(jq -r 'if .toolUseResult.agentId then "true" else "false" end' <<< "${__json}" 2>/dev/null)
+            __has_tool_result=$(jq -r 'if .toolUseResult then (if .toolUseResult.agentId then "false" else "true" end) else "false" end' <<< "${__json}" 2>/dev/null)
+
+            if [[ "${__has_subagent}" == "true" ]]; then
+                # Transform sub-agent JSON to look like an assistant message
+                __agent_id=$(jq -r '.toolUseResult.agentId // "unknown"' <<< "${__json}")
+                local -- __transformed
+                __transformed=$(jq '.message.content = .toolUseResult.content' <<< "${__json}")
+                __output_format_text_assistant "${__transformed}" "${__prefix}" "SUB-AGENT (${__agent_id})"
+
+                # Show token usage if available
+                local -i __total_tokens
+                __total_tokens=$(jq -r '.toolUseResult.totalTokens // 0' <<< "${__json}")
+                if (( __total_tokens > 0 )); then
+                    echo "  ${C_METADATA}Total tokens: ${__total_tokens}${S_RESET}"
+                fi
+            elif [[ "${__has_tool_result}" == "true" ]]; then
+                # This is a tool result - suppress the USER header
+                __output_format_text_user "${__json}" "${__prefix}" "TOOL-RESULT"
+            else
+                # This is actual human user input
+                __output_format_text_user "${__json}" "${__prefix}"
+            fi
             ;;
         file-history-snapshot)
             __output_format_text_snapshot "${__json}" "${__prefix}"
@@ -637,13 +687,16 @@ function __output_format_text_system() {
 }
 
 function __output_format_text_assistant() {
-    local -- __json="${1}" __prefix="${2}"
+    local -- __json="${1}" __prefix="${2}" __label="${3:-}"
     local -- __model_id __is_sidechain
 
     __model_id=$(jq -r '.message.id // "unknown"' <<< "${__json}")
     __is_sidechain=$(jq -r '.isSidechain' <<< "${__json}")
 
-    if [[ "${__is_sidechain}" == "true" ]]; then
+    # Determine the label
+    if [[ -n "${__label}" ]]; then
+        echo "${__prefix}${C_ASSISTANT}${S_BOLD}◆ ${__label}${S_RESET}"
+    elif [[ "${__is_sidechain}" == "true" ]]; then
         echo "${__prefix}${C_ASSISTANT}${S_BOLD}◆ ASSISTANT (Task Agent)${S_RESET}"
     else
         echo "${__prefix}${C_ASSISTANT}${S_BOLD}◆ ASSISTANT${S_RESET}"
@@ -695,44 +748,66 @@ function __output_format_text_assistant() {
 }
 
 function __output_format_text_user() {
-    local -- __json="${1}" __prefix="${2}"
+    local -- __json="${1}" __prefix="${2}" __label="${3:-}"
+    local -- __content_type
 
-    echo "${__prefix}${C_USER}◂ USER${S_RESET}"
+    # Only show header for actual user messages, not tool results
+    if [[ "${__label}" != "TOOL-RESULT" ]]; then
+        echo "${__prefix}${C_USER}◂ USER${S_RESET}"
+    fi
 
-    # Process tool results
-    jq -c '.message.content[]? // empty' <<< "${__json}" | while IFS= read -r content; do
-        local -- __content_type __tool_id __is_error
-        __content_type=$(jq -r '.type' <<< "${content}")
+    # Check if content is a string, array, or null
+    __content_type=$(jq -r '.message.content | type' <<< "${__json}")
 
-        case "${__content_type}" in
-            tool_result)
-                __tool_id=$(jq -r '.tool_use_id' <<< "${content}")
-                __is_error=$(jq -r '.is_error' <<< "${content}")
+    if [[ "${__content_type}" == "null" ]]; then
+        # No content to display
+        :
+    elif [[ "${__content_type}" == "string" ]]; then
+        # Simple string content
+        local -- __text
+        __text=$(jq -r '.message.content' <<< "${__json}")
+        [[ -n "${__text}" ]] && echo "  ${__text}"
+    elif [[ "${__content_type}" == "array" ]]; then
+        # Array of content objects
+        jq -c '.message.content[]? // empty' <<< "${__json}" | while IFS= read -r content; do
+            local -- __item_type __tool_id __is_error
+            __item_type=$(jq -r '.type' <<< "${content}")
 
-                if [[ "${__is_error}" == "true" ]]; then
-                    echo "  ${C_ERROR}✗ Error${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
-                else
-                    echo "  ${C_USER}✓ Result${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
-                fi
+            case "${__item_type}" in
+                tool_result)
+                    __tool_id=$(jq -r '.tool_use_id' <<< "${content}")
+                    __is_error=$(jq -r '.is_error' <<< "${content}")
 
-                if ${DO_SHOW_TOOL_RESULTS}; then
-                    local -- __result_content
-                    __result_content=$(jq -r '.content' <<< "${content}")
-                    if [[ "${__result_content}" != "null" && -n "${__result_content}" ]]; then
-                        echo "${__result_content}" | head -20 | sed 's/^/    /'
-                        local -i __line_count
-                        __line_count=$(echo "${__result_content}" | wc -l)
-                        (( __line_count > 20 )) && echo "    ${C_METADATA}... (${__line_count} lines total)${S_RESET}"
+                    if [[ "${__is_error}" == "true" ]]; then
+                        echo "  ${C_ERROR}✗ Error${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
+                    else
+                        echo "  ${C_USER}✓ Result${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET}"
                     fi
-                fi
-                ;;
-            image)
-                local -- __media_type
-                __media_type=$(jq -r '.source.media_type // "unknown"' <<< "${content}")
-                echo "  ${C_USER}🖼  Image${S_RESET} ${C_METADATA}(${__media_type})${S_RESET}"
-                ;;
-        esac
-    done
+
+                    if ${DO_SHOW_TOOL_RESULTS}; then
+                        local -- __result_content
+                        __result_content=$(jq -r '.content' <<< "${content}")
+                        if [[ "${__result_content}" != "null" && -n "${__result_content}" ]]; then
+                            echo "${__result_content}" | head -20 | sed 's/^/    /'
+                            local -i __line_count
+                            __line_count=$(echo "${__result_content}" | wc -l)
+                            (( __line_count > 20 )) && echo "    ${C_METADATA}... (${__line_count} lines total)${S_RESET}"
+                        fi
+                    fi
+                    ;;
+                image)
+                    local -- __media_type
+                    __media_type=$(jq -r '.source.media_type // "unknown"' <<< "${content}")
+                    echo "  ${C_USER}🖼  Image${S_RESET} ${C_METADATA}(${__media_type})${S_RESET}"
+                    ;;
+                text)
+                    local -- __text
+                    __text=$(jq -r '.text // empty' <<< "${content}")
+                    [[ -n "${__text}" ]] && echo "  ${__text}"
+                    ;;
+            esac
+        done
+    fi
 
     ${DO_SHOW_METADATA} && __show_metadata "${__json}"
 }
@@ -857,9 +932,24 @@ function process-stream() {
             continue
         fi
 
-        # Apply filters
+        # If streaming to log, format once and capture for efficiency
+        local -- __formatted_output=""
+        if ${DO_STREAM_LOG}; then
+            __formatted_output=$("${__format_func}" "${line}" "${__line_num}")
+        fi
+
+        # Apply filters and display
         if should-show-message "${line}"; then
-            "${__format_func}" "${line}" "${__line_num}"
+            if ${DO_STREAM_LOG}; then
+                printf '%s\n' "${__formatted_output}"
+            else
+                "${__format_func}" "${line}" "${__line_num}"
+            fi
+        fi
+
+        # Always append to stream log if enabled
+        if ${DO_STREAM_LOG}; then
+            echo "${__formatted_output}" >> "${STREAM_LOG_FILE}"
         fi
     done < "${__input}"
 }
@@ -912,7 +1002,7 @@ function main() {
             return ${E_MISSING_DEPENDENCY}
         fi
         INPUT_PROMPT=$(cat "${INPUT_PROMPT_FILE}")
-        claude --output-format stream-json "${CLAUDE_ARGS[@]}" --prompt "${INPUT_PROMPT}" | process-stream
+        claude --output-format stream-json "${CLAUDE_ARGS[@]}" "${INPUT_PROMPT}" | process-stream
         return ${?}
 
     elif [[ -n "${INPUT_PROMPT}" ]]; then
@@ -921,7 +1011,7 @@ function main() {
             echo "error: claude command not found" >&2
             return ${E_MISSING_DEPENDENCY}
         fi
-        claude --output-format stream-json "${CLAUDE_ARGS[@]}" --prompt "${INPUT_PROMPT}" | process-stream
+        claude --output-format stream-json "${CLAUDE_ARGS[@]}" "${INPUT_PROMPT}" | process-stream
         return ${?}
 
     elif [[ ! -t 0 ]]; then
