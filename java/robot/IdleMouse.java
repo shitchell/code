@@ -66,6 +66,7 @@ public class IdleMouse
         int yOffset = 1;
         int loopDuration = -1;
         boolean runForever = true;
+        boolean showBrief = false;
         int remainingTime = 0;
         String remainingTimeStr = "";
         long startTime = System.currentTimeMillis();
@@ -145,6 +146,7 @@ public class IdleMouse
                 System.out.println("  -y/--y-offset <n>   Set the y offset for jiggling the mouse (default: 1)");
                 System.out.println("  -d/--duration <n>   Stop checking after <n> seconds (default: -1, forever)");
                 System.out.println("  -u/--until <time>   Stop checking after <time>");
+                System.out.println("  -b/--brief          Show brief output");
                 System.exit(0);
             }
             else if (arg.equals("--debug"))
@@ -229,6 +231,10 @@ public class IdleMouse
                 value = args[++i];
                 loopDuration = timeStringToSeconds(value);
             }
+            else if (arg.equals("-b") || arg.equals("--brief"))
+            {
+                showBrief = true;
+            }
             else
             {
                 System.err.printf("%s: error: invalid option: %s%n", scriptName, arg);
@@ -257,6 +263,8 @@ public class IdleMouse
             "%sIdle time%s: %s%s%s,  %sRunning for%s: %s%s%s%n",
             C_KEY + S_DIM, S_RESET, C_VALUE, idleString, S_RESET, C_KEY, S_RESET, C_VALUE, loopStr, S_RESET
         );
+        String jiggleString = "";
+        String coordsString = "";
 
         // Loop forever or for the specified duration
         startTime = System.currentTimeMillis();
@@ -290,9 +298,14 @@ public class IdleMouse
                 if (!runForever) {
                     System.out.printf("[%s]  ", remainingTimeStr);
                 }
+                if (showBrief) {
+                    jiggleString = "~";
+                } else {
+                    jiggleString = "Mouse is idle, jiggling";
+                }
                 System.out.printf(
-                    "%sMouse is idle, jiggling%s%n",
-                    C_IDLE, S_RESET
+                    "%s%s%s%n",
+                    C_IDLE, jiggleString, S_RESET
                 );
                 idleMouse.jiggleMouse(xOffset, yOffset);
             } else {
@@ -305,11 +318,15 @@ public class IdleMouse
                     mouseMovementStr.append("]  ");
                 }
                 mouseMovementStr.append(C_MOVE);
-                mouseMovementStr.append("Mouse moved ");
+                if (!showBrief) {
+                    mouseMovementStr.append("Mouse moved ");
+                }
                 // If we have old pointer info, add a "from" location
                 if (lastPointerInfo != null)
                 {
-                    mouseMovementStr.append("from ");
+                    if (!showBrief) {
+                        mouseMovementStr.append("from ");
+                    }
                     mouseMovementStr.append(S_RESET);
                     mouseMovementStr.append(C_COORDS);
                     mouseMovementStr.append("(");
@@ -322,7 +339,11 @@ public class IdleMouse
                     mouseMovementStr.append(" ");
                 }
                 // Add the "to" location
-                mouseMovementStr.append("to ");
+                if (!showBrief) {
+                    mouseMovementStr.append("to ");
+                } else {
+                    mouseMovementStr.append("-> ");
+                }
                 mouseMovementStr.append(S_RESET);
                 mouseMovementStr.append(C_COORDS);
                 mouseMovementStr.append("(");
