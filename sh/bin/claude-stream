@@ -119,8 +119,10 @@ Filtering (repeatable, comma-separated):
                           (system, assistant, user, file-history-snapshot,
                           summary, queue-operation, result)
     --show-subtype <sub>  show only these subtypes
-                          (init, compact_boundary, local_command, text,
-                          tool_use, thinking, tool_result)
+                          system: init, compact_boundary
+                          assistant: text, tool_use, thinking
+                          user: text (human input), local_command (slash cmds),
+                                tool_result (tool responses)
     --show-tool <tool>    show only these tools
                           (Bash, Read, Write, Edit, Grep, etc.)
     --grep <pattern>      include only messages matching pattern (repeatable)
@@ -245,11 +247,11 @@ function parse-args() {
                 help-epilogue
                 exit ${E_SUCCESS}
                 ;;
-            --help)
+            -h | --help)
                 help-full
                 exit ${E_SUCCESS}
                 ;;
-            --file)
+            -f | --file)
                 INPUT_FILE="${2}"
                 shift 1
                 ;;
@@ -503,10 +505,18 @@ function should-show-message() {
     '
     local -- __json="${1}"
     local -- __type __subtype __tool __timestamp __content
+    local -- __userType __hasToolUseResult __contentType
 
     # Extract fields
     __type=$(jq -r '.type // empty' <<< "${__json}")
     __timestamp=$(jq -r '.timestamp // .message.timestamp // empty' <<< "${__json}")
+
+    # Extract user-specific fields for debugging
+    __userType=$(jq -r '.userType // empty' <<< "${__json}")
+    __hasToolUseResult=$(jq -r 'if .toolUseResult then "true" else "false" end' <<< "${__json}")
+    __contentType=$(jq -r '.message.content | type' <<< "${__json}")
+
+    debug "should-show-message: type=${__type} userType=${__userType} hasToolUseResult=${__hasToolUseResult} contentType=${__contentType}"
 
     # Check type filter
     if (( ${#SHOW_TYPE[@]} > 0 )); then
@@ -520,6 +530,24 @@ function should-show-message() {
     # Check subtype filter
     if (( ${#SHOW_SUBTYPE[@]} > 0 )); then
         __subtype=$(jq -r '.subtype // .message.content[]?.type // empty' <<< "${__json}")
+
+        # For user messages with no subtype: synthesize subtypes based on content
+        if [[ -z "${__subtype}" && "${__type}" == "user" && "${__hasToolUseResult}" == "false" && "${__contentType}" == "string" ]]; then
+            local -- __content __isMeta
+            __content=$(jq -r '.message.content // ""' <<< "${__json}")
+            __isMeta=$(jq -r '.isMeta // false' <<< "${__json}")
+
+            if [[ "${__content}" == "<command-name>"* || "${__content}" == "<local-command-stdout>"* ]]; then
+                __subtype="local_command"
+            elif [[ "${__isMeta}" == "true" ]]; then
+                # Meta messages (like "Caveat:...") - skip them by giving no subtype
+                __subtype=""
+            else
+                __subtype="text"
+            fi
+        fi
+
+        debug "  subtype filter: __subtype='${__subtype}' SHOW_SUBTYPE=(${SHOW_SUBTYPE[*]})"
         local -i __found=0
         for subtype in "${SHOW_SUBTYPE[@]}"; do
             [[ "${__subtype}" == *"${subtype}"* ]] && { __found=1; break; }
@@ -655,9 +683,23 @@ function __output_format_text() {
                 # This is a tool result - suppress the USER header
                 __output_format_text_user "${__json}" "${__prefix}" "TOOL-RESULT"
             else
-                debug "  -> Routing to USER handler (human input)"
-                # This is actual human user input
-                __output_format_text_user "${__json}" "${__prefix}"
+                # Check if this is a local command (slash command) or actual human input
+                local -- __user_content __is_local_command="false"
+                if [[ "${__content_type}" == "string" ]]; then
+                    __user_content=$(jq -r '.message.content // ""' <<< "${__json}")
+                    if [[ "${__user_content}" == "<command-name>"* || "${__user_content}" == "<local-command-stdout>"* ]]; then
+                        __is_local_command="true"
+                    fi
+                fi
+
+                if [[ "${__is_local_command}" == "true" ]]; then
+                    debug "  -> Routing to LOCAL-COMMAND handler"
+                    __output_format_text_local_command "${__json}" "${__prefix}"
+                else
+                    debug "  -> Routing to USER handler (human input)"
+                    # This is actual human user input
+                    __output_format_text_user "${__json}" "${__prefix}"
+                fi
             fi
             ;;
         file-history-snapshot)
@@ -833,6 +875,48 @@ function __output_format_text_user() {
                     ;;
             esac
         done
+    fi
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_local_command() {
+    :  'Format local command (slash command) messages
+
+        @usage
+            <json> <prefix>
+
+        @arg <json>
+            JSON message object
+        @arg <prefix>
+            Line prefix (for line numbers)
+    '
+    local -- __json="${1}" __prefix="${2}"
+    local -- __content __cmd_name __cmd_args __cmd_stdout
+
+    __content=$(jq -r '.message.content // ""' <<< "${__json}")
+
+    # Parse command invocation: <command-name>...</command-name>
+    if [[ "${__content}" == "<command-name>"* ]]; then
+        __cmd_name=$(echo "${__content}" | sed -n 's/.*<command-name>\(.*\)<\/command-name>.*/\1/p')
+        __cmd_args=$(echo "${__content}" | sed -n 's/.*<command-args>\(.*\)<\/command-args>.*/\1/p')
+
+        echo "${__prefix}${C_USER}▸ Command: ${__cmd_name}${S_RESET}"
+        if [[ -n "${__cmd_args}" ]]; then
+            echo "  ${C_METADATA}args:${S_RESET} ${__cmd_args}"
+        fi
+
+    # Parse command output: <local-command-stdout>...</local-command-stdout>
+    elif [[ "${__content}" == "<local-command-stdout>"* ]]; then
+        __cmd_stdout=$(echo "${__content}" | sed 's/<local-command-stdout>\(.*\)<\/local-command-stdout>/\1/')
+
+        if ${DO_SHOW_TOOL_RESULTS}; then
+            echo "${__prefix}${C_USER}✓ Output${S_RESET}"
+            echo "${__cmd_stdout}" | head -20 | sed 's/^/    /'
+            local -i __line_count
+            __line_count=$(echo "${__cmd_stdout}" | wc -l)
+            (( __line_count > 20 )) && echo "    ${C_METADATA}... (${__line_count} lines total)${S_RESET}"
+        fi
     fi
 
     ${DO_SHOW_METADATA} && __show_metadata "${__json}"
