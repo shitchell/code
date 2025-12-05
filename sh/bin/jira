@@ -143,12 +143,30 @@ make_request() {
 
     local data=""
     local endpoint=""
+    local fields=""
+    local delimiter=$'\t'  # Default to tab
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -d|--data)
-                data="$2"
+                if [[ "$2" =~ ^@ ]]; then
+                    local filepath="${2#@}"
+                    if [[ ! -f "${filepath}" ]]; then
+                        error "File not found: ${filepath}"
+                    fi
+                    data="$(cat "${filepath}")"
+                else
+                    data="$2"
+                fi
+                shift 2
+                ;;
+            --fields)
+                fields="$2"
+                shift 2
+                ;;
+            --delimiter)
+                delimiter="$2"
                 shift 2
                 ;;
             *)
@@ -191,8 +209,43 @@ make_request() {
 
     curl_cmd+=("${url}")
 
-    # Make request and format JSON output
-    "${curl_cmd[@]}" | jq -r '.' 2>/dev/null || "${curl_cmd[@]}"
+    # Make request and format output
+    if [[ -n "${fields}" ]]; then
+        # Convert fields to jq array syntax
+        local field_array=""
+        IFS=',' read -ra FIELD_ARRAY <<< "${fields}"
+        for field in "${FIELD_ARRAY[@]}"; do
+            field_array+=".${field}, "
+        done
+        field_array="${field_array%, }"  # Remove trailing comma
+
+        # Determine delimiter format for jq
+        local jq_format
+        case "${delimiter}" in
+            $'\t')
+                jq_format='@tsv'
+                ;;
+            ',')
+                jq_format='@csv'
+                ;;
+            *)
+                # Custom delimiter - manually join
+                jq_format="join(\"${delimiter}\")"
+                ;;
+        esac
+
+        # Try both array (.issues[]) and single object formats
+        "${curl_cmd[@]}" | jq -r "
+            if type == \"object\" and has(\"issues\") then
+                .issues[] | [${field_array}] | ${jq_format}
+            else
+                [${field_array}] | ${jq_format}
+            end
+        " 2>/dev/null || "${curl_cmd[@]}"
+    else
+        # Regular JSON output
+        "${curl_cmd[@]}" | jq -r '.' 2>/dev/null || "${curl_cmd[@]}"
+    fi
 }
 
 cmd_get() {
@@ -220,10 +273,15 @@ Authentication:
   ${SCRIPT_NAME} auth [status | login | logout]
 
 API Requests:
-  ${SCRIPT_NAME} get <endpoint>
-  ${SCRIPT_NAME} post [-d/--data <json>] <endpoint>
+  ${SCRIPT_NAME} get [--fields <fields>] [--delimiter <char>] <endpoint>
+  ${SCRIPT_NAME} post [-d/--data <json>] [--fields <fields>] [--delimiter <char>] <endpoint>
   ${SCRIPT_NAME} put [-d/--data <json>] <endpoint>
   ${SCRIPT_NAME} delete <endpoint>
+
+Options:
+  -d/--data <json>       JSON data (use @filepath to read from file)
+  --fields <fields>      Comma-separated list of fields (dot notation supported)
+  --delimiter <char>     Field delimiter (default: tab, use ',' for CSV)
 
 Examples:
   # Login
@@ -232,14 +290,20 @@ Examples:
   # Get issue
   ${SCRIPT_NAME} get /issue/DEVOPS-405
 
-  # Search issues
-  ${SCRIPT_NAME} post -d '{"jql":"project=DEVOPS","maxResults":10}' /search
+  # Search issues with TSV output
+  ${SCRIPT_NAME} post -d '{"jql":"project=DEVOPS"}' --fields key,fields.summary,fields.status.name /search/jql
+
+  # Search issues with CSV output
+  ${SCRIPT_NAME} post -d '{"jql":"assignee=currentUser()"}' --fields key,fields.summary --delimiter , /search/jql
 
   # Update issue
   ${SCRIPT_NAME} put -d '{"fields":{"summary":"New summary"}}' /issue/DEVOPS-405
 
   # Add comment
   ${SCRIPT_NAME} post -d '{"body":"My comment"}' /issue/DEVOPS-405/comment
+
+  # Read JSON data from file
+  ${SCRIPT_NAME} post -d @query.json --fields key,fields.summary /search/jql
 
 Endpoints can be specified with or without /rest/api/3 prefix.
 EOF
