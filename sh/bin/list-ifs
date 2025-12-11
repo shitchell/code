@@ -123,13 +123,22 @@ fi | "${column_cmd[@]}"
 
 # If running in WSL, also show the Windows host IP
 if grep -qi microsoft /proc/version 2>/dev/null; then
-    win_ip=$(powershell.exe -Command "
-        (Get-NetIPAddress -AddressFamily IPv4 |
-         Where-Object { \$_.InterfaceAlias -notmatch 'Loopback|vEthernet' -and \$_.PrefixOrigin -ne 'WellKnown' } |
-         Sort-Object -Property InterfaceMetric |
-         Select-Object -First 1).IPAddress
-    " 2>/dev/null | tr -d '\r\n')
-    if [[ -n "${win_ip}" ]]; then
-        printf "windows\t\t%s\n" "${win_ip}" | "${column_cmd[@]}"
+    win_info=$(powershell.exe -Command "
+        \$adapter = Get-NetIPAddress -AddressFamily IPv4 |
+            Where-Object { \$_.InterfaceAlias -notmatch 'Loopback|vEthernet' -and \$_.PrefixOrigin -ne 'WellKnown' } |
+            Sort-Object -Property InterfaceMetric |
+            Select-Object -First 1
+        if (\$adapter) {
+            \$ifIndex = \$adapter.InterfaceIndex
+            \$mac = ((Get-NetAdapter -InterfaceIndex \$ifIndex).MacAddress -replace '-',':').ToLower()
+            \$ipv4 = \$adapter.IPAddress
+            \$ipv6 = (Get-NetIPAddress -InterfaceIndex \$ifIndex -AddressFamily IPv6 |
+                Where-Object { \$_.PrefixOrigin -ne 'WellKnown' } |
+                Select-Object -First 1).IPAddress
+            Write-Output \"\$mac\`t\$ipv4\`t\$ipv6\"
+        }
+    " 2>/dev/null | tr -d '\r')
+    if [[ -n "${win_info}" ]]; then
+        printf "windows\t%s\n" "${win_info}" | "${column_cmd[@]}"
     fi
 fi
