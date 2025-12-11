@@ -120,3 +120,16 @@ else
     echo "error: no known network management utility found" >&2
     exit 1
 fi | "${column_cmd[@]}"
+
+# If running in WSL, also show the Windows host IP
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    win_ip=$(powershell.exe -Command "
+        (Get-NetIPAddress -AddressFamily IPv4 |
+         Where-Object { \$_.InterfaceAlias -notmatch 'Loopback|vEthernet' -and \$_.PrefixOrigin -ne 'WellKnown' } |
+         Sort-Object -Property InterfaceMetric |
+         Select-Object -First 1).IPAddress
+    " 2>/dev/null | tr -d '\r\n')
+    if [[ -n "${win_ip}" ]]; then
+        printf "windows\t\t%s\n" "${win_ip}" | "${column_cmd[@]}"
+    fi
+fi
