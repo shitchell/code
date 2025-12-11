@@ -121,24 +121,33 @@ else
     exit 1
 fi | "${column_cmd[@]}"
 
-# If running in WSL, also show the Windows host IP
+# If running in WSL, also show Windows host interfaces
 if grep -qi microsoft /proc/version 2>/dev/null; then
-    win_info=$(powershell.exe -Command "
-        \$adapter = Get-NetIPAddress -AddressFamily IPv4 |
+    powershell.exe -Command "
+        \$wlanCount = 0
+        \$ethCount = 0
+        Get-NetIPAddress -AddressFamily IPv4 |
             Where-Object { \$_.InterfaceAlias -notmatch 'Loopback|vEthernet' -and \$_.PrefixOrigin -ne 'WellKnown' } |
             Sort-Object -Property InterfaceMetric |
-            Select-Object -First 1
-        if (\$adapter) {
-            \$ifIndex = \$adapter.InterfaceIndex
-            \$mac = ((Get-NetAdapter -InterfaceIndex \$ifIndex).MacAddress -replace '-',':').ToLower()
-            \$ipv4 = \$adapter.IPAddress
-            \$ipv6 = (Get-NetIPAddress -InterfaceIndex \$ifIndex -AddressFamily IPv6 |
-                Where-Object { \$_.PrefixOrigin -ne 'WellKnown' } |
-                Select-Object -First 1).IPAddress
-            Write-Output \"\$mac\`t\$ipv4\`t\$ipv6\"
-        }
-    " 2>/dev/null | tr -d '\r')
-    if [[ -n "${win_info}" ]]; then
-        printf "windows\t%s\n" "${win_info}" | "${column_cmd[@]}"
-    fi
+            ForEach-Object {
+                \$ifIndex = \$_.InterfaceIndex
+                \$adapter = Get-NetAdapter -InterfaceIndex \$ifIndex
+                \$mac = (\$adapter.MacAddress -replace '-',':').ToLower()
+                \$ipv4 = \$_.IPAddress
+                \$ipv6 = (Get-NetIPAddress -InterfaceIndex \$ifIndex -AddressFamily IPv6 |
+                    Where-Object { \$_.PrefixOrigin -ne 'WellKnown' } |
+                    Select-Object -First 1).IPAddress
+                # Determine interface type from MediaType
+                if (\$adapter.MediaType -eq 'Native 802.11') {
+                    \$name = 'wlan' + \$wlanCount + '_win'
+                    \$wlanCount++
+                } else {
+                    \$name = 'eth' + \$ethCount + '_win'
+                    \$ethCount++
+                }
+                Write-Output \"\$name\`t\$mac\`t\$ipv4\`t\$ipv6\"
+            }
+    " 2>/dev/null | tr -d '\r' | while IFS= read -r line; do
+        [[ -n "${line}" ]] && printf "%s\n" "${line}" | "${column_cmd[@]}"
+    done
 fi
