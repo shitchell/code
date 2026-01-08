@@ -1351,4 +1351,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exit_code: int = 0
+    try:
+        exit_code = main()
+    except KeyboardInterrupt:
+        print("\nexiting", end="")
+
+    sys.exit(exit_code)
