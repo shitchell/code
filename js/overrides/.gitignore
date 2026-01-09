@@ -1,0 +1,3 @@
+# Ignore all contents (Chrome DevTools local overrides)
+*
+!.gitignore
