@@ -25,85 +25,95 @@ include-source 'debug.sh'
 ## exit codes ##################################################################
 ################################################################################
 
-declare -ri E_SUCCESS=0
-declare -ri E_ERROR=1
-declare -ri E_INVALID_OPTION=2
-declare -ri E_INVALID_ACTION=3
+function _setup-exit-codes() {
+    :  'Set up exit code constants'
+    declare -gr E_SUCCESS=0
+    declare -gr E_ERROR=1
+    declare -gr E_INVALID_OPTION=2
+    declare -gr E_INVALID_ACTION=3
+    # When working on multiple related scripts, consider a shared exit code file
+    #source path/to/common-exit-codes.sh
+}
 
 
 ## traps #######################################################################
 ################################################################################
 
-function silence-output() {
+function _trap-exit() {
+    :  'Exit trap that calls all __exit-* functions
+
+        To add an exit handler, define a function named __exit-<name>.
+        To remove it later, use: unset -f __exit-<name>
+    '
+    local -- __func
+    for __func in $(compgen -A function __exit-); do
+        "${__func}"
+    done
+}
+trap _trap-exit EXIT
+
+function _silence-output() {
     :  'Silence all script output'
     exec 3>&1 4>&2 1>/dev/null 2>&1
-}
 
-function restore-output() {
-    :  'Restore script output after a call to `silence-output`'
-    [[ -t 3 ]] && exec 1>&3 3>&-
-    [[ -t 4 ]] && exec 2>&4 4>&-
+    function __exit-restore-output() {
+        [[ -t 3 ]] && exec 1>&3 3>&-
+        [[ -t 4 ]] && exec 2>&4 4>&-
+    }
 }
-
-function trap-exit() {
-    :  'An exit trap to restore output on script end'
-    restore-output
-}
-trap trap-exit EXIT
 
 
 ## colors ######################################################################
 ################################################################################
 
-# Determine if we're in a terminal
-[[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
-
-function setup-colors() {
+function _setup-colors() {
     :  'Set up color variables'
-    C_RED=$'\e[31m'
-    C_GREEN=$'\e[32m'
-    C_YELLOW=$'\e[33m'
-    C_BLUE=$'\e[34m'
-    C_MAGENTA=$'\e[35m'
-    C_CYAN=$'\e[36m'
-    C_WHITE=$'\e[37m'
-    S_RESET=$'\e[0m'
-    S_BOLD=$'\e[1m'
-    S_DIM=$'\e[2m'
-    S_UNDERLINE=$'\e[4m'
-    S_BLINK=$'\e[5m'
-    S_INVERT=$'\e[7m'
-    S_HIDDEN=$'\e[8m'
-    
-    # {{TODO: ADD LABEL/CATEGORY COLORS HERE, e.g.: C_HEADER}}
+    # Base ANSI codes
+    C_RED=$'\033[31m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_BLUE=$'\033[34m'
+    C_MAGENTA=$'\033[35m'
+    C_CYAN=$'\033[36m'
+    C_WHITE=$'\033[37m'
+    S_RESET=$'\033[0m'
+    S_BOLD=$'\033[1m'
+    S_DIM=$'\033[2m'
+    S_UNDERLINE=$'\033[4m'
+    S_BLINK=$'\033[5m'
+    S_INVERT=$'\033[7m'
+    S_HIDDEN=$'\033[8m'
+
+    # {{TODO: ADD CATEGORICAL COLORS HERE}}
 }
 
-function unset-colors() {
+function _unset-colors() {
     :  'Unset color variables'
     C_RED='' C_GREEN='' C_YELLOW='' C_BLUE='' C_MAGENTA='' C_CYAN='' C_WHITE=''
     S_RESET='' S_BOLD='' S_DIM='' S_UNDERLINE='' S_BLINK='' S_INVERT='' S_HIDDEN=''
+    # {{TODO: UNSET CATEGORICAL COLORS HERE}}
 }
 
 
-## usage functions #############################################################
+## initialization ##############################################################
 ################################################################################
 
-function help-usage() {
+function __help-usage() {
     :  'Print brief usage'
     # {{TODO: UPDATE USAGE}}
     echo "usage: $(basename "${0}") [-h] [--help] [-c <when>] [-s] <action> [<args>]"
 }
 
-function help-epilogue() {
+function __help-epilogue() {
     :  'Print a brief description of the script'
     # {{TODO: UPDATE EPILOGUE}}
     echo "run subcommands with individual options"
 }
 
-function help-full() {
+function __help-full() {
     :  'Print full help'
-    help-usage
-    help-epilogue
+    __help-usage
+    __help-epilogue
     echo
     echo "Actions:"
     cat << '    EOF'
@@ -125,7 +135,7 @@ function help-full() {
     echo "    $(basename "${0}") <action> --help"
 }
 
-function parse-args() {
+function _parse-args() {
     :  'Parse command-line arguments for the base command'
     # Parse the arguments first for a config file to load default values from
     CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
@@ -145,25 +155,25 @@ function parse-args() {
     DO_SILENT=false
     ACTION=""
     ACTION_ARGS=()
-    local -- __color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+    COLOR_WHEN="${COLOR:-auto}"  # auto, on, yes, always, off, no, never
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
             -h)
-                help-usage
-                help-epilogue
+                __help-usage
+                __help-epilogue
                 exit ${E_SUCCESS}
                 ;;
             --help)
-                help-full
+                __help-full
                 exit ${E_SUCCESS}
                 ;;
             --config-file)
                 shift 1
                 ;;
             -c | --color)
-                __color_when="${2}"
+                COLOR_WHEN="${2}"
                 shift 1
                 ;;
             -s | --silent)
@@ -189,16 +199,23 @@ function parse-args() {
     # Ensure an action was specified
     if [[ -z "${ACTION}" ]]; then
         echo "error: no action specified" >&2
-        help-full >&2
+        __help-full >&2
         return ${E_INVALID_ACTION}
     fi
 
+    # {{TODO: INSERT OPTION VALIDATIONS HERE}}
+
+    return ${E_SUCCESS}
+}
+
+function _setup() {
+    :  'Set up the environment based on parsed arguments'
     # If in silent mode, silence the output
-    ${DO_SILENT} && silence-output
+    ${DO_SILENT} && _silence-output
 
     # Set up colors
     if ! ${DO_SILENT}; then
-        case "${__color_when}" in
+        case "${COLOR_WHEN}" in
             on | yes | always)
                 DO_COLOR=true
                 ;;
@@ -206,21 +223,17 @@ function parse-args() {
                 DO_COLOR=false
                 ;;
             auto)
-                if ${__IN_TERMINAL}; then
-                    DO_COLOR=true
-                else
-                    DO_COLOR=false
-                fi
+                ${__IN_TERMINAL} && DO_COLOR=true || DO_COLOR=false
                 ;;
             *)
-                echo "error: invalid color mode: ${__color_when}" >&2
+                echo "error: invalid color mode: ${COLOR_WHEN}" >&2
                 return ${E_ERROR}
                 ;;
         esac
-        ${DO_COLOR} && setup-colors || unset-colors
+        ${DO_COLOR} && _setup-colors || _unset-colors
     fi
 
-    # {{TODO: INSERT OPTION VALIDATIONS HERE}}
+    # {{TODO: ADD ADDITIONAL SETUP HERE (temp dirs, extra traps, etc.)}}
 
     return ${E_SUCCESS}
 }
@@ -293,7 +306,7 @@ function __action-help() {
             return ${E_INVALID_ACTION}
         fi
     else
-        help-full
+        __help-full
     fi
 }
 
@@ -363,7 +376,9 @@ function __action-example() {
 ################################################################################
 
 function main() {
-    parse-args "${@}" || return ${?}
+    _setup-exit-codes
+    _parse-args "${@}" || return ${?}
+    _setup || return ${?}
 
     debug-vars ACTION ACTION_ARGS DO_COLOR DO_SILENT
 
@@ -393,4 +408,7 @@ function main() {
 ## run #########################################################################
 ################################################################################
 
-[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
+(
+    [[ -t 1 ]] && __IN_TERMINAL=true || __IN_TERMINAL=false
+    [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
+)
