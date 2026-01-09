@@ -1,0 +1,669 @@
+#!/usr/bin/env bash
+#
+# Parse and prettify Gemini CLI chat JSON logs
+
+# Bootstrap include-source if not already available
+if ! command -v include-source &>/dev/null; then
+    # Try to find and source include.sh
+    for libdir in "${BASH_LIB_PATH//:/ }" "${HOME}/code/sh/lib" "${HOME}/.local/lib/bash"; do
+        if [[ -f "${libdir}/include.sh" ]]; then
+            source "${libdir}/include.sh"
+            break
+        fi
+    done
+fi
+
+## imports #####################################################################
+################################################################################
+
+include-source 'colors.sh'
+include-source 'debug.sh'
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_MISSING_DEPENDENCY=2
+declare -ri E_INVALID_ARGS=3
+
+## colors ######################################################################
+################################################################################
+
+function custom-colors() {
+    # Gemini messages
+    C_GEMINI="${S_RESET}"
+    C_TOOL="${C_YELLOW}"
+    C_THINKING="${S_DIM}${S_ITALIC}"
+
+    # User messages
+    C_USER="${C_GREEN}"
+    C_ERROR="${C_RED}"
+
+    # Metadata
+    C_METADATA="${S_DIM}"
+    C_TIMESTAMP="${C_CYAN}"
+
+    # Labels
+    C_LABEL="${S_BOLD}${C_CYAN}"
+    C_VALUE="${C_WHITE}"
+}
+
+## traps #######################################################################
+################################################################################
+
+function silence-output() {
+    :  'Silence all script output'
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+function restore-output() {
+    :  'Restore script output after a call to `silence-output`'
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+function trap-exit() {
+    :  'An exit trap to restore output on script end'
+    restore-output
+}
+trap trap-exit EXIT
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [--file <json>] [options]"
+    echo "       cat session.json | $(basename "${0}")"
+}
+
+function help-epilogue() {
+    echo "parse and prettify Gemini CLI chat JSON logs"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << 'EOF'
+Parse Gemini CLI session JSON files and display them in a human-readable
+format. Can read from files or stdin.
+
+Input Sources:
+    --file <path>         read from JSON file
+    (default)             read from stdin if available
+
+Output Format:
+    --format <type>       output format: text (default), json
+    --line-numbers        show message numbers in output
+
+Visibility Controls:
+    --show-thinking       show thinking blocks (default)
+    --hide-thinking       hide thinking blocks
+    --show-tool-calls     show tool call details (default)
+    --hide-tool-calls     hide tool call details
+    --show-tool-results   show tool execution results (default)
+    --hide-tool-results   hide tool execution results
+    --show-metadata       show message metadata
+    --hide-metadata       hide message metadata (default)
+    --compact             shorthand for --hide-metadata --hide-thinking
+                          --hide-tool-results --show-type gemini,user
+
+Filtering (repeatable, comma-separated):
+    --show-type <type>    show only these message types
+                          (user, gemini)
+    --grep <pattern>      include only messages matching pattern (repeatable)
+    --exclude <pattern>   exclude messages matching pattern (repeatable)
+    --since <timestamp>   show messages after ISO 8601 timestamp
+    --until <timestamp>   show messages before ISO 8601 timestamp
+
+Session Support:
+    --latest              parse most recent session file
+
+General Options:
+    -h                    display usage
+    --help                display this help message
+    -c, --color <when>    when to use color ("auto", "always", "never")
+    -s, --silent          suppress all output
+
+Examples:
+    # Parse a session file
+    gemini-logv --file ~/.gemini/tmp/*/chats/session-*.json
+
+    # Parse latest session with compact output
+    gemini-logv --latest --compact
+
+    # Read from stdin
+    cat session.json | gemini-logv
+
+    # Show only user and gemini messages
+    gemini-logv --file session.json --show-type user,gemini
+
+    # Exclude thinking blocks
+    gemini-logv --file session.json --hide-thinking
+
+    # Show messages in last hour
+    gemini-logv --latest --since "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
+EOF
+}
+
+function parse-args() {
+    # Check for required dependencies
+    if ! command -v jq &>/dev/null; then
+        echo "error: jq is required but not installed" >&2
+        return ${E_MISSING_DEPENDENCY}
+    fi
+
+    # Default values
+    INPUT_FILE=""
+    DO_LATEST=false
+    OUTPUT_FORMAT="text"
+    DO_SHOW_THINKING=true
+    DO_SHOW_TOOL_CALLS=true
+    DO_SHOW_TOOL_RESULTS=true
+    DO_SHOW_METADATA=false
+    DO_SHOW_LINE_NUMBERS=false
+    DO_COLOR=false
+    DO_SILENT=false
+
+    # Filtering arrays
+    declare -ga SHOW_TYPE=()
+    declare -ga GREP_PATTERNS=()
+    declare -ga EXCLUDE_PATTERNS=()
+    SINCE_TIMESTAMP=""
+    UNTIL_TIMESTAMP=""
+
+    # Default show types (used if user doesn't specify any filters)
+    local -a __default_show_type=(user gemini)
+
+    local __color_when="${COLOR:-auto}"
+
+    # Parse arguments
+    while [[ ${#} -gt 0 ]]; do
+        debug "parsing: ${1}"
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --file)
+                INPUT_FILE="${2}"
+                shift 1
+                ;;
+            --latest)
+                DO_LATEST=true
+                ;;
+            --format)
+                OUTPUT_FORMAT="${2}"
+                shift 1
+                ;;
+            --line-numbers)
+                DO_SHOW_LINE_NUMBERS=true
+                ;;
+            --show-thinking)
+                DO_SHOW_THINKING=true
+                ;;
+            --hide-thinking)
+                DO_SHOW_THINKING=false
+                ;;
+            --show-tool-calls)
+                DO_SHOW_TOOL_CALLS=true
+                ;;
+            --hide-tool-calls)
+                DO_SHOW_TOOL_CALLS=false
+                ;;
+            --show-tool-results)
+                DO_SHOW_TOOL_RESULTS=true
+                ;;
+            --hide-tool-results)
+                DO_SHOW_TOOL_RESULTS=false
+                ;;
+            --show-metadata)
+                DO_SHOW_METADATA=true
+                ;;
+            --hide-metadata)
+                DO_SHOW_METADATA=false
+                ;;
+            --compact)
+                DO_SHOW_METADATA=false
+                DO_SHOW_THINKING=false
+                DO_SHOW_TOOL_RESULTS=false
+                DO_SHOW_TOOL_CALLS=false
+                # Override default to show only gemini and user
+                SHOW_TYPE=(gemini user)
+                ;;
+            --show-type)
+                IFS=',' read -ra types <<< "${2}"
+                SHOW_TYPE+=("${types[@]}")
+                shift 1
+                ;;
+            --grep)
+                GREP_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            --exclude)
+                EXCLUDE_PATTERNS+=("${2}")
+                shift 1
+                ;;
+            --since)
+                SINCE_TIMESTAMP="${2}"
+                shift 1
+                ;;
+            --until)
+                UNTIL_TIMESTAMP="${2}"
+                shift 1
+                ;;
+            -c | --color)
+                __color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                echo "error: unexpected argument: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        shift 1
+    done
+
+    # Validate mutually exclusive input sources
+    local -i input_count=0
+    [[ -n "${INPUT_FILE}" ]] && (( input_count++ ))
+    ${DO_LATEST} && (( input_count++ ))
+
+    if (( input_count > 1 )); then
+        echo "error: --file and --latest are mutually exclusive" >&2
+        return ${E_INVALID_ARGS}
+    fi
+
+    # If no filters specified, use defaults
+    if (( ${#SHOW_TYPE[@]} == 0 )); then
+        SHOW_TYPE=("${__default_show_type[@]}")
+    fi
+
+    # Validate output format
+    case "${OUTPUT_FORMAT}" in
+        text|json)
+            ;;
+        *)
+            echo "error: invalid output format: ${OUTPUT_FORMAT}" >&2
+            echo "       valid formats: text, json" >&2
+            return ${E_INVALID_ARGS}
+            ;;
+    esac
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${__color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if [[ -t 1 ]]; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${__color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && { setup-colors; custom-colors; } || unset-colors
+    fi
+
+    debug-vars \
+        INPUT_FILE DO_LATEST DO_SHOW_THINKING DO_SHOW_TOOL_CALLS \
+        DO_SHOW_TOOL_RESULTS DO_SHOW_METADATA DO_SHOW_LINE_NUMBERS \
+        DO_COLOR DO_SILENT OUTPUT_FORMAT SHOW_TYPE \
+        GREP_PATTERNS EXCLUDE_PATTERNS SINCE_TIMESTAMP UNTIL_TIMESTAMP
+
+    return ${E_SUCCESS}
+}
+
+## session functions ###########################################################
+################################################################################
+
+function find-latest-session() {
+    :  'Find the most recent gemini session file
+
+        @stdout
+            Absolute path to most recent session JSON file
+    '
+    local -- __gemini_dir="${HOME}/.gemini/tmp"
+
+    find "${__gemini_dir}" -name "session-*.json" -type f -printf '%T@ %p\n' 2>/dev/null | \
+        sort -rn | head -1 | cut -d' ' -f2-
+}
+
+## filtering functions #########################################################
+################################################################################
+
+function should-show-message() {
+    :  'Determine if a message should be displayed based on filters
+
+        @usage
+            <json>
+
+        @arg <json>
+            JSON message object
+
+        @return
+            0 if message should be shown, 1 otherwise
+    '
+    local -- __json="${1}"
+    local -- __type __timestamp __content
+
+    # Extract fields
+    __type=$(jq -r '.type // empty' <<< "${__json}")
+    __timestamp=$(jq -r '.timestamp // empty' <<< "${__json}")
+
+    # Check type filter
+    if (( ${#SHOW_TYPE[@]} > 0 )); then
+        local -i __found=0
+        for type in "${SHOW_TYPE[@]}"; do
+            [[ "${__type}" == "${type}" ]] && { __found=1; break; }
+        done
+        (( __found == 0 )) && return 1
+    fi
+
+    # Check timestamp filters
+    if [[ -n "${SINCE_TIMESTAMP}" && -n "${__timestamp}" ]]; then
+        [[ "${__timestamp}" < "${SINCE_TIMESTAMP}" ]] && return 1
+    fi
+    if [[ -n "${UNTIL_TIMESTAMP}" && -n "${__timestamp}" ]]; then
+        [[ "${__timestamp}" > "${UNTIL_TIMESTAMP}" ]] && return 1
+    fi
+
+    # Check grep patterns
+    if (( ${#GREP_PATTERNS[@]} > 0 )); then
+        __content=$(jq -c '.' <<< "${__json}")
+        local -i __found=0
+        for pattern in "${GREP_PATTERNS[@]}"; do
+            grep -qE "${pattern}" <<< "${__content}" && { __found=1; break; }
+        done
+        (( __found == 0 )) && return 1
+    fi
+
+    # Check exclude patterns
+    if (( ${#EXCLUDE_PATTERNS[@]} > 0 )); then
+        __content=$(jq -c '.' <<< "${__json}")
+        for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+            grep -qE "${pattern}" <<< "${__content}" && return 1
+        done
+    fi
+
+    return 0
+}
+
+## output format functions #####################################################
+################################################################################
+
+function __output_format_text() {
+    :  'Format message as human-readable text
+
+        @usage
+            <json> <line_number>
+
+        @arg <json>
+            JSON message object
+
+        @arg <line_number>
+            Message number in session
+    '
+    local -- __json="${1}"
+    local -i __line_num="${2}"
+    local -- __type __prefix
+
+    __type=$(jq -r '.type' <<< "${__json}")
+
+    # Line number prefix
+    __prefix=""
+    if ${DO_SHOW_LINE_NUMBERS}; then
+        __prefix="${C_METADATA}[${__line_num}]${S_RESET} "
+    fi
+
+    case "${__type}" in
+        user)
+            __output_format_text_user "${__json}" "${__prefix}"
+            ;;
+        gemini)
+            __output_format_text_gemini "${__json}" "${__prefix}"
+            ;;
+        *)
+            echo "${__prefix}${C_METADATA}Unknown message type: ${__type}${S_RESET}"
+            ;;
+    esac
+
+    echo  # Blank line between messages
+}
+
+function __output_format_text_user() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __content
+
+    echo "${__prefix}${C_USER}◂ USER${S_RESET}"
+
+    __content=$(jq -r '.content // empty' <<< "${__json}")
+    [[ -n "${__content}" ]] && echo "${__content}" | sed 's/^/  /'
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __output_format_text_gemini() {
+    local -- __json="${1}" __prefix="${2}"
+    local -- __model __content
+
+    __model=$(jq -r '.model // "unknown"' <<< "${__json}")
+
+    echo "${__prefix}${C_GEMINI}${S_BOLD}◆ GEMINI${S_RESET} ${C_METADATA}(${__model})${S_RESET}"
+
+    # Show main content
+    __content=$(jq -r '.content // empty' <<< "${__json}")
+    if [[ -n "${__content}" ]]; then
+        echo "${__content}" | sed 's/^/  /'
+    fi
+
+    # Show thinking blocks
+    if ${DO_SHOW_THINKING}; then
+        local -i __num_thoughts
+        __num_thoughts=$(jq -r '.thoughts // [] | length' <<< "${__json}")
+        if (( __num_thoughts > 0 )); then
+            echo "  ${C_THINKING}💭 Thinking (${__num_thoughts} blocks):${S_RESET}"
+            jq -c '.thoughts[]? // empty' <<< "${__json}" | while IFS= read -r thought; do
+                local -- __subject __description
+                __subject=$(jq -r '.subject' <<< "${thought}")
+                __description=$(jq -r '.description' <<< "${thought}")
+                echo "    ${C_LABEL}${__subject}${S_RESET}"
+                echo "${__description}" | sed 's/^/      /' | sed "s/^/${C_THINKING}/" | sed "s/$/${S_RESET}/"
+            done
+        fi
+    fi
+
+    # Show tool calls
+    if ${DO_SHOW_TOOL_CALLS}; then
+        local -i __num_tools
+        __num_tools=$(jq -r '.toolCalls // [] | length' <<< "${__json}")
+        if (( __num_tools > 0 )); then
+            echo "  ${C_TOOL}🔧 Tool Calls (${__num_tools}):${S_RESET}"
+            jq -c '.toolCalls[]? // empty' <<< "${__json}" | while IFS= read -r tool; do
+                local -- __tool_name __tool_id __tool_status
+                __tool_name=$(jq -r '.name' <<< "${tool}")
+                __tool_id=$(jq -r '.id' <<< "${tool}")
+                __tool_status=$(jq -r '.status // "unknown"' <<< "${tool}")
+
+                echo "    ${C_TOOL}▸ ${__tool_name}${S_RESET} ${C_METADATA}(${__tool_id})${S_RESET} ${C_METADATA}[${__tool_status}]${S_RESET}"
+
+                # Show tool arguments
+                if ${DO_SHOW_TOOL_RESULTS}; then
+                    local -- __args
+                    __args=$(jq -r '.args // empty' <<< "${tool}")
+                    if [[ -n "${__args}" ]]; then
+                        echo "      ${C_LABEL}Args:${S_RESET}"
+                        echo "${__args}" | jq -r 'to_entries[] | "        \(.key): \(.value)"' 2>/dev/null || echo "${__args}" | sed 's/^/        /'
+                    fi
+
+                    # Show tool results
+                    local -- __result
+                    __result=$(jq -r '.result[0].functionResponse.response // empty' <<< "${tool}")
+                    if [[ -n "${__result}" ]]; then
+                        echo "      ${C_LABEL}Result:${S_RESET}"
+                        echo "${__result}" | jq -r 'if type == "object" then to_entries[] | "        \(.key): \(.value)" else . end' 2>/dev/null | head -20 | sed 's/^/        /'
+                    fi
+                fi
+            done
+        fi
+    fi
+
+    # Token usage
+    local -i __in_tokens __out_tokens __cached __thoughts_tokens __total
+    __in_tokens=$(jq -r '.tokens.input // 0' <<< "${__json}")
+    __out_tokens=$(jq -r '.tokens.output // 0' <<< "${__json}")
+    __cached=$(jq -r '.tokens.cached // 0' <<< "${__json}")
+    __thoughts_tokens=$(jq -r '.tokens.thoughts // 0' <<< "${__json}")
+    __total=$(jq -r '.tokens.total // 0' <<< "${__json}")
+
+    if (( __total > 0 )); then
+        echo "  ${C_METADATA}Tokens: in=${__in_tokens} out=${__out_tokens} cached=${__cached} thoughts=${__thoughts_tokens} total=${__total}${S_RESET}"
+    fi
+
+    ${DO_SHOW_METADATA} && __show_metadata "${__json}"
+}
+
+function __show_metadata() {
+    local -- __json="${1}"
+    local -- __id __timestamp
+
+    __id=$(jq -r '.id // empty' <<< "${__json}")
+    __timestamp=$(jq -r '.timestamp // empty' <<< "${__json}")
+
+    echo "  ${C_METADATA}┌─ Metadata${S_RESET}"
+    [[ -n "${__id}" ]] && echo "  ${C_METADATA}│ id: ${__id}${S_RESET}"
+    [[ -n "${__timestamp}" ]] && echo "  ${C_METADATA}│ timestamp: ${__timestamp}${S_RESET}"
+    echo "  ${C_METADATA}└─${S_RESET}"
+}
+
+function __output_format_json() {
+    :  'Format message as JSON (pass through with optional filtering)
+
+        @usage
+            <json> <line_number>
+    '
+    local -- __json="${1}"
+    jq -c '.' <<< "${__json}"
+}
+
+## processing functions ########################################################
+################################################################################
+
+function process-session() {
+    :  'Process Gemini session JSON and output formatted messages
+
+        @usage
+            <input_file>
+
+        @arg <input_file>
+            Input JSON file path or /dev/stdin
+    '
+    local -- __input="${1}"
+    local -i __line_num=0
+    local -- __format_func="__output_format_${OUTPUT_FORMAT}"
+
+    # Verify format function exists
+    if ! declare -f "${__format_func}" &>/dev/null; then
+        echo "error: output format '${OUTPUT_FORMAT}' not implemented" >&2
+        return ${E_ERROR}
+    fi
+
+    # Show session metadata
+    if [[ "${OUTPUT_FORMAT}" == "text" ]]; then
+        local -- __session_id __start_time __last_updated
+        __session_id=$(jq -r '.sessionId // empty' < "${__input}")
+        __start_time=$(jq -r '.startTime // empty' < "${__input}")
+        __last_updated=$(jq -r '.lastUpdated // empty' < "${__input}")
+
+        echo "${C_LABEL}${S_BOLD}═══ GEMINI SESSION ═══${S_RESET}"
+        [[ -n "${__session_id}" ]] && echo "  ${C_LABEL}Session ID:${S_RESET} ${__session_id}"
+        [[ -n "${__start_time}" ]] && echo "  ${C_LABEL}Start Time:${S_RESET} ${__start_time}"
+        [[ -n "${__last_updated}" ]] && echo "  ${C_LABEL}Last Updated:${S_RESET} ${__last_updated}"
+        echo
+    fi
+
+    # Process messages array
+    jq -c '.messages[]? // empty' < "${__input}" | while IFS= read -r message; do
+        (( __line_num++ ))
+
+        # Skip empty messages
+        [[ -z "${message}" ]] && continue
+
+        # Apply filters and display
+        if should-show-message "${message}"; then
+            "${__format_func}" "${message}" "${__line_num}"
+        fi
+    done
+}
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    # Determine input source
+    local -- __input_source
+
+    if [[ -n "${INPUT_FILE}" ]]; then
+        # Read from file
+        if [[ ! -f "${INPUT_FILE}" ]]; then
+            echo "error: file not found: ${INPUT_FILE}" >&2
+            return ${E_ERROR}
+        fi
+        __input_source="${INPUT_FILE}"
+
+    elif ${DO_LATEST}; then
+        # Find latest session
+        __input_source=$(find-latest-session)
+        if [[ -z "${__input_source}" ]]; then
+            echo "error: no sessions found" >&2
+            return ${E_ERROR}
+        fi
+
+    elif [[ ! -t 0 ]]; then
+        # Read from stdin
+        __input_source="/dev/stdin"
+
+    else
+        echo "error: no input source specified" >&2
+        help-usage >&2
+        return ${E_INVALID_ARGS}
+    fi
+
+    process-session "${__input_source}"
+}
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

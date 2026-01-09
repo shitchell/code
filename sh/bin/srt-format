@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+#
+# Format SRT subtitle files with customizable output templates
+
+## imports #####################################################################
+################################################################################
+
+include-source 'colors.sh'
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+
+
+## colors ######################################################################
+################################################################################
+function custom-colors() {
+    C_TITLE="${S_BOLD}${C_BLUE}"
+    C_VARIABLE="${C_CYAN}"
+    C_EXAMPLE="${S_BOLD}${C_GREEN}"
+}
+
+## traps #######################################################################
+################################################################################
+
+function silence-output() {
+    :  'Silence all script output'
+    exec 3>&1 4>&2 1>/dev/null 2>&1
+}
+
+# @usage restore-output
+function restore-output() {
+    :  'Restore script output after a call to `silence-output`'
+    [[ -t 3 ]] && exec 1>&3 3>&-
+    [[ -t 4 ]] && exec 2>&4 4>&-
+}
+
+function trap-exit() {
+    :  'An exit trap to restore output on script end'
+    restore-output
+}
+trap trap-exit EXIT
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-f/--format FORMAT] [FILE]"
+}
+
+function help-epilogue() {
+    echo "format SRT subtitle files with customizable output templates"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    echo "Converts SRT subtitle format to a custom text format using template variables."
+    echo "Reads from FILE or stdin if no file is provided."
+    echo
+    echo "Options:"
+    cat << 'EOF'
+    -h                    display usage
+    --help                display this help message
+    -f/--format FORMAT    output format template (default: "**{start_timestamp}:** {text}")
+    -c/--color <when>     when to use color ("auto", "always", "never")
+    -s/--silent           suppress all output
+    --config-file <file>  use the specified configuration file
+
+Available template variables:
+    {index}             - Subtitle index number
+    {start_hour}        - Start hour (00-23)
+    {start_minute}      - Start minute (00-59)
+    {start_seconds}     - Start seconds (00-59)
+    {start_ms}          - Start milliseconds (000-999)
+    {end_hour}          - End hour (00-23)
+    {end_minute}        - End minute (00-59)
+    {end_seconds}       - End seconds (00-59)
+    {end_ms}            - End milliseconds (000-999)
+    {start_timestamp}   - Full start timestamp (HH:MM:SS.mmm)
+    {end_timestamp}     - Full end timestamp (HH:MM:SS.mmm)
+    {text}              - Subtitle text content
+
+Examples:
+    # Default format
+    srt-format.sh input.srt
+
+    # Custom format from stdin
+    cat input.srt | srt-format.sh -f '{index}. [{start_timestamp}] {text}'
+
+    # Tab-separated output
+    srt-format.sh -f '{start_timestamp}\t{end_timestamp}\t{text}' input.srt
+
+    # Markdown timestamp format
+    srt-format.sh -f '**{start_hour}:{start_minute}:{start_seconds}** {text}' input.srt
+EOF
+}
+
+function parse-args() {
+    # Parse the arguments first for a config file to load default values from
+    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
+    for ((i=0; i<${#}; i++)); do
+        case "${!i}" in
+            -c | --config-file)
+                let i++
+                CONFIG_FILE="${!i}"
+                ;;
+        esac
+    done
+    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
+
+    # Default values
+    FORMAT='**{start_timestamp}:** {text}'
+    INPUT_FILE=""
+    DO_COLOR=false
+    DO_SILENT=false
+    local __color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
+                ;;
+            -f | --format)
+                FORMAT="${2}"
+                shift 1
+                ;;
+            -c | --color)
+                __color_when="${2}"
+                shift 1
+                ;;
+            -s | --silent)
+                DO_SILENT=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                if [[ -z "${INPUT_FILE}" ]]; then
+                    INPUT_FILE="${1}"
+                else
+                    echo "error: multiple input files specified" >&2
+                    return ${E_ERROR}
+                fi
+                ;;
+        esac
+        shift 1
+    done
+
+    # If -- was used, collect the remaining argument as input file
+    if [[ ${#} -gt 0 ]]; then
+        if [[ -z "${INPUT_FILE}" ]]; then
+            INPUT_FILE="${1}"
+        else
+            echo "error: multiple input files specified" >&2
+            return ${E_ERROR}
+        fi
+    fi
+
+    # Validate input file if provided
+    if [[ -n "${INPUT_FILE}" && ! -f "${INPUT_FILE}" ]]; then
+        echo "error: file not found: ${INPUT_FILE}" >&2
+        return ${E_ERROR}
+    fi
+
+    # If in silent mode, silence the output
+    ${DO_SILENT} && silence-output
+
+    # Set up colors
+    if ! ${DO_SILENT}; then
+        case "${__color_when}" in
+            on | yes | always)
+                DO_COLOR=true
+                ;;
+            off | no | never)
+                DO_COLOR=false
+                ;;
+            auto)
+                if ${__IN_TERMINAL}; then
+                    DO_COLOR=true
+                else
+                    DO_COLOR=false
+                fi
+                ;;
+            *)
+                echo "error: invalid color mode: ${__color_when}" >&2
+                return ${E_ERROR}
+                ;;
+        esac
+        ${DO_COLOR} && setup-colors || unset-colors
+    fi
+
+    return ${E_SUCCESS}
+}
+
+
+## helpful functions ###########################################################
+################################################################################
+
+function format-srt() {
+    :  'Convert SRT format to custom template format
+
+        @usage
+            format-srt <format> [<input-file>]
+
+        @arg <format>
+            Template format string with {variable} placeholders
+
+        @arg <input-file>
+            SRT file to process (optional, reads from stdin if not provided)
+
+        @stdout
+            Formatted output based on template
+    '
+    local -- __format="${1}"
+    local -- __input="${2:-}"
+
+    # Build the awk script
+    local -- __awk_script='
+BEGIN {
+    RS = ""  # Paragraph mode - blank line separated records
+    FS = "\n"  # Fields separated by newlines
+}
+
+{
+    # Line 1: index number
+    idx = $1
+
+    # Line 2: timestamps (00:00:00,080 --> 00:00:05,839)
+    timestamp_line = $2
+    split(timestamp_line, parts, / --> /)
+    start_ts = parts[1]
+    end_ts = parts[2]
+
+    # Parse start timestamp components
+    split(start_ts, start_parts, /:/)
+    start_hour = start_parts[1]
+    start_minute = start_parts[2]
+    split(start_parts[3], start_sec_ms, /,/)
+    start_seconds = start_sec_ms[1]
+    start_ms = start_sec_ms[2]
+
+    # Parse end timestamp components
+    split(end_ts, end_parts, /:/)
+    end_hour = end_parts[1]
+    end_minute = end_parts[2]
+    split(end_parts[3], end_sec_ms, /,/)
+    end_seconds = end_sec_ms[1]
+    end_ms = end_sec_ms[2]
+
+    # Create full formatted timestamps (with dots instead of commas)
+    start_timestamp = start_hour ":" start_minute ":" start_seconds "." start_ms
+    end_timestamp = end_hour ":" end_minute ":" end_seconds "." end_ms
+
+    # Collect all text lines (from line 3 onwards)
+    text = ""
+    for (i = 3; i <= NF; i++) {
+        if (text != "") text = text " "
+        text = text $i
+    }
+
+    # Apply format by replacing all variables
+    output = format
+    gsub(/{index}/, idx, output)
+    gsub(/{start_hour}/, start_hour, output)
+    gsub(/{start_minute}/, start_minute, output)
+    gsub(/{start_seconds}/, start_seconds, output)
+    gsub(/{start_ms}/, start_ms, output)
+    gsub(/{end_hour}/, end_hour, output)
+    gsub(/{end_minute}/, end_minute, output)
+    gsub(/{end_seconds}/, end_seconds, output)
+    gsub(/{end_ms}/, end_ms, output)
+    gsub(/{start_timestamp}/, start_timestamp, output)
+    gsub(/{end_timestamp}/, end_timestamp, output)
+    gsub(/{text}/, text, output)
+
+    print output
+}
+'
+
+    # Run awk with the format variable
+    if [[ -n "${__input}" ]]; then
+        awk -v format="${__format}" "${__awk_script}" "${__input}"
+    else
+        awk -v format="${__format}" "${__awk_script}"
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    format-srt "${FORMAT}" "${INPUT_FILE}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+include-source 'ipsum'
+ipsum "${@}"

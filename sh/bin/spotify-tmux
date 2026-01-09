@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# spotify-tmux: Launch spotify_player and cava in a tmux split window
+# Requires: tmux, spotify_player, cava
+
+# Check if we're inside a tmux session
+if [ -z "$TMUX" ]; then
+    echo "Error: This script must be run inside a tmux session."
+    echo "Please start tmux first with 'tmux' or 'tmux new-session'"
+    exit 1
+fi
+
+# Check if required programs are installed
+# First check if cargo-installed version exists
+if [ -x "$HOME/.cargo/bin/spotify_player" ]; then
+    SPOTIFY_CMD="$HOME/.cargo/bin/spotify_player"
+elif command -v spotify_player &> /dev/null; then
+    SPOTIFY_CMD="spotify_player"
+else
+    echo "Error: spotify_player is not installed or not in PATH"
+    echo "Install with: cargo install spotify_player"
+    exit 1
+fi
+
+if ! command -v cava &> /dev/null; then
+    echo "Error: cava is not installed or not in PATH"
+    exit 1
+fi
+
+# Split the current window horizontally (top/bottom)
+# The -v flag creates a vertical split (stacked horizontally)
+tmux split-window -v
+
+# Select the top pane (pane 0)
+tmux select-pane -t 0
+
+# Start cava in the top pane (current pane)
+tmux send-keys "cava" C-m
+
+# Select the bottom pane (pane 1)
+tmux select-pane -t 1
+
+# Start spotify_player in the bottom pane
+tmux send-keys "$SPOTIFY_CMD" C-m
+
+# Optional: Adjust the pane sizes for better viewing
+# This makes the panes roughly equal (50/50 split)
+tmux resize-pane -t 0 -y 50%
+
+echo "spotify_player and cava launched in tmux!"

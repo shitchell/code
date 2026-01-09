@@ -1,0 +1,611 @@
+#!/usr/bin/env bash
+#
+# Capture terminal output using the `script` command and send it to an AI
+# assistant for analysis. Includes setup for automatic session logging.
+
+
+## imports #####################################################################
+################################################################################
+
+include-source 'debug.sh'
+
+
+## exit codes ##################################################################
+################################################################################
+
+declare -ri E_SUCCESS=0
+declare -ri E_ERROR=1
+declare -ri E_NO_SESSION=2
+declare -ri E_ALREADY_SETUP=3
+
+
+## configuration ###############################################################
+################################################################################
+
+# The AI command to use for analysis. This is an array to handle commands with
+# arguments or spaces properly. Override in config file or environment.
+declare -a AI_CMD
+AI_CMD=("${AI_CMD[@]:-claude}")
+
+# Default number of lines to capture from the session log
+declare -i DEFAULT_LINES=500
+
+# Base directory for session logs
+LOG_BASE_DIR="${AINVESTIGATE_LOG_DIR:-/tmp/ainvestigate}"
+
+# Whether to delete the session log on exit (can be set in config)
+DELETE_ON_EXIT="${AINVESTIGATE_DELETE_ON_EXIT:-false}"
+
+# Session complete marker
+SESSION_COMPLETE_MARKER="### AINVESTIGATE SESSION COMPLETE ###"
+
+
+## usage functions #############################################################
+################################################################################
+
+function help-usage() {
+    echo "usage: $(basename "${0}") [-h] [-n <lines>] [<prompt>] [-- <ai args>...]"
+    echo "       $(basename "${0}") --setup [--delete-on-exit]"
+    echo "       $(basename "${0}") --cleanup"
+}
+
+function help-epilogue() {
+    echo "capture terminal output via script(1) and send to an AI assistant"
+}
+
+function help-full() {
+    help-usage
+    help-epilogue
+    echo
+    cat << EOF
+Captures terminal output from an active script session and sends it to an AI
+assistant with context. Also provides setup for automatic session logging.
+
+Modes:
+    (default)             Capture and send to AI
+    --setup               Configure automatic session logging
+    --cleanup             Remove completed session logs
+
+Capture Options:
+    -h                    display usage
+    --help                display this help message
+    -n/--lines <count>    number of lines to capture (default: ${DEFAULT_LINES})
+    -d/--dry-run          print captured output instead of sending to AI
+    --config-file <file>  use the specified configuration file
+    --                    pass remaining arguments to the AI command
+
+Arguments:
+    <prompt>              additional context or question to include with the
+                          captured output (e.g., "why is this failing?")
+
+Setup Options:
+    --setup               write ~/.ainvestigate.sh and inject into shell rc
+    --delete-on-exit      configure sessions to delete logs on clean exit
+    --shell <shell>       force shell type (bash, zsh, sh) instead of detecting
+
+Cleanup Options:
+    --cleanup             remove session logs marked as complete
+    --cleanup-all         remove ALL session logs (including active ones)
+
+Environment:
+    __SCRIPT_SESSION_LOG  path to current session's log file (set automatically)
+    AINVESTIGATE_LOG_DIR  override log directory (default: /tmp/ainvestigate)
+
+Configuration:
+    Config file: ~/.ainvestigate-script.conf
+
+    Example:
+        AI_CMD=("gemini-cli" "chat")
+        DEFAULT_LINES=1000
+        DELETE_ON_EXIT=true
+
+Examples:
+    # First-time setup
+    $(basename "${0}") --setup
+
+    # Capture last 500 lines and send to AI
+    $(basename "${0}")
+
+    # Include a question with the capture
+    $(basename "${0}") "why did this fail?"
+
+    # Capture last 100 lines
+    $(basename "${0}") -n 100
+
+    # Clean up old session logs
+    $(basename "${0}") --cleanup
+EOF
+}
+
+function parse-args() {
+    # Parse the arguments first for a config file to load default values from
+    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
+    for ((i=0; i<${#}; i++)); do
+        case "${!i}" in
+            --config-file)
+                ((i++))
+                CONFIG_FILE="${!i}"
+                ;;
+        esac
+    done
+    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
+
+    # Default values
+    declare -g MODE="capture"  # capture, setup, cleanup
+    declare -gi CAPTURE_LINES="${DEFAULT_LINES}"
+    declare -g DO_DRY_RUN=false
+    declare -g DO_DELETE_ON_EXIT="${DELETE_ON_EXIT}"
+    declare -g FORCE_SHELL=""
+    declare -g CLEANUP_ALL=false
+    declare -g USER_PROMPT=""
+    declare -ga AI_ARGS=()
+
+    # Loop over the arguments
+    while [[ ${#} -gt 0 ]]; do
+        case ${1} in
+            -h)
+                help-usage
+                help-epilogue
+                exit ${E_SUCCESS}
+                ;;
+            --help)
+                help-full
+                exit ${E_SUCCESS}
+                ;;
+            --config-file)
+                shift 1
+                ;;
+            --setup)
+                MODE="setup"
+                ;;
+            --cleanup)
+                MODE="cleanup"
+                ;;
+            --cleanup-all)
+                MODE="cleanup"
+                CLEANUP_ALL=true
+                ;;
+            --delete-on-exit)
+                DO_DELETE_ON_EXIT=true
+                ;;
+            --shell)
+                FORCE_SHELL="${2}"
+                shift 1
+                ;;
+            -n | --lines)
+                CAPTURE_LINES="${2}"
+                shift 1
+                ;;
+            -d | --dry-run)
+                DO_DRY_RUN=true
+                ;;
+            --)
+                shift 1
+                break
+                ;;
+            -*)
+                echo "error: unknown option: ${1}" >&2
+                return ${E_ERROR}
+                ;;
+            *)
+                # Positional argument is the user's additional prompt
+                USER_PROMPT="${1}"
+                ;;
+        esac
+        shift 1
+    done
+
+    # Collect remaining arguments for the AI command
+    while [[ ${#} -gt 0 ]]; do
+        AI_ARGS+=("${1}")
+        shift 1
+    done
+
+    return ${E_SUCCESS}
+}
+
+
+## setup functions #############################################################
+################################################################################
+
+function detect-shell() {
+    : 'Detect the current interactive shell
+
+        @stdout The shell name (bash, zsh, sh)
+    '
+    local -- __shell
+
+    if [[ -n "${FORCE_SHELL}" ]]; then
+        echo "${FORCE_SHELL}"
+        return
+    fi
+
+    # Try to detect from the current shell
+    __shell="${SHELL##*/}"
+
+    case "${__shell}" in
+        bash | zsh | sh)
+            echo "${__shell}"
+            ;;
+        *)
+            # Fall back to bash
+            echo "bash"
+            ;;
+    esac
+}
+
+function get-rc-file() {
+    : 'Get the rc file path for a given shell
+
+        @arg $1 - Shell name (bash, zsh, sh)
+        @stdout Path to the rc file
+    '
+    local -- __shell="${1}"
+
+    case "${__shell}" in
+        bash)
+            echo "${HOME}/.bashrc"
+            ;;
+        zsh)
+            echo "${HOME}/.zshrc"
+            ;;
+        sh)
+            echo "${HOME}/.profile"
+            ;;
+        *)
+            echo "${HOME}/.bashrc"
+            ;;
+    esac
+}
+
+function generate-startup-script() {
+    : 'Generate the ~/.ainvestigate.sh startup script
+
+        @arg $1 - Whether to delete on exit (true/false)
+        @stdout The script content
+    '
+    local -- __delete_on_exit="${1:-false}"
+
+    cat << 'SCRIPT_HEADER'
+#!/usr/bin/env bash
+# ainvestigate session logging - automatically generated
+# Source this from your shell's rc file to enable session logging.
+#
+# To regenerate: ainvestigate-script --setup
+
+# Only run in interactive shells
+[[ $- != *i* ]] && return
+
+# Don't nest script sessions
+[[ -n "${__SCRIPT_SESSION_LOG}" ]] && return
+
+# Don't run inside tmux - use ainvestigate-tmux instead
+[[ -n "${TMUX}" ]] && return
+
+# Don't run inside editors, IDEs, or other non-terminal contexts
+[[ -n "${INSIDE_EMACS}" ]] && return
+[[ -n "${VSCODE_PID}" ]] && return
+[[ "${TERM_PROGRAM}" == "vscode" ]] && return
+
+# Ensure we have a tty
+[[ ! -t 0 ]] && return
+
+SCRIPT_HEADER
+
+    cat << SCRIPT_CONFIG
+# Configuration
+__AINVESTIGATE_LOG_DIR="\${AINVESTIGATE_LOG_DIR:-/tmp/ainvestigate}"
+__AINVESTIGATE_DELETE_ON_EXIT="${__delete_on_exit}"
+
+SCRIPT_CONFIG
+
+    cat << 'SCRIPT_BODY'
+# Create user's log directory with proper permissions
+__ainvestigate_user_dir="${__AINVESTIGATE_LOG_DIR}/${USER}"
+if [[ ! -d "${__ainvestigate_user_dir}" ]]; then
+    mkdir -p "${__ainvestigate_user_dir}" 2>/dev/null
+    chmod 700 "${__ainvestigate_user_dir}" 2>/dev/null
+fi
+
+# Generate log filename with timestamp and PID
+__ainvestigate_timestamp="$(date '+%Y%m%d_%H%M%S')"
+export __SCRIPT_SESSION_LOG="${__ainvestigate_user_dir}/${__ainvestigate_timestamp}_$$.log"
+
+# Set up exit handler to mark session complete and optionally delete
+__ainvestigate_cleanup() {
+    if [[ -f "${__SCRIPT_SESSION_LOG}" ]]; then
+        echo "" >> "${__SCRIPT_SESSION_LOG}"
+        echo "### AINVESTIGATE SESSION COMPLETE ###" >> "${__SCRIPT_SESSION_LOG}"
+        if [[ "${__AINVESTIGATE_DELETE_ON_EXIT}" == "true" ]]; then
+            rm -f "${__SCRIPT_SESSION_LOG}" 2>/dev/null
+        fi
+    fi
+}
+
+# Detect OS and build appropriate script command
+# - Linux (util-linux): script -q -f <file> (flush with -f)
+# - FreeBSD: script -q -F <file> (flush with -F)
+# - macOS: script -q <file> (no reliable flush, or -F on newer versions)
+# - OpenBSD: script -q <file> (no flush option)
+__ainvestigate_build_script_cmd() {
+    local -- __os __script_cmd
+
+    __os="$(uname -s)"
+    __script_cmd=("script" "-q")
+
+    case "${__os}" in
+        Linux)
+            # util-linux uses -f for flush
+            __script_cmd+=("-f")
+            ;;
+        FreeBSD)
+            # FreeBSD uses -F for flush
+            __script_cmd+=("-F")
+            ;;
+        Darwin)
+            # macOS: try -F (works on newer versions), fall back gracefully
+            # The -F flag was added in macOS 10.13+
+            if script -F /dev/null -c true 2>/dev/null; then
+                __script_cmd+=("-F")
+            fi
+            ;;
+        # OpenBSD, NetBSD, and others: no flush flag, just use -q
+    esac
+
+    # Append the log file
+    __script_cmd+=("${__SCRIPT_SESSION_LOG}")
+
+    # Return the command array as a string (for use with exec)
+    printf '%q ' "${__script_cmd[@]}"
+}
+
+# Start the script session
+# Using exec replaces the current shell with script, which spawns a new shell
+# The -q flag suppresses start/done messages
+# Flush flags are OS-dependent (see above)
+eval "exec $(__ainvestigate_build_script_cmd)"
+SCRIPT_BODY
+}
+
+function do-setup() {
+    : 'Set up automatic session logging
+
+        Creates ~/.ainvestigate.sh and injects sourcing into shell rc file.
+    '
+    local -- __shell
+    local -- __rc_file
+    local -- __startup_script="${HOME}/.ainvestigate.sh"
+    local -- __source_line
+
+    __shell="$(detect-shell)"
+    __rc_file="$(get-rc-file "${__shell}")"
+
+    # Use POSIX-compatible sourcing syntax
+    __source_line='. "${HOME}/.ainvestigate.sh"'
+
+    echo "Setting up ainvestigate session logging..."
+    echo "  Shell: ${__shell}"
+    echo "  RC file: ${__rc_file}"
+    echo "  Startup script: ${__startup_script}"
+    echo "  Delete on exit: ${DO_DELETE_ON_EXIT}"
+    echo
+
+    # Generate the startup script
+    generate-startup-script "${DO_DELETE_ON_EXIT}" > "${__startup_script}"
+    chmod +x "${__startup_script}"
+    echo "Created ${__startup_script}"
+
+    # Check if sourcing line already exists in rc file
+    if [[ -f "${__rc_file}" ]]; then
+        if grep -qF '.ainvestigate.sh' "${__rc_file}"; then
+            echo "Sourcing line already exists in ${__rc_file}"
+            echo
+            echo "Setup complete! Restart your shell or run:"
+            echo "  source ${__startup_script}"
+            return ${E_SUCCESS}
+        fi
+    fi
+
+    # Inject sourcing line at the top of rc file
+    if [[ -f "${__rc_file}" ]]; then
+        # Create backup
+        cp "${__rc_file}" "${__rc_file}.ainvestigate-backup"
+
+        # Prepend sourcing line
+        {
+            echo "# ainvestigate session logging"
+            echo "[ -f \"\${HOME}/.ainvestigate.sh\" ] && ${__source_line}"
+            echo ""
+            cat "${__rc_file}.ainvestigate-backup"
+        } > "${__rc_file}"
+
+        echo "Added sourcing line to ${__rc_file} (backup: ${__rc_file}.ainvestigate-backup)"
+    else
+        # Create new rc file
+        {
+            echo "# ainvestigate session logging"
+            echo "[ -f \"\${HOME}/.ainvestigate.sh\" ] && ${__source_line}"
+        } > "${__rc_file}"
+        echo "Created ${__rc_file}"
+    fi
+
+    echo
+    echo "Setup complete! Restart your shell or run:"
+    echo "  source ${__startup_script}"
+
+    return ${E_SUCCESS}
+}
+
+
+## cleanup functions ###########################################################
+################################################################################
+
+function do-cleanup() {
+    : 'Clean up completed session logs'
+    local -- __user_dir="${LOG_BASE_DIR}/${USER}"
+    local -- __log_file
+    local -i __count=0
+    local -i __total=0
+
+    if [[ ! -d "${__user_dir}" ]]; then
+        echo "No session logs found in ${__user_dir}"
+        return ${E_SUCCESS}
+    fi
+
+    for __log_file in "${__user_dir}"/*.log; do
+        [[ -f "${__log_file}" ]] || continue
+        ((++__total))
+
+        if ${CLEANUP_ALL}; then
+            rm -f "${__log_file}"
+            ((++__count))
+        elif tail -1 "${__log_file}" 2>/dev/null | grep -qF "${SESSION_COMPLETE_MARKER}"; then
+            rm -f "${__log_file}"
+            ((++__count))
+        fi
+    done
+
+    echo "Removed ${__count} of ${__total} session logs"
+
+    return ${E_SUCCESS}
+}
+
+
+## capture functions ###########################################################
+################################################################################
+
+function check-session() {
+    : 'Verify we are in an active script session
+
+        @return 0 if in session, E_NO_SESSION otherwise
+    '
+    if [[ -z "${__SCRIPT_SESSION_LOG}" ]]; then
+        echo "error: not in an ainvestigate session" >&2
+        echo "hint: run 'ainvestigate-script --setup' to enable session logging" >&2
+        return ${E_NO_SESSION}
+    fi
+
+    if [[ ! -f "${__SCRIPT_SESSION_LOG}" ]]; then
+        echo "error: session log not found: ${__SCRIPT_SESSION_LOG}" >&2
+        return ${E_NO_SESSION}
+    fi
+
+    return ${E_SUCCESS}
+}
+
+function capture-session-output() {
+    : 'Capture the last N lines from the session log
+
+        @arg $1 - Number of lines to capture
+        @stdout The captured output (with escape sequences stripped)
+    '
+    local -i __lines="${1}"
+
+    # Capture last N lines and strip ANSI escape sequences
+    # Using sed to remove common escape sequences
+    tail -n "${__lines}" "${__SCRIPT_SESSION_LOG}" 2>/dev/null | \
+        sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' \
+            -e 's/\x1b\][^\x07]*\x07//g' \
+            -e 's/\x1b[()][AB012]//g' \
+            -e 's/\x0f//g' \
+            -e 's/\r//g'
+}
+
+function build-prompt() {
+    : 'Build the prompt to send to the AI with captured output
+
+        @arg $1 - The captured terminal output
+        @stdout The formatted prompt
+    '
+    local -- __output="${1}"
+    local -- __timestamp
+    local -- __pwd
+    local -- __shell
+    local -- __tty
+
+    __timestamp="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+    __pwd="${PWD}"
+    __shell="${SHELL##*/}"
+    __tty="$(tty 2>/dev/null || echo "unknown")"
+
+    cat << EOF
+<terminal-capture>
+<metadata>
+<captured-at>${__timestamp}</captured-at>
+<working-directory>${__pwd}</working-directory>
+<shell>${__shell}</shell>
+<tty>${__tty}</tty>
+<lines-captured>${CAPTURE_LINES}</lines-captured>
+<session-log>${__SCRIPT_SESSION_LOG}</session-log>
+<note>This is LIVE output from the user's CURRENT terminal session, captured just now via script(1) session logging. The user is actively working on this and needs help understanding or debugging what they see.</note>
+</metadata>
+<output>
+${__output}
+</output>
+</terminal-capture>
+
+Please analyze the terminal output above. Look for:
+1. Any errors or warnings and what might have caused them
+2. The last few commands that were run and their results
+3. Suggestions for how to fix or proceed
+
+If you need more context (e.g., file contents, more history), just ask.
+EOF
+}
+
+function do-capture() {
+    : 'Capture session output and send to AI'
+
+    check-session || return ${?}
+
+    # Capture the session output
+    local -- captured_output
+    captured_output="$(capture-session-output "${CAPTURE_LINES}")"
+
+    if [[ -z "${captured_output}" ]]; then
+        echo "error: no output captured from session log" >&2
+        return ${E_ERROR}
+    fi
+
+    # Build the full prompt
+    local -- prompt
+    prompt="$(build-prompt "${captured_output}")"
+
+    # Append user's additional context if provided
+    if [[ -n "${USER_PROMPT}" ]]; then
+        prompt+=$'\n---\n\n'"${USER_PROMPT}"
+    fi
+
+    # Either print (dry-run) or send to AI
+    if ${DO_DRY_RUN}; then
+        echo "${prompt}"
+    else
+        "${AI_CMD[@]}" "${AI_ARGS[@]}" "${prompt}"
+    fi
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    parse-args "${@}" || return ${?}
+
+    case "${MODE}" in
+        setup)
+            do-setup
+            ;;
+        cleanup)
+            do-cleanup
+            ;;
+        capture)
+            do-capture
+            ;;
+    esac
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
