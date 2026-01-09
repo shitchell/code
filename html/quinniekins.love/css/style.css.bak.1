@@ -1,0 +1,160 @@
+/* css/style.css */
+
+/* Reset some basic styles */
+body, html {
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+    
+    /* text */
+    font-family: "Borel", cursive;
+    font-weight: 400;
+    font-style: normal;
+    /* text-transform: lowercase; */
+}
+
+/* Intro Section Styles */
+.intro-section {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    background-color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    scroll-snap-align: start;
+    -webkit-scroll-snap-align: start;
+    
+    font-family: "Josefin Sans";
+}
+
+.intro-content {
+    text-align: center;
+    opacity: 0;
+    animation: fadeIn 2s forwards;
+}
+
+.intro-content h1 {
+    font-size: 3em;
+    margin-bottom: 20px;
+    color: #333;
+}
+
+.intro-content p {
+    font-size: 1.5em;
+    color: #555;
+}
+
+/* Fade-in animation */
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+#container {
+    width: 100vw;
+    height: 100vh;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory; /* Standard */
+    -webkit-overflow-scrolling: touch;
+    -ms-scroll-snap-type: mandatory; /* IE/Edge */
+    scroll-snap-points-y: repeat(100vh); /* Old syntax */
+    scroll-snap-destination: 0% 0%; /* Old syntax */
+}
+
+.section {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    background-blend-mode: overlay;
+    background-color: rgba(255,255,255,0.8); /* Overlay to make text readable */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    scroll-snap-align: start; /* Snap each section */
+    -ms-scroll-snap-align: start; /* IE/Edge */
+}
+
+.section .content {
+    z-index: 2;
+    text-align: center;
+    font-family: "Dancing Script", cursive;
+}
+
+.section h1 {
+    font-size: 2em;
+    color: #000000;
+    padding: 0 20px;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.final-section {
+    position: relative;
+    width: 100vw;
+    min-height: 100vh;
+    background-color: #ffffff;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    scroll-snap-align: start; /* Snap each section */
+    -ms-scroll-snap-align: start; /* IE/Edge */
+}
+
+.image-collage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    overflow: hidden;
+}
+
+.collage-image {
+    width: calc(100vw / 6);
+    height: calc(100vw / 6);
+    background-size: cover;
+    background-position: center;
+    filter: brightness(0.2) blur(4px);
+}
+
+.all-points {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    width: 100vw;
+    padding: 20px;
+}
+
+.all-points .point {
+    flex: 1 1 10%;
+    margin: 10px;
+    background: rgba(0 0 0 / 0.2);
+    padding: 15px;
+    border-radius: 8px;
+    font-size: 1.2em;
+    color: #FFF;
+    font-family: serif;
+    font-style: italic;
+}
+
+
+@media screen and (max-width: 768px) {
+    .all-points .point {
+        flex: 1 1 100%;
+    }
+    .section h1 {
+        font-size: 1.5em;
+    }
+}

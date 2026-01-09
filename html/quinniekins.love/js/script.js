@@ -1,0 +1,156 @@
+document.addEventListener('DOMContentLoaded', function() {
+    const container = document.getElementById('container');
+    const totalImages = 82; // Total number of images you have
+    const imageIndices = [];
+
+    // Define the points as a JSON array without numbers
+    const points = [
+        "enjoys a hike towards an awesome sunset",
+        "doesn't mind a little rain on that hike",
+        "adores and takes amazing care of her pets",
+        "one of the most gorgeous, contagious, addictive smiles",
+        "is always willing and wanting to be there for a friend in need, even when she's dealing with her own struggles",
+        "ever thoughtful and considerate",
+        "values straightforward, open honesty",
+        "loves and feels deeply and passionately",
+        "thinks driving around singing songs in the car together sounds like a good time :)",
+        "top tier communicator",
+        "gives and appreciates awesome hugs",
+        "makes it a priority to reflect on and take accountability for her role in the way things turn out, even when she's 100% not culpable...",
+        "...which is always since she can do literally no wrong :P",
+        "has the best taste in band T's and PM sweaters",
+        "is the kind of person to think this is sweet rather than ridiculous and over-the-top (oh god i hope)",
+        "communicates her feelings clearly while still taking the other person's feelings into consideration",
+        "willing to laugh at herself and not take things too seriously",
+        "takes awesome pictures of snow and konas for my lock screen",
+        "loves spontaneous adventures",
+        "loves spontaneous staying-inside-and-doing-nothings",
+        "has a keen ability to see, understand, and empathize with others...",
+        "...which leads to, among other things, awesome book recommendations :D",
+        "...and generally being able to make people feel seen, heard, and understood",
+        "makes the hard days easier to get through",
+        "can make even the most mundane moments a blast",
+        "though parting is such sweet sorrow, makes it bearable with the awesomest goodbyes :D",
+        "ever willing to explore and look at every facet of herself, even those many would prefer to ignore or hide...",
+        "...and then uses that to help others",
+        "handles the weight of work and life with admirable strength",
+        "always committed to growing through and overcoming anything that comes her way",
+        "easily finds the sweetest compliments and supportive words",
+        "willing to work hard when needed while still strongly holding a \"fuck work\" philosophy :P",
+        "unafraid of confronting and telling off the big boss",
+        "loyal AF and always has her friends' backs",
+        "always, even in the most difficult and painful of situations, no matter how hurt or upset or wronged, still considers and acknowledges the other person's perspective (e.g.: facing losing their job)",
+        "she is a safe, comforting, warm space where you can just be yourself and feel nothing but love for it",
+        "shamelessly, unapologetically herself — one of the most loving, passionate, fierce, empathic, beautiful souls i've been lucky to know"
+    ];
+    
+    const poem = `
+        Life's path twists and turns—
+        Destination unknown—
+        With so much to learn
+        With new ways to grow.
+
+        Through all of this change,
+        One truth's at the core:
+        To love and be loved—
+        I'm lucky mine's yours.
+
+        Wherever life goes,
+        Whatever you do,
+        I want you to know
+        How much I love you.
+
+        <4
+    `
+
+    // Generate an array of image indices from 1 to totalImages
+    for (let i = 1; i <= totalImages; i++) {
+        imageIndices.push(i);
+    }
+
+    // Shuffle the image indices
+    shuffleArray(imageIndices);
+
+    // Create sections dynamically for the intro and individual points
+    points.forEach((pointText, index) => {
+        const section = document.createElement('div');
+        section.classList.add('section');
+
+        const contentDiv = document.createElement('div');
+        contentDiv.classList.add('content');
+
+        const h1 = document.createElement('h1');
+        h1.textContent = `${index + 1}. ${pointText}`;
+
+        contentDiv.appendChild(h1);
+        section.appendChild(contentDiv);
+
+        // Assign background image
+        const bgImageIndex = imageIndices[index % totalImages];
+        const imageUrl = `img/${String(bgImageIndex).padStart(3, '0')}.jpg`; // Adjusted for '001.jpg' format
+        section.style.backgroundImage = `url('${imageUrl}')`;
+
+        container.appendChild(section);
+    });
+    
+    // Create the poem section
+    const poemSection = document.createElement('div');
+    const poemContainer = document.createElement('pre');
+    poemSection.classList.add('poem-section');
+    poemContainer.innerText = poem;
+    poemSection.appendChild(poemContainer);
+    container.appendChild(poemSection);
+
+    // Create the final section
+    const finalSection = document.createElement('div');
+    finalSection.classList.add('final-section');
+
+    // Create a container for the grid of points
+    const gridContainer = document.createElement('div');
+    gridContainer.classList.add('grid-container');
+
+    // Loop through the first 35 points to create grid items
+    for (let i = 0; i < 35; i++) {
+        const gridItem = document.createElement('div');
+        gridItem.classList.add('grid-item');
+
+        // Set background image
+        const bgImageIndex = imageIndices[i % totalImages];
+        const imageUrl = `img/${String(bgImageIndex).padStart(3, '0')}.jpg`;
+        gridItem.style.backgroundImage = `url('${imageUrl}')`;
+
+        // Create text element
+        const pointText = document.createElement('p');
+        pointText.textContent = points[i];
+        gridItem.appendChild(pointText);
+
+        gridContainer.appendChild(gridItem);
+    }
+
+    finalSection.appendChild(gridContainer);
+
+    // Create the last point as a separate element
+    const lastPointDiv = document.createElement('div');
+    lastPointDiv.classList.add('last-point');
+    lastPointDiv.textContent = points[35]; // The 36th point
+
+    finalSection.appendChild(lastPointDiv);
+
+    container.appendChild(finalSection);
+    
+    // After everything is all set up, take any "fade-in" elements and add the
+    // "visible" class
+    const fadeInElements = document.querySelectorAll(".fade-in.hidden");
+    for (const el of fadeInElements) {
+        el.classList.remove("hidden");
+        el.classList.add("visible");
+    }
+});
+
+// Function to shuffle an array
+function shuffleArray(array) {
+    for (let i = array.length -1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i+1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+}
