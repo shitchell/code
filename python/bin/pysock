@@ -1,45 +1,170 @@
 #!/usr/bin/env python3
 
 import sys
-import time
 import socket
-import _thread
+import threading
 import readline
+import argparse
 
-if len(sys.argv) < 3:
-	print('usage: pysock [options] server port')
-	quit()
+def decode_escapes(s):
+    """Convert escape sequences like \\t to actual bytes"""
+    return eval("b'" + s.replace("'", "\\'") + "'")
 
-# Go through options
+def listener(sock, client_addr=None):
+    """Thread to receive data from socket"""
+    prefix = f"[{client_addr[0]}:{client_addr[1]}] " if client_addr else ""
+    try:
+        while True:
+            res = sock.recv(1024)
+            if res == b'':
+                print(f"\n{prefix}Connection closed")
+                break
+            # Decode bytes to string, preserving escape sequences
+            res = str(res)[2:-1]
+            print(f"{prefix}{res}")
+    except Exception as e:
+        print(f"\n{prefix}Error: {e}")
 
-if "-u" in sys.argv:
-	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-else:
-	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def handle_client(sock, client_addr, keepgoing_event):
+    """Handle a single client connection in listen mode"""
+    print(f"[+] Connection from {client_addr[0]}:{client_addr[1]}")
 
-server = sys.argv[-2]
-port = int(sys.argv[-1])
+    # Start listener thread for this client
+    listener_thread = threading.Thread(target=listener, args=(sock, client_addr), daemon=True)
+    listener_thread.start()
 
-s.connect((server, port))
+    # Wait for listener to finish
+    listener_thread.join()
+    sock.close()
+    print(f"[-] Disconnected: {client_addr[0]}:{client_addr[1]}")
 
-def listener(sock):
-	global keepgoing
-	while 1:
-		res = sock.recv(1024)
-		if res == b'':
-			keepgoing = False
-			break
-		res = str(res)[2:-1]
-		print(res)
+def listen_mode(host, port, udp=False):
+    """Listen for incoming connections continuously"""
+    sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    s = socket.socket(socket.AF_INET, sock_type)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-_thread.start_new_thread(listener, (s,))
+    try:
+        s.bind((host, port))
+        if not udp:
+            s.listen(5)
+        print(f"[*] Listening on {host}:{port} ({'UDP' if udp else 'TCP'})")
+        print("[*] Press Ctrl+C to stop")
 
-keepgoing = True
-try:
-	while 1:
-		tosend = input()
-		tosend = eval("b'" + tosend.replace("'", "\\'") + "'")
-		s.send(tosend)
-except KeyboardInterrupt:
-	print()
-	quit()
+        keepgoing = threading.Event()
+        keepgoing.set()
+
+        while keepgoing.is_set():
+            if udp:
+                # UDP: just receive data
+                data, addr = s.recvfrom(1024)
+                print(f"[{addr[0]}:{addr[1]}] {str(data)[2:-1]}")
+            else:
+                # TCP: accept connections and handle in threads
+                client_sock, client_addr = s.accept()
+                client_thread = threading.Thread(
+                    target=handle_client,
+                    args=(client_sock, client_addr, keepgoing),
+                    daemon=True
+                )
+                client_thread.start()
+
+    except KeyboardInterrupt:
+        print("\n[*] Shutting down...")
+    finally:
+        s.close()
+
+def connect_mode(server, port, udp=False):
+    """Connect to a remote server (original behavior)"""
+    sock_type = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    s = socket.socket(socket.AF_INET, sock_type)
+
+    s.connect((server, port))
+    print(f"[*] Connected to {server}:{port}")
+
+    # Start listener thread
+    listener_thread = threading.Thread(target=listener, args=(s,), daemon=True)
+    listener_thread.start()
+
+    # Read from stdin and send
+    try:
+        while True:
+            tosend = input()
+            tosend = decode_escapes(tosend)
+            s.send(tosend)
+    except KeyboardInterrupt:
+        print()
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        s.close()
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Socket client/server with escape sequence support (like netcat)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Connect to a server
+  pysock example.com 8080
+
+  # Listen on port 8080 (all interfaces)
+  pysock -l 8080
+
+  # Listen on localhost only
+  pysock -l --localhost 8080
+
+  # Listen on specific interface
+  pysock -l -s 192.168.1.100 8080
+
+  # Use UDP instead of TCP
+  pysock -u example.com 8080
+
+  # Send with escape sequences
+  > hello\\tworld\\n
+        """
+    )
+
+    parser.add_argument('-l', '--listen', action='store_true',
+                        help='Listen mode (act as server)')
+    parser.add_argument('-u', '--udp', action='store_true',
+                        help='Use UDP instead of TCP')
+    parser.add_argument('-s', '--source', '--bind', metavar='HOST',
+                        help='Source address to bind to (listen mode) or connect from')
+    parser.add_argument('--localhost', action='store_true',
+                        help='Bind to localhost (127.0.0.1) in listen mode')
+    parser.add_argument('host', nargs='?',
+                        help='Remote host to connect to (or local host in listen mode with -s)')
+    parser.add_argument('port', type=int,
+                        help='Port number')
+
+    args = parser.parse_args()
+
+    if args.listen:
+        # Listen mode
+        if args.localhost:
+            host = '127.0.0.1'
+        elif args.source:
+            host = args.source
+        elif args.host:
+            host = args.host
+        else:
+            host = '0.0.0.0'  # All interfaces
+
+        # Port is always the last positional arg or args.port
+        port = args.port if not args.host else int(args.host) if args.host.isdigit() else args.port
+        if args.host and not args.host.isdigit():
+            port = args.port
+        elif args.host and args.host.isdigit():
+            port = int(args.host)
+
+        listen_mode(host, port, args.udp)
+    else:
+        # Connect mode
+        if not args.host:
+            parser.error("host is required in connect mode")
+
+        connect_mode(args.host, args.port, args.udp)
+
+if __name__ == '__main__':
+    main()
