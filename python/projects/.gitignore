@@ -1,0 +1,3 @@
+# Ignore all contents (projects now live in ~/code/git/github.com/)
+*
+!.gitignore
