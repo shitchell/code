@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Circular Text Generator</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="settings">
+            <h3>Settings</h3>
+            <textarea id="textInput" placeholder="Type your text here..." rows="3" class="setting">ROUNDED TEXT LOOKS BEST IN CAPS!</textarea>
+            <br><br>
+            <label for="fontName">Font Name: </label>
+            <input type="text" id="fontName" value="Arial" class="setting">
+            <br><br>
+            <label for="fontSize">Font Size: </label>
+            <input type="text" id="fontSize" value="18pt" class="setting">
+            <br><br>
+            <label for="diameter">Circle Diameter: </label>
+            <input type="number" id="diameter" value="250" class="setting">
+            <br><br>
+            <label for="startAngle">Start Angle (degrees): </label>
+            <input type="number" id="startAngle" value="0" min="0" max="360" class="setting">
+            <br><br>
+            <label for="align">Text Align: </label>
+            <select id="align" class="setting">
+                <option value="center">Center</option>
+                <option value="left">Left</option>
+                <option value="right">Right</option>
+            </select>
+            <br><br>
+            <label for="textInside">Text Inside Circle: </label>
+            <input type="checkbox" id="textInside" class="setting" checked>
+            <br><br>
+            <label for="inwardFacing">Inward Facing: </label>
+            <input type="checkbox" id="inwardFacing" class="setting" checked>
+            <br><br>
+            <label for="kerning">Kerning: </label>
+            <input type="number" id="kerning" value="2" class="setting">
+            <br><br>
+            <label for="textColor">Text Color: </label>
+            <input type="color" id="textColor" value="#000000" class="setting">
+            <br><br>
+            <label for="bgColor">Canvas Background Color: </label>
+            <input type="color" id="bgColor" value="#d3d3d3" class="setting">
+            <br><br>
+            <label for="bgOpacity">Background Opacity: </label>
+            <input type="range" id="bgOpacity" min="0" max="1" step="0.01" value="1" class="setting">
+        </div>
+        <div class="output" id="output">
+            <!-- Circular text will be drawn here -->
+        </div>
+    </div>
+    <script src="scripts.js"></script>
+</body>
+</html>

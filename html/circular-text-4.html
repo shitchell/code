@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Circular Text Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+            flex-direction: row;
+        }
+        .container {
+            display: flex;
+            flex: 1;
+        }
+        .settings {
+            width: 40%;
+            padding: 20px;
+            background-color: #f4f4f4;
+            box-sizing: border-box;
+        }
+        .output {
+            width: 60%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #fff;
+            box-sizing: border-box;
+        }
+        .output-text {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+        }
+        .output-text p {
+            position: absolute;
+            transform-origin: 100px 100px;
+            margin: 0;
+        }
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            .settings {
+                width: 100%;
+                height: 40%;
+            }
+            .output {
+                width: 100%;
+                height: 60%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="settings">
+            <h3>Settings</h3>
+            <textarea id="textInput" placeholder="Type your text here..." rows="3" style="width: 100%;"></textarea>
+            <label for="fontSize">Font Size: </label>
+            <input type="number" id="fontSize" value="16">
+            <br><br>
+            <label for="fontColor">Font Color: </label>
+            <input type="color" id="fontColor" value="#000000">
+            <br><br>
+            <label for="bgColor">Background Color: </label>
+            <input type="color" id="bgColor" value="#ffffff">
+            <br><br>
+            <label for="radius">Circle Radius: </label>
+            <input type="number" id="radius" value="100">
+            <br><br>
+            <label for="startAngle">Start Angle (degrees): </label>
+            <input type="number" id="startAngle" value="0" min="0" max="360">
+        </div>
+        <div class="output" id="output">
+            <div class="output-text" id="outputText">
+                <!-- Circular text will appear here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function updateOutput() {
+            const text = document.getElementById('textInput').value;
+            const fontSize = document.getElementById('fontSize').value + 'px';
+            const fontColor = document.getElementById('fontColor').value;
+            const bgColor = document.getElementById('bgColor').value;
+            const radius = parseInt(document.getElementById('radius').value);
+            const startAngle = parseInt(document.getElementById('startAngle').value);
+
+            const outputText = document.getElementById('outputText');
+            outputText.innerHTML = ''; // Clear previous content
+            outputText.style.width = radius * 2 + 'px';
+            outputText.style.height = radius * 2 + 'px';
+            outputText.style.backgroundColor = bgColor;
+
+            const angleIncrement = 360 / text.length;
+            for (let i = 0; i < text.length; i++) {
+                const angle = startAngle + i * angleIncrement;
+                const charElement = document.createElement('p');
+                charElement.innerText = text[i];
+                charElement.style.fontSize = fontSize;
+                charElement.style.color = fontColor;
+                // Rotate character around circle and then rotate it back to point toward the center
+                charElement.style.transform = `rotate(${angle}deg) translate(${radius}px) rotate(${-angle}deg)`;
+                outputText.appendChild(charElement);
+            }
+        }
+
+        document.getElementById('textInput').addEventListener('input', updateOutput);
+        document.getElementById('fontSize').addEventListener('input', updateOutput);
+        document.getElementById('fontColor').addEventListener('input', updateOutput);
+        document.getElementById('bgColor').addEventListener('input', updateOutput);
+        document.getElementById('radius').addEventListener('input', updateOutput);
+        document.getElementById('startAngle').addEventListener('input', updateOutput);
+
+        // Initial render
+        updateOutput();
+    </script>
+</body>
+</html>
