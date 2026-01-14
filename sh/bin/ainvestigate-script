@@ -4,12 +4,6 @@
 # assistant for analysis. Includes setup for automatic session logging.
 
 
-## imports #####################################################################
-################################################################################
-
-include-source 'debug.sh'
-
-
 ## exit codes ##################################################################
 ################################################################################
 
@@ -33,11 +27,6 @@ declare -i DEFAULT_LINES=500
 # Base directory for session logs
 LOG_BASE_DIR="${AINVESTIGATE_LOG_DIR:-/tmp/ainvestigate}"
 
-# Whether to delete the session log on exit (can be set in config)
-DELETE_ON_EXIT="${AINVESTIGATE_DELETE_ON_EXIT:-false}"
-
-# Session complete marker
-SESSION_COMPLETE_MARKER="### AINVESTIGATE SESSION COMPLETE ###"
 
 
 ## usage functions #############################################################
@@ -45,7 +34,7 @@ SESSION_COMPLETE_MARKER="### AINVESTIGATE SESSION COMPLETE ###"
 
 function help-usage() {
     echo "usage: $(basename "${0}") [-h] [-n <lines>] [<prompt>] [-- <ai args>...]"
-    echo "       $(basename "${0}") --setup [--delete-on-exit]"
+    echo "       $(basename "${0}") --setup"
     echo "       $(basename "${0}") --cleanup"
 }
 
@@ -80,11 +69,10 @@ Arguments:
 
 Setup Options:
     --setup               write ~/.ainvestigate.sh and inject into shell rc
-    --delete-on-exit      configure sessions to delete logs on clean exit
     --shell <shell>       force shell type (bash, zsh, sh) instead of detecting
 
 Cleanup Options:
-    --cleanup             remove session logs marked as complete
+    --cleanup             remove orphaned session logs (from dead sessions)
     --cleanup-all         remove ALL session logs (including active ones)
 
 Environment:
@@ -97,7 +85,6 @@ Configuration:
     Example:
         AI_CMD=("gemini-cli" "chat")
         DEFAULT_LINES=1000
-        DELETE_ON_EXIT=true
 
 Examples:
     # First-time setup
@@ -134,7 +121,6 @@ function parse-args() {
     declare -g MODE="capture"  # capture, setup, cleanup
     declare -gi CAPTURE_LINES="${DEFAULT_LINES}"
     declare -g DO_DRY_RUN=false
-    declare -g DO_DELETE_ON_EXIT="${DELETE_ON_EXIT}"
     declare -g FORCE_SHELL=""
     declare -g CLEANUP_ALL=false
     declare -g USER_PROMPT=""
@@ -164,9 +150,6 @@ function parse-args() {
             --cleanup-all)
                 MODE="cleanup"
                 CLEANUP_ALL=true
-                ;;
-            --delete-on-exit)
-                DO_DELETE_ON_EXIT=true
                 ;;
             --shell)
                 FORCE_SHELL="${2}"
@@ -261,110 +244,73 @@ function get-rc-file() {
 function generate-startup-script() {
     : 'Generate the ~/.ainvestigate.sh startup script
 
-        @arg $1 - Whether to delete on exit (true/false)
         @stdout The script content
     '
-    local -- __delete_on_exit="${1:-false}"
-
-    cat << 'SCRIPT_HEADER'
+    cat << 'STARTUP_SCRIPT'
 #!/usr/bin/env bash
-# ainvestigate session logging - automatically generated
-# Source this from your shell's rc file to enable session logging.
+# ~/.ainvestigate.sh
+#
+# Automatic terminal session recording for AI-assisted debugging.
+# Source this from your .bashrc:
+#   [[ -f ~/.ainvestigate.sh ]] && source ~/.ainvestigate.sh
 #
 # To regenerate: ainvestigate-script --setup
 
-# Only run in interactive shells
-[[ $- != *i* ]] && return
-
-# Don't nest script sessions
-[[ -n "${__SCRIPT_SESSION_LOG}" ]] && return
-
-# Don't run inside tmux - use ainvestigate-tmux instead
-[[ -n "${TMUX}" ]] && return
-
-# Don't run inside editors, IDEs, or other non-terminal contexts
-[[ -n "${INSIDE_EMACS}" ]] && return
-[[ -n "${VSCODE_PID}" ]] && return
-[[ "${TERM_PROGRAM}" == "vscode" ]] && return
-
-# Ensure we have a tty
-[[ ! -t 0 ]] && return
-
-SCRIPT_HEADER
-
-    cat << SCRIPT_CONFIG
-# Configuration
-__AINVESTIGATE_LOG_DIR="\${AINVESTIGATE_LOG_DIR:-/tmp/ainvestigate}"
-__AINVESTIGATE_DELETE_ON_EXIT="${__delete_on_exit}"
-
-SCRIPT_CONFIG
-
-    cat << 'SCRIPT_BODY'
-# Create user's log directory with proper permissions
-__ainvestigate_user_dir="${__AINVESTIGATE_LOG_DIR}/${USER}"
-if [[ ! -d "${__ainvestigate_user_dir}" ]]; then
-    mkdir -p "${__ainvestigate_user_dir}" 2>/dev/null
-    chmod 700 "${__ainvestigate_user_dir}" 2>/dev/null
+# Already inside a script session?
+if [[ -n "${__IN_SCRIPT_SESSION:-}" ]]; then
+    if [[ -z "${__SCRIPT_SESSION_PID:-}" ]]; then
+        export __SCRIPT_SESSION_PID="$$"
+        trap 'rm -f "$__SCRIPT_SESSION_LOG"' EXIT
+    fi
+    return 0 2>/dev/null || exit 0
 fi
 
-# Generate log filename with timestamp and PID
-__ainvestigate_timestamp="$(date '+%Y%m%d_%H%M%S')"
-export __SCRIPT_SESSION_LOG="${__ainvestigate_user_dir}/${__ainvestigate_timestamp}_$$.log"
+# Being executed (not sourced)? Start the script session.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    export __IN_SCRIPT_SESSION=1
 
-# Set up exit handler to mark session complete and optionally delete
-__ainvestigate_cleanup() {
-    if [[ -f "${__SCRIPT_SESSION_LOG}" ]]; then
-        echo "" >> "${__SCRIPT_SESSION_LOG}"
-        echo "### AINVESTIGATE SESSION COMPLETE ###" >> "${__SCRIPT_SESSION_LOG}"
-        if [[ "${__AINVESTIGATE_DELETE_ON_EXIT}" == "true" ]]; then
-            rm -f "${__SCRIPT_SESSION_LOG}" 2>/dev/null
-        fi
-    fi
-}
-
-# Detect OS and build appropriate script command
-# - Linux (util-linux): script -q -f <file> (flush with -f)
-# - FreeBSD: script -q -F <file> (flush with -F)
-# - macOS: script -q <file> (no reliable flush, or -F on newer versions)
-# - OpenBSD: script -q <file> (no flush option)
-__ainvestigate_build_script_cmd() {
-    local -- __os __script_cmd
-
-    __os="$(uname -s)"
+    # Build OS-specific script command
     __script_cmd=("script" "-q")
-
-    case "${__os}" in
-        Linux)
-            # util-linux uses -f for flush
-            __script_cmd+=("-f")
-            ;;
-        FreeBSD)
-            # FreeBSD uses -F for flush
-            __script_cmd+=("-F")
-            ;;
+    case "$(uname -s)" in
+        Linux)   __script_cmd+=("-f") ;;  # util-linux flush
+        FreeBSD) __script_cmd+=("-F") ;;  # FreeBSD flush
         Darwin)
-            # macOS: try -F (works on newer versions), fall back gracefully
-            # The -F flag was added in macOS 10.13+
+            # macOS: -F works on 10.13+
             if script -F /dev/null -c true 2>/dev/null; then
                 __script_cmd+=("-F")
             fi
             ;;
-        # OpenBSD, NetBSD, and others: no flush flag, just use -q
     esac
+    __script_cmd+=("$__SCRIPT_SESSION_LOG")
 
-    # Append the log file
-    __script_cmd+=("${__SCRIPT_SESSION_LOG}")
+    exec "${__script_cmd[@]}"
+fi
 
-    # Return the command array as a string (for use with exec)
-    printf '%q ' "${__script_cmd[@]}"
-}
+# Being sourced - run safeguard checks
 
-# Start the script session
-# Using exec replaces the current shell with script, which spawns a new shell
-# The -q flag suppresses start/done messages
-# Flush flags are OS-dependent (see above)
-eval "exec $(__ainvestigate_build_script_cmd)"
-SCRIPT_BODY
+# Only run in interactive shells
+[[ $- != *i* ]] && return 0
+
+# Don't run inside tmux - use ainvestigate-tmux instead
+[[ -n "${TMUX}" ]] && return 0
+
+# Don't run inside editors/IDEs
+[[ -n "${INSIDE_EMACS}" ]] && return 0
+[[ -n "${VSCODE_PID}" ]] && return 0
+[[ "${TERM_PROGRAM}" == "vscode" ]] && return 0
+
+# Ensure we have a tty
+[[ ! -t 0 ]] && return 0
+
+# All checks passed - set up logging and exec this script
+__log_dir="${AINVESTIGATE_LOG_DIR:-/tmp/ainvestigate}/${USER}"
+mkdir -p "$__log_dir" 2>/dev/null
+chmod 700 "$__log_dir" 2>/dev/null
+export __SCRIPT_SESSION_LOG="$__log_dir/$(date '+%Y%m%d_%H%M%S')_$$.log"
+unset __log_dir
+
+exec "${BASH_SOURCE[0]}"
+STARTUP_SCRIPT
 }
 
 function do-setup() {
@@ -387,11 +333,10 @@ function do-setup() {
     echo "  Shell: ${__shell}"
     echo "  RC file: ${__rc_file}"
     echo "  Startup script: ${__startup_script}"
-    echo "  Delete on exit: ${DO_DELETE_ON_EXIT}"
     echo
 
     # Generate the startup script
-    generate-startup-script "${DO_DELETE_ON_EXIT}" > "${__startup_script}"
+    generate-startup-script > "${__startup_script}"
     chmod +x "${__startup_script}"
     echo "Created ${__startup_script}"
 
@@ -441,9 +386,10 @@ function do-setup() {
 ################################################################################
 
 function do-cleanup() {
-    : 'Clean up completed session logs'
+    : 'Clean up orphaned session logs (from dead sessions)'
     local -- __user_dir="${LOG_BASE_DIR}/${USER}"
     local -- __log_file
+    local -- __pid
     local -i __count=0
     local -i __total=0
 
@@ -459,9 +405,15 @@ function do-cleanup() {
         if ${CLEANUP_ALL}; then
             rm -f "${__log_file}"
             ((++__count))
-        elif tail -1 "${__log_file}" 2>/dev/null | grep -qF "${SESSION_COMPLETE_MARKER}"; then
-            rm -f "${__log_file}"
-            ((++__count))
+        else
+            # Extract PID from filename (format: timestamp_PID.log)
+            __pid="${__log_file##*_}"
+            __pid="${__pid%.log}"
+            # Remove if PID is numeric and process is dead
+            if [[ "${__pid}" =~ ^[0-9]+$ ]] && ! kill -0 "${__pid}" 2>/dev/null; then
+                rm -f "${__log_file}"
+                ((++__count))
+            fi
         fi
     done
 
@@ -497,18 +449,11 @@ function capture-session-output() {
     : 'Capture the last N lines from the session log
 
         @arg $1 - Number of lines to capture
-        @stdout The captured output (with escape sequences stripped)
+        @stdout The captured output
     '
     local -i __lines="${1}"
 
-    # Capture last N lines and strip ANSI escape sequences
-    # Using sed to remove common escape sequences
-    tail -n "${__lines}" "${__SCRIPT_SESSION_LOG}" 2>/dev/null | \
-        sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' \
-            -e 's/\x1b\][^\x07]*\x07//g' \
-            -e 's/\x1b[()][AB012]//g' \
-            -e 's/\x0f//g' \
-            -e 's/\r//g'
+    tail -n "${__lines}" "${__SCRIPT_SESSION_LOG}" 2>/dev/null
 }
 
 function build-prompt() {
