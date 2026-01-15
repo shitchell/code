@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""
+Capture command output as an image (PNG, SVG) or animated GIF.
+
+Examples:
+    capture-command --output demo.gif -- ls -la
+    capture-command --output demo.png --tail 10 -- pytest -v
+    capture-command --output demo.svg --prompt -- cat README.md
+"""
+
+import argparse
+import subprocess
+import sys
+import tempfile
+import shutil
+from pathlib import Path
+
+
+def run_command(args: list[str], duration: float | None = None) -> tuple[int, str, str]:
+    """Run command and capture output. Returns (returncode, stdout, stderr)."""
+    try:
+        if duration:
+            args = ["timeout", str(duration)] + args
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except FileNotFoundError:
+        return 127, "", f"Command not found: {args[0]}"
+
+
+def filter_lines(text: str, head: int | None, tail: int | None) -> str:
+    """Apply head/tail filtering to text."""
+    lines = text.splitlines(keepends=True)
+    if tail and tail > 0:
+        lines = lines[-tail:]
+    elif head and head > 0:
+        lines = lines[:head]
+    return "".join(lines)
+
+
+def create_static_image(
+    output: str,
+    command_str: str,
+    stdout: str,
+    stderr: str,
+    output_path: Path,
+    show_prompt: bool,
+    prompt_string: str,
+    theme: str,
+    head: int | None,
+    tail: int | None,
+) -> bool:
+    """Create PNG or SVG using rich."""
+    try:
+        from rich.console import Console
+        from rich.text import Text
+        from rich.theme import Theme
+        import io
+    except ImportError:
+        print("Error: rich is required for static images. pip install rich", file=sys.stderr)
+        return False
+
+    # Filter output
+    filtered_stdout = filter_lines(stdout, head, tail)
+    filtered_stderr = filter_lines(stderr, head, tail)
+
+    # Build the content
+    content_parts = []
+    if show_prompt:
+        content_parts.append(f"{prompt_string}{command_str}")
+    if filtered_stdout:
+        content_parts.append(filtered_stdout.rstrip("\n"))
+    if filtered_stderr:
+        content_parts.append(filtered_stderr.rstrip("\n"))
+
+    full_content = "\n".join(content_parts)
+
+    # Create console and record
+    console = Console(record=True, width=120, force_terminal=True)
+
+    # Print content (rich will handle ANSI codes)
+    text = Text.from_ansi(full_content)
+    console.print(text)
+
+    # Export based on format
+    suffix = output_path.suffix.lower()
+
+    if suffix == ".svg":
+        svg_content = console.export_svg(title=command_str if show_prompt else None)
+        output_path.write_text(svg_content)
+        return True
+    elif suffix == ".png":
+        try:
+            import cairosvg
+        except ImportError:
+            print("Error: cairosvg is required for PNG output. pip install cairosvg", file=sys.stderr)
+            return False
+
+        svg_content = console.export_svg(title=command_str if show_prompt else None)
+        cairosvg.svg2png(bytestring=svg_content.encode(), write_to=str(output_path))
+        return True
+    else:
+        print(f"Error: Unsupported static format: {suffix}", file=sys.stderr)
+        return False
+
+
+def create_animated_gif(
+    command_args: list[str],
+    command_str: str,
+    output_path: Path,
+    show_prompt: bool,
+    prompt_string: str,
+    theme: str,
+    duration: float | None,
+) -> bool:
+    """Create animated GIF using asciinema + agg."""
+    # Check for required tools
+    if not shutil.which("asciinema"):
+        print("Error: asciinema is required for GIF output. pip install asciinema", file=sys.stderr)
+        return False
+    if not shutil.which("agg"):
+        print("Error: agg is required for GIF output. cargo install --git https://github.com/asciinema/agg", file=sys.stderr)
+        return False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cast_file = Path(tmpdir) / "recording.cast"
+
+        # Build the command to record
+        if show_prompt:
+            # Wrap in bash to show prompt and command
+            bash_cmd = f'echo "{prompt_string}{command_str}" && {" ".join(command_args)}'
+            record_cmd = ["bash", "-c", bash_cmd]
+        else:
+            record_cmd = command_args
+
+        # Record with asciinema
+        asciinema_args = [
+            "asciinema", "rec",
+            "--overwrite",
+            "--command", " ".join(record_cmd) if show_prompt else record_cmd[0],
+            str(cast_file),
+        ]
+
+        # For simple commands, use -c flag
+        if not show_prompt:
+            asciinema_args = [
+                "asciinema", "rec",
+                "--overwrite",
+                "-c", " ".join(command_args),
+                str(cast_file),
+            ]
+        else:
+            # Need to record a bash session that shows the prompt
+            script_file = Path(tmpdir) / "run.sh"
+            script_content = f'echo "{prompt_string}{command_str}"\n{" ".join(command_args)}\n'
+            script_file.write_text(script_content)
+            script_file.chmod(0o755)
+            asciinema_args = [
+                "asciinema", "rec",
+                "--overwrite",
+                "-c", str(script_file),
+                str(cast_file),
+            ]
+
+        # Wrap with timeout if duration specified
+        if duration:
+            asciinema_args = ["timeout", "--signal=INT", str(duration)] + asciinema_args
+
+        result = subprocess.run(asciinema_args, capture_output=True, text=True)
+
+        # timeout with SIGINT returns 124, which is fine for asciinema
+        if result.returncode not in (0, 124):
+            print(f"Error recording: {result.stderr}", file=sys.stderr)
+            return False
+
+        # Convert to GIF with agg
+        agg_args = ["agg", str(cast_file), str(output_path)]
+
+        # Add theme if specified
+        if theme:
+            agg_args.extend(["--theme", theme])
+
+        result = subprocess.run(agg_args, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error converting to GIF: {result.stderr}", file=sys.stderr)
+            return False
+
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Capture command output as an image or GIF",
+        epilog="Examples:\n"
+               "  capture-command -o demo.gif -- ls -la\n"
+               "  capture-command -o demo.png --tail 10 -- pytest\n"
+               "  capture-command -o demo.svg --prompt -- cat file.txt",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "-o", "--output",
+        required=True,
+        help="Output file (.png, .svg, or .gif)",
+    )
+    parser.add_argument(
+        "--head",
+        type=int,
+        metavar="N",
+        help="Show only first N lines (static only)",
+    )
+    parser.add_argument(
+        "--tail",
+        type=int,
+        metavar="N",
+        help="Show only last N lines (static only)",
+    )
+    parser.add_argument(
+        "--duration",
+        type=float,
+        metavar="SECS",
+        help="Max recording duration in seconds (animated only)",
+    )
+    parser.add_argument(
+        "--prompt",
+        action="store_true",
+        default=False,
+        help="Show command line at top of output",
+    )
+    parser.add_argument(
+        "--no-prompt",
+        action="store_true",
+        help="Don't show command line (default)",
+    )
+    parser.add_argument(
+        "--prompt-string",
+        default="$ ",
+        metavar="STR",
+        help="Custom prompt string (default: '$ ')",
+    )
+    parser.add_argument(
+        "--theme",
+        default="monokai",
+        help="Color theme (default: monokai)",
+    )
+    parser.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="Command to run (after --)",
+    )
+
+    args = parser.parse_args()
+
+    # Handle -- separator
+    command_args = args.command
+    if command_args and command_args[0] == "--":
+        command_args = command_args[1:]
+
+    if not command_args:
+        parser.error("No command specified. Use: capture-command -o out.png -- command args")
+
+    output_path = Path(args.output)
+    suffix = output_path.suffix.lower()
+    command_str = " ".join(command_args)
+    show_prompt = args.prompt and not args.no_prompt
+
+    if suffix == ".gif":
+        # Animated GIF
+        if args.head or args.tail:
+            print("Warning: --head/--tail are ignored for GIF output", file=sys.stderr)
+
+        success = create_animated_gif(
+            command_args=command_args,
+            command_str=command_str,
+            output_path=output_path,
+            show_prompt=show_prompt,
+            prompt_string=args.prompt_string,
+            theme=args.theme,
+            duration=args.duration,
+        )
+    elif suffix in (".png", ".svg"):
+        # Static image
+        if args.duration:
+            print("Warning: --duration is ignored for static output", file=sys.stderr)
+
+        # Run the command
+        returncode, stdout, stderr = run_command(command_args, duration=args.duration)
+
+        success = create_static_image(
+            output=suffix,
+            command_str=command_str,
+            stdout=stdout,
+            stderr=stderr,
+            output_path=output_path,
+            show_prompt=show_prompt,
+            prompt_string=args.prompt_string,
+            theme=args.theme,
+            head=args.head,
+            tail=args.tail,
+        )
+    else:
+        print(f"Error: Unsupported output format: {suffix}", file=sys.stderr)
+        print("Supported formats: .gif, .png, .svg", file=sys.stderr)
+        sys.exit(1)
+
+    if success:
+        print(f"Created: {output_path}")
+        sys.exit(0)
+    else:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
