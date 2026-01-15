@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""
+CDP - Chrome DevTools Protocol CLI
+
+A simple CLI for interacting with browsers via Chrome DevTools Protocol.
+"""
+from __future__ import annotations
+
+import sys
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+DEPENDENCIES = ["typer", "websockets"]
+DEFAULT_PORT = 9222
+DEFAULT_HOST = "localhost"
+TIMEOUT_SECONDS = 10
+
+# =============================================================================
+# Dependency Management
+# =============================================================================
+
+if "--install-dependencies" in sys.argv:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *DEPENDENCIES])
+    print("Dependencies installed successfully!")
+    sys.exit(0)
+
+try:
+    import typer
+    import websockets.sync.client as ws_client
+except ImportError as e:
+    print(f"Missing dependency: {e.name}")
+    print("Re-run with the `--install-dependencies` option to setup")
+    sys.exit(1)
+
+import asyncio
+import base64
+import json
+import re
+import urllib.request
+from pathlib import Path
+from typing import Optional
+
+# =============================================================================
+# App Setup
+# =============================================================================
+
+app = typer.Typer(
+    help="Chrome DevTools Protocol CLI for browser automation.",
+    no_args_is_help=True,
+)
+
+# Global state for port/host (set via callback)
+_config: dict[str, any] = {
+    "host": DEFAULT_HOST,
+    "port": DEFAULT_PORT,
+    "json_output": False,
+}
+
+
+@app.callback()
+def main(
+    port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="CDP port"),
+    host: str = typer.Option(DEFAULT_HOST, "--host", help="CDP host"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+):
+    """Configure CDP connection settings."""
+    _config["host"] = host
+    _config["port"] = port
+    _config["json_output"] = json_output
+
+
+# =============================================================================
+# CDP Helpers
+# =============================================================================
+
+
+def get_tabs() -> list[dict]:
+    """Fetch list of open tabs from CDP."""
+    url = f"http://{_config['host']}:{_config['port']}/json/list"
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as resp:
+            return json.load(resp)
+    except Exception as e:
+        print(f"Error connecting to CDP at {url}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def resolve_tab(selector: str) -> dict:
+    """
+    Resolve a tab selector to a tab dict.
+
+    Selector can be:
+    - Index (0, 1, 2...)
+    - Tab ID (hex string)
+    - Title substring (case-insensitive match)
+    """
+    tabs = get_tabs()
+
+    if not tabs:
+        print("No tabs found", file=sys.stderr)
+        sys.exit(1)
+
+    # Try as index
+    if selector.isdigit():
+        idx = int(selector)
+        if 0 <= idx < len(tabs):
+            return tabs[idx]
+        print(f"Tab index {idx} out of range (0-{len(tabs)-1})", file=sys.stderr)
+        sys.exit(1)
+
+    # Try as tab ID
+    for tab in tabs:
+        if tab.get("id") == selector:
+            return tab
+
+    # Try as title substring (case-insensitive)
+    selector_lower = selector.lower()
+    matches = [t for t in tabs if selector_lower in t.get("title", "").lower()]
+
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        print(f"Ambiguous selector '{selector}' matches {len(matches)} tabs:", file=sys.stderr)
+        for m in matches:
+            print(f"  - {m.get('title', 'Untitled')}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"No tab found matching '{selector}'", file=sys.stderr)
+    sys.exit(1)
+
+
+def send_cdp_command(ws_url: str, method: str, params: dict | None = None) -> dict:
+    """Send a CDP command via WebSocket and return the result."""
+    msg = {"id": 1, "method": method, "params": params or {}}
+
+    try:
+        with ws_client.connect(ws_url, close_timeout=TIMEOUT_SECONDS) as websocket:
+            websocket.send(json.dumps(msg))
+
+            while True:
+                response = json.loads(websocket.recv())
+                if response.get("id") == 1:
+                    if "error" in response:
+                        print(f"CDP error: {response['error']}", file=sys.stderr)
+                        sys.exit(1)
+                    return response.get("result", {})
+    except Exception as e:
+        print(f"WebSocket error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def output(data: any, plain_formatter: callable = None):
+    """Output data as JSON or plain text based on config."""
+    if _config["json_output"]:
+        print(json.dumps(data, indent=2))
+    elif plain_formatter:
+        plain_formatter(data)
+    else:
+        print(data)
+
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+
+@app.command()
+def tabs():
+    """List all open browser tabs."""
+    tab_list = get_tabs()
+
+    def fmt(tabs):
+        for i, tab in enumerate(tabs):
+            title = tab.get("title", "Untitled")[:60]
+            url = tab.get("url", "")[:80]
+            print(f"{i}: {title}")
+            print(f"   {url}")
+
+    output(tab_list, fmt)
+
+
+@app.command()
+def url(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)")):
+    """Get the URL of a tab."""
+    resolved = resolve_tab(tab)
+    output(resolved.get("url", ""), print)
+
+
+@app.command()
+def title(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)")):
+    """Get the title of a tab."""
+    resolved = resolve_tab(tab)
+    output(resolved.get("title", ""), print)
+
+
+@app.command()
+def dom(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)")):
+    """Get the full HTML of a tab."""
+    resolved = resolve_tab(tab)
+    ws_url = resolved.get("webSocketDebuggerUrl")
+
+    if not ws_url:
+        print("No WebSocket URL for this tab", file=sys.stderr)
+        sys.exit(1)
+
+    result = send_cdp_command(ws_url, "Runtime.evaluate", {
+        "expression": "document.documentElement.outerHTML",
+        "returnByValue": True,
+    })
+
+    html = result.get("result", {}).get("value", "")
+    output(html, print)
+
+
+@app.command()
+def text(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)")):
+    """Get the text content of a tab."""
+    resolved = resolve_tab(tab)
+    ws_url = resolved.get("webSocketDebuggerUrl")
+
+    if not ws_url:
+        print("No WebSocket URL for this tab", file=sys.stderr)
+        sys.exit(1)
+
+    result = send_cdp_command(ws_url, "Runtime.evaluate", {
+        "expression": "document.body.innerText",
+        "returnByValue": True,
+    })
+
+    text_content = result.get("result", {}).get("value", "")
+    output(text_content, print)
+
+
+@app.command()
+def screenshot(
+    tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)"),
+    output_path: Optional[Path] = typer.Argument(None, help="Output file path (default: stdout as base64)"),
+    format: str = typer.Option("png", "--format", "-f", help="Image format: png or jpeg"),
+):
+    """Take a screenshot of a tab."""
+    resolved = resolve_tab(tab)
+    ws_url = resolved.get("webSocketDebuggerUrl")
+
+    if not ws_url:
+        print("No WebSocket URL for this tab", file=sys.stderr)
+        sys.exit(1)
+
+    result = send_cdp_command(ws_url, "Page.captureScreenshot", {"format": format})
+
+    img_data = result.get("data", "")
+
+    if output_path:
+        output_path.write_bytes(base64.b64decode(img_data))
+        print(f"Screenshot saved to {output_path}")
+    else:
+        print(img_data)
+
+
+@app.command("eval")
+def evaluate(
+    tab: str = typer.Argument(..., help="Tab selector (index, ID, or title substring)"),
+    expression: str = typer.Argument(..., help="JavaScript expression to evaluate"),
+):
+    """Execute JavaScript in a tab and return the result."""
+    resolved = resolve_tab(tab)
+    ws_url = resolved.get("webSocketDebuggerUrl")
+
+    if not ws_url:
+        print("No WebSocket URL for this tab", file=sys.stderr)
+        sys.exit(1)
+
+    result = send_cdp_command(ws_url, "Runtime.evaluate", {
+        "expression": expression,
+        "returnByValue": True,
+    })
+
+    value = result.get("result", {})
+
+    if _config["json_output"]:
+        print(json.dumps(value, indent=2))
+    else:
+        print(value.get("value", value))
+
+
+@app.command()
+def navigate(
+    tab: str = typer.Argument(..., help="Tab selector (index, ID, or title substring)"),
+    target_url: str = typer.Argument(..., help="URL to navigate to"),
+):
+    """Navigate a tab to a URL."""
+    resolved = resolve_tab(tab)
+    ws_url = resolved.get("webSocketDebuggerUrl")
+
+    if not ws_url:
+        print("No WebSocket URL for this tab", file=sys.stderr)
+        sys.exit(1)
+
+    result = send_cdp_command(ws_url, "Page.navigate", {"url": target_url})
+
+    if _config["json_output"]:
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"Navigated to {target_url}")
+
+
+@app.command()
+def info():
+    """Show browser version and connection info."""
+    url = f"http://{_config['host']}:{_config['port']}/json/version"
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as resp:
+            data = json.load(resp)
+    except Exception as e:
+        print(f"Error connecting to CDP: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    def fmt(d):
+        print(f"Browser: {d.get('Browser', 'Unknown')}")
+        print(f"Protocol: {d.get('Protocol-Version', 'Unknown')}")
+        print(f"V8: {d.get('V8-Version', 'Unknown')}")
+
+    output(data, fmt)
+
+
+# =============================================================================
+# Entry Point
+# =============================================================================
+
+if __name__ == "__main__":
+    app()

@@ -1,0 +1,467 @@
+#!/usr/bin/python3
+"""
+atspi - AT-SPI Accessibility CLI
+
+A simple CLI for desktop automation via AT-SPI (Assistive Technology
+Service Provider Interface).
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from typing import Optional, Generator
+
+try:
+    import pyatspi
+except ImportError:
+    print("pyatspi not available. Install with: apt install python3-pyatspi")
+    sys.exit(1)
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+MAX_TREE_DEPTH = 10
+MAX_CHILDREN_DISPLAY = 50
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+
+def get_desktop() -> pyatspi.Accessible:
+    """Get the desktop root accessible."""
+    return pyatspi.Registry.getDesktop(0)
+
+
+def iter_apps() -> Generator[pyatspi.Accessible, None, None]:
+    """Iterate over all running applications."""
+    desktop = get_desktop()
+    for i in range(desktop.childCount):
+        app = desktop.getChildAtIndex(i)
+        if app:
+            yield app
+
+
+def find_app(name: str) -> Optional[pyatspi.Accessible]:
+    """Find an application by name (case-insensitive substring match)."""
+    name_lower = name.lower()
+    for app in iter_apps():
+        if app.name and name_lower in app.name.lower():
+            return app
+    return None
+
+
+def find_elements(
+    root: pyatspi.Accessible,
+    role: Optional[str] = None,
+    name: Optional[str] = None,
+    max_depth: int = MAX_TREE_DEPTH,
+) -> Generator[tuple[pyatspi.Accessible, str], None, None]:
+    """
+    Find elements matching criteria.
+    Yields (element, path) tuples.
+    """
+    def search(node: pyatspi.Accessible, path: str, depth: int):
+        if depth > max_depth:
+            return
+
+        node_role = node.getRoleName()
+        node_name = node.name or ""
+
+        # Check match
+        role_match = role is None or role.lower() in node_role.lower()
+        name_match = name is None or name.lower() in node_name.lower()
+
+        if role_match and name_match:
+            yield (node, path)
+
+        # Recurse
+        try:
+            for i in range(node.childCount):
+                child = node.getChildAtIndex(i)
+                if child:
+                    yield from search(child, f"{path}/{i}", depth + 1)
+        except:
+            pass
+
+    yield from search(root, "0", 0)
+
+
+def resolve_path(path: str) -> Optional[pyatspi.Accessible]:
+    """
+    Resolve an element path to an accessible.
+
+    Path format: "app_name/index/index/..." or just "app_name" for the app itself.
+    Examples:
+        "gedit" -> gedit app
+        "gedit/0" -> first window
+        "gedit/0/3/2" -> specific widget
+    """
+    parts = path.split("/")
+    if not parts:
+        return None
+
+    # First part is app name
+    app = find_app(parts[0])
+    if not app:
+        print(f"App not found: {parts[0]}", file=sys.stderr)
+        return None
+
+    # Navigate through indices
+    current = app
+    for part in parts[1:]:
+        try:
+            idx = int(part)
+            child = current.getChildAtIndex(idx)
+            if not child:
+                print(f"Child {idx} not found at path", file=sys.stderr)
+                return None
+            current = child
+        except ValueError:
+            print(f"Invalid path component: {part}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Error navigating path: {e}", file=sys.stderr)
+            return None
+
+    return current
+
+
+def get_element_text(element: pyatspi.Accessible) -> str:
+    """Get text content from an element."""
+    try:
+        text_iface = element.queryText()
+        if text_iface:
+            return text_iface.getText(0, text_iface.characterCount)
+    except:
+        pass
+
+    # Fallback to name
+    return element.name or ""
+
+
+def format_element(element: pyatspi.Accessible, show_children: bool = True) -> str:
+    """Format an element for display."""
+    role = element.getRoleName()
+    name = element.name[:50] if element.name else ""
+    children = element.childCount if show_children else 0
+
+    parts = [f"[{role}]"]
+    if name:
+        parts.append(f'"{name}"')
+    if children:
+        parts.append(f"({children} children)")
+
+    return " ".join(parts)
+
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+
+def cmd_apps(args: argparse.Namespace) -> int:
+    """List all running applications."""
+    apps = []
+    for app in iter_apps():
+        if app.name:
+            apps.append((app.name, app.childCount))
+
+    apps.sort(key=lambda x: x[0].lower())
+
+    for name, windows in apps:
+        print(f"{name} ({windows} windows)")
+
+    return 0
+
+
+def cmd_windows(args: argparse.Namespace) -> int:
+    """List windows, optionally filtered by app."""
+    if args.app:
+        app = find_app(args.app)
+        if not app:
+            print(f"App not found: {args.app}", file=sys.stderr)
+            return 1
+        apps_to_check = [app]
+    else:
+        apps_to_check = list(iter_apps())
+
+    for app in apps_to_check:
+        if not app.name:
+            continue
+
+        for i in range(app.childCount):
+            try:
+                window = app.getChildAtIndex(i)
+                if window:
+                    title = window.name or "(untitled)"
+                    role = window.getRoleName()
+                    print(f"{app.name}/{i}: [{role}] {title[:70]}")
+            except:
+                pass
+
+    return 0
+
+
+def cmd_tree(args: argparse.Namespace) -> int:
+    """Show the accessibility tree for an app or element."""
+    root = resolve_path(args.path)
+    if not root:
+        return 1
+
+    max_depth = args.depth
+
+    def print_tree(node: pyatspi.Accessible, depth: int, prefix: str = ""):
+        if depth > max_depth:
+            return
+
+        role = node.getRoleName()
+        name = (node.name[:40] if node.name else "") or ""
+        children = node.childCount
+
+        # Build display line
+        line = f"{prefix}[{role}]"
+        if name:
+            line += f' "{name}"'
+        if children and depth < max_depth:
+            line += f" ({children}ch)"
+
+        print(line)
+
+        # Recurse
+        if depth < max_depth:
+            try:
+                child_count = min(MAX_CHILDREN_DISPLAY, node.childCount)
+                for i in range(child_count):
+                    child = node.getChildAtIndex(i)
+                    if child:
+                        child_prefix = prefix + "  "
+                        print_tree(child, depth + 1, child_prefix)
+                if node.childCount > MAX_CHILDREN_DISPLAY:
+                    print(f"{prefix}  ... and {node.childCount - MAX_CHILDREN_DISPLAY} more")
+            except:
+                pass
+
+    print_tree(root, 0)
+    return 0
+
+
+def cmd_find(args: argparse.Namespace) -> int:
+    """Find elements matching criteria."""
+    if args.app:
+        root = find_app(args.app)
+        if not root:
+            print(f"App not found: {args.app}", file=sys.stderr)
+            return 1
+        app_prefix = args.app
+    else:
+        root = get_desktop()
+        app_prefix = ""
+
+    count = 0
+    for element, path in find_elements(root, role=args.role, name=args.name):
+        full_path = f"{app_prefix}/{path}" if app_prefix else path
+        print(f"{full_path}: {format_element(element)}")
+        count += 1
+        if count >= 50:
+            print("... (limited to 50 results)")
+            break
+
+    if count == 0:
+        print("No elements found", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def cmd_text(args: argparse.Namespace) -> int:
+    """Get text content from an element."""
+    element = resolve_path(args.path)
+    if not element:
+        return 1
+
+    text = get_element_text(element)
+    if text:
+        print(text)
+    else:
+        print("(no text content)", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+def cmd_click(args: argparse.Namespace) -> int:
+    """Click/activate an element."""
+    element = resolve_path(args.path)
+    if not element:
+        return 1
+
+    try:
+        action_iface = element.queryAction()
+        if action_iface and action_iface.nActions > 0:
+            # Find click/activate/press action
+            for i in range(action_iface.nActions):
+                action_name = action_iface.getName(i).lower()
+                if action_name in ("click", "activate", "press", "jump", ""):
+                    action_iface.doAction(i)
+                    print(f"Performed action: {action_iface.getName(i) or 'default'}")
+                    return 0
+
+            # Fallback to first action
+            action_iface.doAction(0)
+            print(f"Performed action: {action_iface.getName(0) or 'default'}")
+            return 0
+        else:
+            print("Element has no actions", file=sys.stderr)
+            return 1
+    except Exception as e:
+        print(f"Click failed: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_type(args: argparse.Namespace) -> int:
+    """Type text into an element."""
+    element = resolve_path(args.path)
+    if not element:
+        return 1
+
+    try:
+        # Try editable text interface
+        edit_iface = element.queryEditableText()
+        if edit_iface:
+            # Clear existing and insert new
+            text_iface = element.queryText()
+            if text_iface:
+                length = text_iface.characterCount
+                if length > 0:
+                    edit_iface.deleteText(0, length)
+            edit_iface.insertText(0, args.text, len(args.text))
+            print(f"Typed: {args.text}")
+            return 0
+        else:
+            print("Element is not editable", file=sys.stderr)
+            return 1
+    except Exception as e:
+        print(f"Type failed: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_info(args: argparse.Namespace) -> int:
+    """Show detailed info about an element."""
+    element = resolve_path(args.path)
+    if not element:
+        return 1
+
+    print(f"Role: {element.getRoleName()}")
+    print(f"Name: {element.name or '(none)'}")
+    print(f"Description: {element.description or '(none)'}")
+    print(f"Children: {element.childCount}")
+
+    # States
+    state_set = element.getState()
+    states = []
+    for state in pyatspi.StateType._enum_lookup.keys():
+        if state_set.contains(state):
+            states.append(pyatspi.stateToString(state))
+    if states:
+        print(f"States: {', '.join(states)}")
+
+    # Actions
+    try:
+        action_iface = element.queryAction()
+        if action_iface and action_iface.nActions > 0:
+            actions = [action_iface.getName(i) or f"action_{i}"
+                       for i in range(action_iface.nActions)]
+            print(f"Actions: {', '.join(actions)}")
+    except:
+        pass
+
+    # Text
+    text = get_element_text(element)
+    if text:
+        print(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}")
+
+    return 0
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="AT-SPI accessibility CLI for desktop automation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  atspi apps                        List all applications
+  atspi windows                     List all windows
+  atspi windows gedit               List windows for gedit
+  atspi tree gedit                  Show widget tree for gedit
+  atspi tree gedit/0 --depth 3      Show tree for first window, depth 3
+  atspi find --app gedit --role button
+  atspi find --name Save
+  atspi info gedit/0/3
+  atspi click gedit/0/3/2
+  atspi type gedit/0/1/0 "Hello"
+  atspi text gedit/0/1/0
+
+Path format:
+  Paths are "app_name/index/index/..." where indices navigate the tree.
+  Use 'atspi tree' to discover the structure.
+""",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # apps
+    p_apps = subparsers.add_parser("apps", help="List running applications")
+    p_apps.set_defaults(func=cmd_apps)
+
+    # windows
+    p_windows = subparsers.add_parser("windows", help="List windows")
+    p_windows.add_argument("app", nargs="?", help="Filter by app name")
+    p_windows.set_defaults(func=cmd_windows)
+
+    # tree
+    p_tree = subparsers.add_parser("tree", help="Show accessibility tree")
+    p_tree.add_argument("path", help="App name or element path")
+    p_tree.add_argument("--depth", "-d", type=int, default=4, help="Max depth (default: 4)")
+    p_tree.set_defaults(func=cmd_tree)
+
+    # find
+    p_find = subparsers.add_parser("find", help="Find elements by criteria")
+    p_find.add_argument("--app", "-a", help="App name to search in")
+    p_find.add_argument("--role", "-r", help="Role to match (substring)")
+    p_find.add_argument("--name", "-n", help="Name to match (substring)")
+    p_find.set_defaults(func=cmd_find)
+
+    # info
+    p_info = subparsers.add_parser("info", help="Show element details")
+    p_info.add_argument("path", help="Element path")
+    p_info.set_defaults(func=cmd_info)
+
+    # text
+    p_text = subparsers.add_parser("text", help="Get text content")
+    p_text.add_argument("path", help="Element path")
+    p_text.set_defaults(func=cmd_text)
+
+    # click
+    p_click = subparsers.add_parser("click", help="Click/activate element")
+    p_click.add_argument("path", help="Element path")
+    p_click.set_defaults(func=cmd_click)
+
+    # type
+    p_type = subparsers.add_parser("type", help="Type text into element")
+    p_type.add_argument("path", help="Element path")
+    p_type.add_argument("text", help="Text to type")
+    p_type.set_defaults(func=cmd_type)
+
+    args = parser.parse_args()
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()
