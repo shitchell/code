@@ -864,7 +864,7 @@ function _subcommand_help() {
 
 function main() {
     # Ensure AZURE_PAT is set
-    AZURE_PAT="${AZURE_PAT:-$(pass show azure/pat/roman_opg_assetsuite_4_pushing)}"
+    AZURE_PAT="${AZURE_PAT}"
     if [ -z "${AZURE_PAT}" ]; then
         echo "error: AZURE_PAT environment variable not set" >&2
         return 1

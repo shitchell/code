@@ -13,8 +13,8 @@ from trinoor.jira import JIRA
 from typing import Iterable
 from jira import resources
 
-email: str = os.environ.get("JIRA_EMAIL", "maurice.moss@trinoor.com")
-keyinfo: str = ("system", "jira-mmoss")
+email: str = os.environ.get("JIRA_EMAIL", "")
+keyinfo: tuple = ("system", "jira")
 
 
 def login() -> JIRA:

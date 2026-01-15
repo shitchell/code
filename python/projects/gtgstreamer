@@ -13,8 +13,8 @@ if len(sys.argv) > 1:
 else:
 	mbox = ''
 
-USERNAME = 'shauni3dud3@gmail.com'
-PASSWORD = 'yqwpzpoeyhflqewm'
+USERNAME = os.environ.get('GTGSTREAMER_EMAIL', '')
+PASSWORD = os.environ.get('GTGSTREAMER_PASSWORD', '')
 CHECKEDMIDS = set()
 IMAPCONNECTION = None
 MAXCOUNT = 25

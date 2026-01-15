@@ -678,7 +678,7 @@ function main() {
     #     product=${products[$i]}
     #     component=${components[$i]}
     #     status=${statuses[$i]}
-    #     MYSQL_PWD="${DB_PASSWORD}" ~/code/sh/export-bugz.sh -u trizilla -d trizilla -r https://devops.trinoor.com/bugzilla \
+    #     MYSQL_PWD="${DB_PASSWORD}" ~/code/sh/export-bugz.sh -u trizilla -d trizilla -r ${BUGZILLA_URL} \
     #         -w "products.name = '${product}' AND components.name = '${component}' AND bugs.bug_status = '${status}'" \
     #         -c -a "./attachments" -e \
     #             | tee trizilla-${product// /_}-${component// /_}-"${status// /_}".csv
@@ -690,7 +690,7 @@ function main() {
     # for ((i=0; i<${#products[@]}; i++)); do
     #     product=${products[$i]}
     #     status=${statuses[$i]}
-    #     MYSQL_PWD="${DB_PASSWORD}" ~/code/sh/export-bugz.sh -u trizilla -d trizilla -r https://devops.trinoor.com/bugzilla \
+    #     MYSQL_PWD="${DB_PASSWORD}" ~/code/sh/export-bugz.sh -u trizilla -d trizilla -r ${BUGZILLA_URL} \
     #         -w "products.name = '${product}' AND bugs.bug_status = '${status}'" \
     #         -c -a "./attachments" -e \
     #             | tee trizilla-${product// /_}-"${status// /_}".csv

@@ -110,7 +110,7 @@ EOF
     -s/--silent               suppress all output
     -V/--version <version>    the API version to use (default: sbx)
     -P/--protocol <protocol>  the protocol to use (default: https)
-    -H/--host <domain>        the domain to use (default: devops.trinoor.com)
+    -H/--host <domain>        the domain to use (default: \$DEVAPI_HOST)
     -p/--port <port>          the port to use (default: 80 or 443 based on protocol)
     -e/--endpoint <endpoint>  the endpoint to use
     -t/--token <token>        the query string authentication token to use
@@ -139,7 +139,7 @@ function parse-args() {
     ACTION_ARGS=()
     VERSION="${DEVAPI_VERSION:-sbx}"
     URL_PROTOCOL="${DEVAPI_PROTOCOL:-https}"
-    URL_DOMAIN="${DEVAPI_HOST:-devops.trinoor.com}"
+    URL_DOMAIN="${DEVAPI_HOST}"
     URL_PORT=${DEVAPI_PORT}  # defaults to 80 or 443 based on the protocol
     URL_PATH=""
     URL=""  # server + port + "/api/" + version + endpoint
