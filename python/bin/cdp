@@ -7,6 +7,7 @@ A simple CLI for interacting with browsers via Chrome DevTools Protocol.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 # =============================================================================
 # Constants
@@ -16,6 +17,10 @@ DEPENDENCIES = ["typer", "websockets"]
 DEFAULT_PORT = 9222
 DEFAULT_HOST = "localhost"
 TIMEOUT_SECONDS = 10
+CONFIG_PATHS = [
+    Path.home() / ".config" / "cdp" / "config.json",
+    Path.home() / ".cdprc.json",
+]
 
 # =============================================================================
 # Dependency Management
@@ -40,7 +45,6 @@ import base64
 import json
 import re
 import urllib.request
-from pathlib import Path
 from typing import Optional
 
 # =============================================================================
@@ -57,19 +61,52 @@ _config: dict[str, any] = {
     "host": DEFAULT_HOST,
     "port": DEFAULT_PORT,
     "json_output": False,
+    "headers": {},
 }
+
+
+def load_config() -> dict:
+    """Load config from file if it exists."""
+    for path in CONFIG_PATHS:
+        if path.exists():
+            try:
+                with open(path) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"Warning: Failed to load config from {path}: {e}", file=sys.stderr)
+    return {}
+
+
+def parse_header(header: str) -> tuple[str, str]:
+    """Parse a curl-style header string into (name, value)."""
+    if ":" not in header:
+        raise typer.BadParameter(f"Invalid header format: {header!r} (expected 'Name: value')")
+    name, _, value = header.partition(":")
+    return name.strip(), value.strip()
 
 
 @app.callback()
 def main(
-    port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="CDP port"),
-    host: str = typer.Option(DEFAULT_HOST, "--host", help="CDP host"),
+    port: Optional[int] = typer.Option(None, "--port", "-p", help="CDP port"),
+    host: Optional[str] = typer.Option(None, "--host", help="CDP host"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+    headers: list[str] = typer.Option([], "--header", "-H", help="HTTP header (curl-style, e.g. 'Host: localhost')"),
 ):
     """Configure CDP connection settings."""
-    _config["host"] = host
-    _config["port"] = port
-    _config["json_output"] = json_output
+    file_config = load_config()
+
+    # CLI args override config file, which overrides defaults
+    _config["host"] = host or file_config.get("host", DEFAULT_HOST)
+    _config["port"] = port or file_config.get("port", DEFAULT_PORT)
+    _config["json_output"] = json_output or file_config.get("json", False)
+
+    # Merge headers: config file first, then CLI (CLI wins on conflicts)
+    file_headers = {}
+    for h in file_config.get("headers", []):
+        name, value = parse_header(h)
+        file_headers[name] = value
+    cli_headers = dict(parse_header(h) for h in headers)
+    _config["headers"] = {**file_headers, **cli_headers}
 
 
 # =============================================================================
@@ -77,15 +114,23 @@ def main(
 # =============================================================================
 
 
-def get_tabs() -> list[dict]:
-    """Fetch list of open tabs from CDP."""
-    url = f"http://{_config['host']}:{_config['port']}/json/list"
+def cdp_request(path: str) -> dict | list:
+    """Make an HTTP request to the CDP endpoint with configured headers."""
+    url = f"http://{_config['host']}:{_config['port']}{path}"
+    request = urllib.request.Request(url)
+    for name, value in _config["headers"].items():
+        request.add_header(name, value)
     try:
-        with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as resp:
             return json.load(resp)
     except Exception as e:
         print(f"Error connecting to CDP at {url}: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def get_tabs() -> list[dict]:
+    """Fetch list of open tabs from CDP."""
+    return cdp_request("/json/list")
 
 
 def resolve_tab(selector: str) -> dict:
@@ -309,13 +354,7 @@ def navigate(
 @app.command()
 def info():
     """Show browser version and connection info."""
-    url = f"http://{_config['host']}:{_config['port']}/json/version"
-    try:
-        with urllib.request.urlopen(url, timeout=TIMEOUT_SECONDS) as resp:
-            data = json.load(resp)
-    except Exception as e:
-        print(f"Error connecting to CDP: {e}", file=sys.stderr)
-        sys.exit(1)
+    data = cdp_request("/json/version")
 
     def fmt(d):
         print(f"Browser: {d.get('Browser', 'Unknown')}")
