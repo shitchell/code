@@ -114,23 +114,57 @@ def main(
 # =============================================================================
 
 
-def cdp_request(path: str) -> dict | list:
+def cdp_request(
+    path: str,
+    method: str = "GET",
+    extra_headers: dict[str, str] | None = None,
+    data: str | bytes | None = None,
+) -> dict | list | str:
     """Make an HTTP request to the CDP endpoint with configured headers."""
     url = f"http://{_config['host']}:{_config['port']}{path}"
-    request = urllib.request.Request(url)
+
+    # Encode data if provided as string
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+
+    request = urllib.request.Request(url, method=method, data=data)
+
+    # Add configured headers
     for name, value in _config["headers"].items():
         request.add_header(name, value)
+
+    # Add extra headers (override configured if conflict)
+    if extra_headers:
+        for name, value in extra_headers.items():
+            request.add_header(name, value)
+
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as resp:
-            return json.load(resp)
+            content = resp.read().decode("utf-8")
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return content
     except Exception as e:
         print(f"Error connecting to CDP at {url}: {e}", file=sys.stderr)
         sys.exit(1)
 
 
-def get_tabs() -> list[dict]:
-    """Fetch list of open tabs from CDP."""
-    return cdp_request("/json/list")
+def get_tabs(include_all: bool = False) -> list[dict]:
+    """Fetch list of open tabs from CDP.
+
+    By default, filters out workers, extensions, and empty entries.
+    Pass include_all=True to get everything.
+    """
+    tabs = cdp_request("/json/list")
+    if include_all:
+        return tabs
+    return [
+        t for t in tabs
+        if t.get("type") in ("page", "other")
+        and t.get("url")
+        and not t.get("url", "").startswith("chrome-extension://")
+    ]
 
 
 def resolve_tab(selector: str) -> dict:
@@ -142,7 +176,7 @@ def resolve_tab(selector: str) -> dict:
     - Tab ID (hex string)
     - Title substring (case-insensitive match)
     """
-    tabs = get_tabs()
+    tabs = get_tabs()  # Uses filtered list by default
 
     if not tabs:
         print("No tabs found", file=sys.stderr)
@@ -177,8 +211,49 @@ def resolve_tab(selector: str) -> dict:
     sys.exit(1)
 
 
+def fix_ws_url(ws_url: str) -> str:
+    """Fix WebSocket URL to use configured host and ensure port is present."""
+    # CDP often returns ws://localhost/... without port - add it
+    if "ws://localhost/" in ws_url:
+        ws_url = ws_url.replace("ws://localhost/", f"ws://localhost:{_config['port']}/")
+    # Replace host if using custom host
+    if _config["host"] != "localhost":
+        ws_url = ws_url.replace("ws://localhost:", f"ws://{_config['host']}:")
+    return ws_url
+
+
+def get_browser_ws_url() -> str:
+    """Get the browser-level WebSocket debugger URL."""
+    version_info = cdp_request("/json/version")
+    ws_url = version_info.get("webSocketDebuggerUrl", "")
+    if not ws_url:
+        print("No browser WebSocket URL found", file=sys.stderr)
+        sys.exit(1)
+    return fix_ws_url(ws_url)
+
+
+def get_tab_ws_url(selector: str) -> str:
+    """Resolve a tab and return its fixed WebSocket URL."""
+    resolved = resolve_tab(selector)
+    ws_url = resolved.get("webSocketDebuggerUrl")
+    if not ws_url:
+        print("No WebSocket URL for this tab", file=sys.stderr)
+        sys.exit(1)
+    return fix_ws_url(ws_url)
+
+
 def send_cdp_command(ws_url: str, method: str, params: dict | None = None) -> dict:
     """Send a CDP command via WebSocket and return the result."""
+    return send_ws_command(ws_url, method, params)
+
+
+class CDPError(Exception):
+    """Exception raised for CDP protocol errors."""
+    pass
+
+
+def send_ws_command(ws_url: str, method: str, params: dict | None = None, raise_on_error: bool = False) -> dict:
+    """Send a command via WebSocket and return the result."""
     msg = {"id": 1, "method": method, "params": params or {}}
 
     try:
@@ -189,12 +264,24 @@ def send_cdp_command(ws_url: str, method: str, params: dict | None = None) -> di
                 response = json.loads(websocket.recv())
                 if response.get("id") == 1:
                     if "error" in response:
+                        if raise_on_error:
+                            raise CDPError(response["error"])
                         print(f"CDP error: {response['error']}", file=sys.stderr)
                         sys.exit(1)
                     return response.get("result", {})
+    except CDPError:
+        raise
     except Exception as e:
+        if raise_on_error:
+            raise CDPError(str(e))
         print(f"WebSocket error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def send_browser_command(method: str, params: dict | None = None, raise_on_error: bool = False) -> dict:
+    """Send a command to the browser-level WebSocket endpoint."""
+    ws_url = get_browser_ws_url()
+    return send_ws_command(ws_url, method, params, raise_on_error=raise_on_error)
 
 
 def output(data: any, plain_formatter: callable = None):
@@ -213,9 +300,11 @@ def output(data: any, plain_formatter: callable = None):
 
 
 @app.command()
-def tabs():
+def tabs(
+    all_targets: bool = typer.Option(False, "-a", "--all", help="Show all targets including workers/extensions"),
+):
     """List all open browser tabs."""
-    tab_list = get_tabs()
+    tab_list = get_tabs(include_all=all_targets)
 
     def fmt(tabs):
         for i, tab in enumerate(tabs):
@@ -244,13 +333,7 @@ def title(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title
 @app.command()
 def dom(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)")):
     """Get the full HTML of a tab."""
-    resolved = resolve_tab(tab)
-    ws_url = resolved.get("webSocketDebuggerUrl")
-
-    if not ws_url:
-        print("No WebSocket URL for this tab", file=sys.stderr)
-        sys.exit(1)
-
+    ws_url = get_tab_ws_url(tab)
     result = send_cdp_command(ws_url, "Runtime.evaluate", {
         "expression": "document.documentElement.outerHTML",
         "returnByValue": True,
@@ -263,13 +346,7 @@ def dom(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title s
 @app.command()
 def text(tab: str = typer.Argument("0", help="Tab selector (index, ID, or title substring)")):
     """Get the text content of a tab."""
-    resolved = resolve_tab(tab)
-    ws_url = resolved.get("webSocketDebuggerUrl")
-
-    if not ws_url:
-        print("No WebSocket URL for this tab", file=sys.stderr)
-        sys.exit(1)
-
+    ws_url = get_tab_ws_url(tab)
     result = send_cdp_command(ws_url, "Runtime.evaluate", {
         "expression": "document.body.innerText",
         "returnByValue": True,
@@ -286,13 +363,7 @@ def screenshot(
     format: str = typer.Option("png", "--format", "-f", help="Image format: png or jpeg"),
 ):
     """Take a screenshot of a tab."""
-    resolved = resolve_tab(tab)
-    ws_url = resolved.get("webSocketDebuggerUrl")
-
-    if not ws_url:
-        print("No WebSocket URL for this tab", file=sys.stderr)
-        sys.exit(1)
-
+    ws_url = get_tab_ws_url(tab)
     result = send_cdp_command(ws_url, "Page.captureScreenshot", {"format": format})
 
     img_data = result.get("data", "")
@@ -308,26 +379,25 @@ def screenshot(
 def evaluate(
     tab: str = typer.Argument(..., help="Tab selector (index, ID, or title substring)"),
     expression: str = typer.Argument(..., help="JavaScript expression to evaluate"),
+    await_promise: bool = typer.Option(False, "--await", "-a", help="Await promise result"),
 ):
     """Execute JavaScript in a tab and return the result."""
-    resolved = resolve_tab(tab)
-    ws_url = resolved.get("webSocketDebuggerUrl")
-
-    if not ws_url:
-        print("No WebSocket URL for this tab", file=sys.stderr)
-        sys.exit(1)
-
-    result = send_cdp_command(ws_url, "Runtime.evaluate", {
+    ws_url = get_tab_ws_url(tab)
+    params = {
         "expression": expression,
         "returnByValue": True,
-    })
+    }
+    if await_promise:
+        params["awaitPromise"] = True
 
-    value = result.get("result", {})
+    result = send_cdp_command(ws_url, "Runtime.evaluate", params)
+    value = result.get("result", {}).get("value", result.get("result", {}))
 
-    if _config["json_output"]:
+    # Always output as JSON for consistency
+    if isinstance(value, (dict, list)):
         print(json.dumps(value, indent=2))
     else:
-        print(value.get("value", value))
+        print(value)
 
 
 @app.command()
@@ -336,13 +406,7 @@ def navigate(
     target_url: str = typer.Argument(..., help="URL to navigate to"),
 ):
     """Navigate a tab to a URL."""
-    resolved = resolve_tab(tab)
-    ws_url = resolved.get("webSocketDebuggerUrl")
-
-    if not ws_url:
-        print("No WebSocket URL for this tab", file=sys.stderr)
-        sys.exit(1)
-
+    ws_url = get_tab_ws_url(tab)
     result = send_cdp_command(ws_url, "Page.navigate", {"url": target_url})
 
     if _config["json_output"]:
@@ -362,6 +426,90 @@ def info():
         print(f"V8: {d.get('V8-Version', 'Unknown')}")
 
     output(data, fmt)
+
+
+@app.command()
+def raw(
+    path: str = typer.Argument(..., help="URL path (e.g., /json/list)"),
+    method: str = typer.Option("GET", "-X", "--method", help="HTTP method"),
+    headers: list[str] = typer.Option([], "-H", "--header", help="Extra header (curl-style)"),
+    data: Optional[str] = typer.Option(None, "-d", "--data", help="Request body data"),
+):
+    """Make a raw HTTP request to the CDP endpoint."""
+    extra_headers = dict(parse_header(h) for h in headers) if headers else None
+
+    result = cdp_request(path, method=method, extra_headers=extra_headers, data=data)
+
+    if isinstance(result, str):
+        print(result)
+    elif _config["json_output"]:
+        print(json.dumps(result, indent=2))
+    else:
+        print(json.dumps(result, indent=2))
+
+
+@app.command()
+def ws(
+    method: str = typer.Argument(..., help="CDP method (e.g., Target.getTargets)"),
+    params: Optional[str] = typer.Option(None, "-p", "--params", help="JSON params"),
+    tab: Optional[str] = typer.Option(None, "-t", "--tab", help="Tab selector (uses tab's WebSocket; omit for browser-level)"),
+):
+    """Send a raw WebSocket command to the CDP endpoint."""
+    parsed_params = json.loads(params) if params else None
+
+    if tab:
+        ws_url = get_tab_ws_url(tab)
+        result = send_ws_command(ws_url, method, parsed_params)
+    else:
+        result = send_browser_command(method, parsed_params)
+
+    print(json.dumps(result, indent=2))
+
+
+@app.command()
+def windows():
+    """List browser windows with their tabs."""
+    # Get all targets
+    targets = send_browser_command("Target.getTargets")
+    target_infos = targets.get("targetInfos", [])
+
+    # Filter to pages and "other" (like newtab)
+    pages = [t for t in target_infos if t.get("type") in ("page", "other")]
+
+    # Get window info for each page
+    windows_map: dict[int, list[dict]] = {}
+    for page in pages:
+        target_id = page.get("targetId")
+        try:
+            window_info = send_browser_command(
+                "Browser.getWindowForTarget",
+                {"targetId": target_id},
+                raise_on_error=True
+            )
+            window_id = window_info.get("windowId", 0)
+        except CDPError:
+            # Some targets may not have windows (e.g., edge:// pages)
+            window_id = 0
+
+        if window_id not in windows_map:
+            windows_map[window_id] = []
+        windows_map[window_id].append(page)
+
+    # Output
+    def fmt(data):
+        for window_id, tabs in data.items():
+            print(f"Window {window_id}:")
+            for tab in tabs:
+                title = tab.get("title", "Untitled")[:55]
+                url = tab.get("url", "")[:75]
+                print(f"  - {title}")
+                print(f"    {url}")
+            print()
+
+    if _config["json_output"]:
+        print(json.dumps(windows_map, indent=2))
+    else:
+        fmt(windows_map)
 
 
 # =============================================================================
