@@ -1,0 +1,9 @@
+class PullRequest:
+    @property
+    def author() -> GitUser: ...
+
+    def get_commits() -> list[Commit]:
+        ...
+
+    def get_diff() -> Diff:
+        ...
