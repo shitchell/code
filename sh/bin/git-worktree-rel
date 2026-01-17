@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# Clean up worktree `.git` files to use a relative gitdir
+
+# If any paths are given, use them as worktrees
+WORKTREES=()
+if [[ ${#} -gt 0 ]]; then
+    WORKTREES=("$@")
+else
+    # List all worktrees
+    readarray -t WORKTREES < <(
+        git worktree list --porcelain \
+            | awk '/^worktree / {sub(/^worktree /, ""); print $0}'
+    )
+fi
+
+# Get the path to the repository gitdir
+if [[ -z "${GIT_DIR}" ]]; then
+    GIT_DIR=$(git rev-parse --git-dir)
+fi

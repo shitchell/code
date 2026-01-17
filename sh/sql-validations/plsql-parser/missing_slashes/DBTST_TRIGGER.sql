@@ -1,0 +1,25 @@
+--------------------------------------------------------
+-- Trigger test for DBTST table
+--------------------------------------------------------
+
+-- This trigger is used to test the DBTST table (below) by copying the new record to the DBTST2 table
+-- CREATE TABLE "DBTST"
+--    (    "DBTST_ID" NUMBER,
+--         "DBTST_NAME" VARCHAR2(100 BYTE),
+--         "DBTST_DESC" VARCHAR2(100 BYTE),
+--         "DBTST_DATE" DATE,
+--         "DBTST_STATUS" VARCHAR2(1 BYTE),
+--         "DBTST_MESSAGE" VARCHAR2(4000 BYTE),
+--         "DBTST_CLOB" CLOB,
+--         "CHANGE_USER" VARCHAR2(100 BYTE),
+--         "CHANGE_DATE" DATE
+--    );
+
+CREATE OR REPLACE TRIGGER DBTEST_TRIGGER
+AFTER INSERT ON DBTST
+FOR EACH ROW
+BEGIN
+    INSERT INTO DBTST2 (DBTST2_ID, DBTST2_NAME, DBTST2_DESC, DBTST2_DATE, DBTST2_STATUS, DBTST2_MESSAGE, DBTST2_CLOB, CHANGE_USER, CHANGE_DATE)
+    VALUES (DBTST2_ID_SEQ.NEXTVAL, :NEW.DBTST_NAME, :NEW.DBTST_DESC, :NEW.DBTST_DATE, :NEW.DBTST_STATUS, :NEW.DBTST_MESSAGE, :NEW.DBTST_CLOB, :NEW.CHANGE_USER, :NEW.CHANGE_DATE);
+END DBTEST_TRIGGER;
+
