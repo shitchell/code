@@ -24,6 +24,8 @@ include-source 'wsl.sh'
 
 declare -ri E_SUCCESS=0
 declare -ri E_ERROR=1
+declare -ri E_BINARY_FILE=2
+declare -ri E_MISSING_DEPENDENCY=3
 
 
 ## traps #######################################################################
@@ -34,9 +36,8 @@ function silence-output() {
     exec 3>&1 4>&2 1>/dev/null 2>&1
 }
 
-# @usage restore-output
 function restore-output() {
-    :  'Restore script output after a call to `silence-output`'
+    :  'Restore script output after a call to silence-output'
     [[ -t 3 ]] && exec 1>&3 3>&-
     [[ -t 4 ]] && exec 2>&4 4>&-
 }
@@ -52,12 +53,10 @@ trap trap-exit EXIT
 ################################################################################
 
 function help-usage() {
-    # {{TODO: UPDATE USAGE}}
-    echo "usage: $(basename "${0}") [-h]"
+    echo "usage: $(basename "${0}") [-h] [--format <fmt>] [--highlight] [-f <file>] [content]"
 }
 
 function help-epilogue() {
-    # {{TODO: UPDATE EPILOGUE}}
     echo "view or update the Windows clipboard contents"
 }
 
@@ -65,33 +64,39 @@ function help-full() {
     help-usage
     help-epilogue
     echo
-    echo "Some extra info."
+    echo "Copy content to the clipboard with optional format conversion, or paste"
+    echo "clipboard contents in various formats."
     echo
     echo "Options:"
     cat << EOF
     -h                    display usage
-    --config-file <file>  use the specified configuration file
     --help                display this help message
+    --config-file <file>  use the specified configuration file
     -c/--color <when>     when to use color ("auto", "always", "never")
-    --syntax <format>     highlight the output as <format> using Pygments
-                          (see \`pygmentize -L\` for a list of formats)
 EOF
     echo
-    echo "Input options:"
+    echo "Input options (copy to clipboard):"
     cat << EOF
     -f/--file <file>      copy the contents of <file> to the clipboard
     -a/--append           append to the clipboard instead of replacing it
-    --html                treat the input contents as HTML
     --value <value>       copy the specified value to the clipboard
+    --copy/--set          explicitly set copy mode
+    --format <fmt>        input format: text, html, markdown, csv, auto
+                          (default: text, or auto with --file)
+    --highlight           enable syntax highlighting (requires pygmentize)
+                          auto-detects language from file extension or shebang
+    --lang <language>     specify language for syntax highlighting
+                          (overrides auto-detection, see pygmentize -L)
 EOF
     echo
-    echo "Output options:"
+    echo "Output options (paste from clipboard):"
     cat << EOF
+    --paste/--get         explicitly set paste mode (default if no input)
     --raw                 output the raw clipboard contents
-    --text                output in plain text format
+    --text                output in plain text format (default)
     --unicode             output in Unicode format
     --html                output in HTML format
-    --md                  output in Markdown format
+    --md                  output in Markdown format (converts HTML via pandoc)
     --rtf                 output in RTF format
     --csv                 output in CSV format
     --image               output in image format
@@ -100,7 +105,6 @@ EOF
 }
 
 function parse-args() {
-    # Parse the arguments first for a config file to load default values from
     CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
     for ((i=0; i<${#}; i++)); do
         case "${!i}" in
@@ -112,20 +116,19 @@ function parse-args() {
     done
     [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
 
-    # Default values
-    # {{TODO: INSERT DEFAULT VALUES HERE}}
     DO_COLOR=false
-    PYGMENTS_LEXER=""  # pygments format, see `pygmentize -L`
     FILEPATH=""
     DO_APPEND=false
+    DO_HIGHLIGHT=false
+    HIGHLIGHT_LANG=""
     COPY_CONTENTS=""
-    COPY_SOURCE=""  # file, args, stdin
-    IO=""  # copy, paste
+    COPY_SOURCE=""
+    IO=""
     local default_io="paste"
-    OUTPUT_FORMAT='text'  # text, unicode, html, md, rtf, csv, image, audio
-    local color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
+    INPUT_FORMAT=""
+    OUTPUT_FORMAT='text'
+    local color_when="${COLOR:-auto}"
 
-    # Loop over the arguments
     local file_contents=()
     local args_contents=()
     local stdin_contents=()
@@ -147,10 +150,6 @@ function parse-args() {
                 color_when="${2}"
                 shift 1
                 ;;
-            --syntax)
-                PYGMENTS_LEXER="${2}"
-                shift 1
-                ;;
             -f | --file)
                 FILEPATH="${2}"
                 IO="copy"
@@ -170,7 +169,19 @@ function parse-args() {
             --paste | --get)
                 IO="paste"
                 ;;
-            --text  | --unicode | --html | --md | --rtf | --csv | \
+            --format)
+                INPUT_FORMAT="${2}"
+                shift 1
+                ;;
+            --highlight)
+                DO_HIGHLIGHT=true
+                ;;
+            --lang)
+                HIGHLIGHT_LANG="${2}"
+                DO_HIGHLIGHT=true
+                shift 1
+                ;;
+            --raw | --text | --unicode | --html | --md | --rtf | --csv | \
             --image | --audio)
                 OUTPUT_FORMAT="${1:2}"
                 ;;
@@ -190,22 +201,18 @@ function parse-args() {
         shift 1
     done
 
-    # If -- was used, collect the remaining arguments
     while [[ ${#} -gt 0 ]]; do
         args_contents+=( "${1}" )
         shift 1
     done
 
-    # If stdin is being piped in, collect it and set the IO mode to copy
-    if ${__FD_STDIN}; then
+    if ${__FD_STDIN} && [[ -z "${IO}" ]]; then
         stdin_contents+=( "$(cat)" )
         IO="copy"
+    elif ${__FD_STDIN} && [[ "${IO}" == "copy" ]]; then
+        stdin_contents+=( "$(cat)" )
     fi
 
-    # Determine what to use for COPY_CONTENTS prioritizing:
-    # 1. file contents
-    # 2. arguments
-    # 3. stdin
     if [[ -n "${FILEPATH}" ]]; then
         COPY_CONTENTS=$(<"${FILEPATH}")
         COPY_SOURCE="file"
@@ -217,7 +224,6 @@ function parse-args() {
         COPY_SOURCE="stdin"
     fi
 
-    # Pretty colors
     case "${color_when}" in
         on | yes | always)
             DO_COLOR=true
@@ -239,16 +245,362 @@ function parse-args() {
     esac
     ${DO_COLOR} && setup-colors || unset-colors
 
-    # If we've gotten this far without setting IO, set it to the default
     [[ -z "${IO}" ]] && IO="${default_io}"
 
     return ${E_SUCCESS}
 }
 
 
+## dependency helpers ##########################################################
+################################################################################
+
+function require-pandoc() {
+    :  'Check that pandoc is available, error if not'
+    if ! command -v pandoc &>/dev/null; then
+        echo "error: pandoc not found (install: apt install pandoc)" >&2
+        return ${E_MISSING_DEPENDENCY}
+    fi
+}
+
+function require-pygmentize() {
+    :  'Check that pygmentize is available, error if not'
+    if ! command -v pygmentize &>/dev/null; then
+        echo "error: pygmentize not found (install: pip install Pygments)" >&2
+        return ${E_MISSING_DEPENDENCY}
+    fi
+}
+
+
 ## helpful functions ###########################################################
 ################################################################################
 
+function is-binary-file() {
+    :  'Check if a file is binary
+        @arg $1 - file path
+        @stdout - mime type (for error messages)
+        @return 0 if binary, 1 if text
+    '
+    local filepath="$1"
+    local mime_type
+    mime_type=$(file -b --mime-type "${filepath}")
+    echo "${mime_type}"
+    [[ "${mime_type}" != text/* && "${mime_type}" != application/json && "${mime_type}" != application/xml && "${mime_type}" != application/csv ]]
+}
+
+function detect-format-from-extension() {
+    local filepath="$1"
+    case "${filepath,,}" in
+        *.md | *.markdown)
+            echo "markdown"
+            ;;
+        *.csv)
+            echo "csv"
+            ;;
+        *.html | *.htm)
+            echo "html"
+            ;;
+        *)
+            echo "text"
+            ;;
+    esac
+}
+
+function detect-language-from-file() {
+    local filepath="${1:-}"
+    local content="${2:-}"
+
+    if [[ -n "${filepath}" ]]; then
+        case "${filepath,,}" in
+            *.py)     echo "python"; return ;;
+            *.js)     echo "javascript"; return ;;
+            *.ts)     echo "typescript"; return ;;
+            *.sh | *.bash)  echo "bash"; return ;;
+            *.rb)     echo "ruby"; return ;;
+            *.go)     echo "go"; return ;;
+            *.rs)     echo "rust"; return ;;
+            *.java)   echo "java"; return ;;
+            *.c)      echo "c"; return ;;
+            *.cpp | *.cc | *.cxx)  echo "cpp"; return ;;
+            *.h | *.hpp)  echo "cpp"; return ;;
+            *.cs)     echo "csharp"; return ;;
+            *.php)    echo "php"; return ;;
+            *.sql)    echo "sql"; return ;;
+            *.json)   echo "json"; return ;;
+            *.xml)    echo "xml"; return ;;
+            *.yaml | *.yml)  echo "yaml"; return ;;
+            *.html | *.htm)  echo "html"; return ;;
+            *.css)    echo "css"; return ;;
+            *.md | *.markdown)  echo "markdown"; return ;;
+            *.pl)     echo "perl"; return ;;
+            *.lua)    echo "lua"; return ;;
+            *.r)      echo "r"; return ;;
+            *.swift)  echo "swift"; return ;;
+            *.kt | *.kts)  echo "kotlin"; return ;;
+            *.scala)  echo "scala"; return ;;
+            *.hs)     echo "haskell"; return ;;
+            *.ex | *.exs)  echo "elixir"; return ;;
+            *.erl)    echo "erlang"; return ;;
+            *.clj)    echo "clojure"; return ;;
+            *.vim)    echo "vim"; return ;;
+            *.dockerfile | Dockerfile*)  echo "docker"; return ;;
+            Makefile* | *.mk)  echo "make"; return ;;
+            *.tf)     echo "terraform"; return ;;
+            *.ps1)    echo "powershell"; return ;;
+        esac
+    fi
+
+    if [[ -n "${content}" ]]; then
+        local first_line
+        first_line=$(echo "${content}" | head -1)
+        if [[ "${first_line}" == "#!"* ]]; then
+            case "${first_line}" in
+                *python*)  echo "python"; return ;;
+                *bash*)    echo "bash"; return ;;
+                *sh)       echo "bash"; return ;;
+                *node*)    echo "javascript"; return ;;
+                *ruby*)    echo "ruby"; return ;;
+                *perl*)    echo "perl"; return ;;
+                *php*)     echo "php"; return ;;
+            esac
+        fi
+    fi
+
+    echo ""
+}
+
+function extract-html-fragment() {
+    :  'Extract content from HTML clipboard format
+        Removes Version/StartHTML/EndHTML headers and fragment markers
+        @stdin - HTML content (possibly with clipboard headers)
+        @stdout - cleaned HTML content
+    '
+    local html
+    html=$(cat)
+
+    if [[ "${html}" == "Version:"* ]]; then
+        echo "${html}" | \
+            sed -n '/<!--StartFragment-->/,/<!--EndFragment-->/p' | \
+            sed 's/<!--StartFragment-->//;s/<!--EndFragment-->//'
+    else
+        echo "${html}"
+    fi
+}
+
+function code-to-html() {
+    :  'Convert code to syntax-highlighted HTML
+        @arg $1 - language (optional, auto-detect if empty)
+        @stdin - code content
+        @stdout - HTML with syntax highlighting
+    '
+    local lang="${1:-}"
+    local code
+    code=$(cat)
+
+    # Validate input
+    if [[ -z "${code}" ]]; then
+        echo "error: no code content to highlight" >&2
+        return ${E_ERROR}
+    fi
+
+    require-pygmentize || return ${?}
+
+    local pygmentize_args=(-f html -O "noclasses,nowrap")
+
+    if [[ -n "${lang}" ]]; then
+        pygmentize_args+=(-l "${lang}")
+    else
+        pygmentize_args+=(-g)
+    fi
+
+    local highlighted
+    highlighted=$(echo "${code}" | pygmentize "${pygmentize_args[@]}")
+    # Replace newlines with <br> tags for Teams/Word compatibility
+    highlighted=$(printf '%s' "${highlighted}" | awk '{if(NR>1)printf "<br>"; printf "%s", $0}')
+    # Wrap in pre>code like Teams does
+    printf '<pre style="font-family: Consolas, Monaco, '\''Courier New'\'', monospace; font-size: 14px; background-color: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto;"><code>%s</code></pre>' "${highlighted}"
+}
+
+function markdown-to-html() {
+    :  'Convert markdown to HTML using pandoc
+        @stdin - markdown content
+        @stdout - HTML content
+    '
+    require-pandoc || return ${?}
+    pandoc -f markdown -t html
+}
+
+function html-to-markdown() {
+    :  'Convert HTML to markdown using pandoc
+        @stdin - HTML content (possibly with clipboard headers)
+        @stdout - markdown content
+    '
+    require-pandoc || return ${?}
+
+    extract-html-fragment | pandoc -f html -t markdown --wrap=none | sed 's/<\/*body>//g'
+}
+
+function csv-to-html() {
+    :  'Convert CSV to HTML table
+        @stdin - CSV content
+        @stdout - HTML table
+    '
+    local csv
+    csv=$(cat)
+
+    # Validate input
+    if [[ -z "${csv}" ]]; then
+        echo "error: no CSV content to convert" >&2
+        return ${E_ERROR}
+    fi
+
+    echo "${csv}" | awk '
+    BEGIN {
+        FS=","
+        print "<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border-collapse:collapse\">"
+    }
+    NR==1 {
+        print "<tr>"
+        for(i=1; i<=NF; i++) {
+            gsub(/^[ \t]+|[ \t]+$/, "", $i)
+            print "<th>" $i "</th>"
+        }
+        print "</tr>"
+        next
+    }
+    {
+        print "<tr>"
+        for(i=1; i<=NF; i++) {
+            gsub(/^[ \t]+|[ \t]+$/, "", $i)
+            print "<td>" $i "</td>"
+        }
+        print "</tr>"
+    }
+    END {
+        print "</table>"
+    }'
+}
+
+function set-clipboard-html() {
+    :  'Set clipboard with HTML content (both HTML and plain text formats)
+        @arg $1 - HTML content
+        @arg $2 - plain text content (optional, derived from HTML if not provided)
+    '
+    local html_content="$1"
+    local text_content="${2:-}"
+
+    if [[ -z "${text_content}" ]]; then
+        text_content=$(echo "${html_content}" | sed "s/<br>/\n/g" | sed "s/<[^>]*>//g" | sed 's/&quot;/"/g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&nbsp;/ /g')
+    fi
+
+    local ps_html="${html_content//\'/\'\'}"
+    local ps_text="${text_content//\'/\'\'}"
+
+    powershell.exe -command "
+Add-Type -AssemblyName System.Windows.Forms
+\$html = @'
+Version:0.9
+StartHTML:00000097
+EndHTML:ENDHTML_P
+StartFragment:00000131
+EndFragment:ENDFRAG_P
+<html><body>
+<!--StartFragment-->${ps_html}<!--EndFragment-->
+</body></html>
+'@
+\$endFrag = \$html.IndexOf('<!--EndFragment-->')
+\$endHtml = \$html.Length
+\$html = \$html -replace 'ENDHTML_P', \$endHtml.ToString('D8')
+\$html = \$html -replace 'ENDFRAG_P', \$endFrag.ToString('D8')
+\$dataObj = New-Object System.Windows.Forms.DataObject
+\$dataObj.SetData([System.Windows.Forms.DataFormats]::Html, \$html)
+\$dataObj.SetData([System.Windows.Forms.DataFormats]::Text, '${ps_text}')
+[System.Windows.Forms.Clipboard]::SetDataObject(\$dataObj, \$true)
+"
+}
+
+function set-clipboard-csv() {
+    :  'Set clipboard with CSV content (both CSV and plain text formats)
+        @arg $1 - CSV content
+    '
+    local csv_content="$1"
+    local ps_csv="${csv_content//\'/\'\'}"
+
+    powershell.exe -command "
+Add-Type -AssemblyName System.Windows.Forms
+\$dataObj = New-Object System.Windows.Forms.DataObject
+\$dataObj.SetData([System.Windows.Forms.DataFormats]::CommaSeparatedValue, '${ps_csv}')
+\$dataObj.SetData([System.Windows.Forms.DataFormats]::Text, '${ps_csv}')
+[System.Windows.Forms.Clipboard]::SetDataObject(\$dataObj, \$true)
+"
+}
+
+function process-input-format() {
+    :  'Process input content based on format settings
+        @sets COPY_CONTENTS - processed content ready for clipboard
+        @sets COPY_AS_HTML - true if content should be copied as rich text
+        @sets COPY_AS_CSV - true if content should be copied as CSV format
+    '
+    COPY_AS_HTML=false
+    COPY_AS_CSV=false
+
+    local format="${INPUT_FORMAT}"
+    if [[ -z "${format}" ]]; then
+        if [[ -n "${FILEPATH}" ]]; then
+            format="auto"
+        else
+            format="text"
+        fi
+    fi
+
+    # Check for binary files when using a file
+    if [[ -n "${FILEPATH}" ]]; then
+        local mime_type
+        mime_type=$(is-binary-file "${FILEPATH}")
+        if [[ $? -eq 0 ]]; then
+            echo "error: cannot copy binary file '${FILEPATH}' to clipboard (detected: ${mime_type})" >&2
+            return ${E_BINARY_FILE}
+        fi
+    fi
+
+    # Handle highlighting (takes precedence over format for code files)
+    if ${DO_HIGHLIGHT}; then
+        local lang="${HIGHLIGHT_LANG}"
+        if [[ -z "${lang}" ]]; then
+            lang=$(detect-language-from-file "${FILEPATH}" "${COPY_CONTENTS}")
+        fi
+        COPY_CONTENTS=$(echo "${COPY_CONTENTS}" | code-to-html "${lang}") || return ${?}
+        COPY_AS_HTML=true
+        return ${E_SUCCESS}
+    fi
+
+    # Auto-detect format from file extension
+    if [[ "${format}" == "auto" && -n "${FILEPATH}" ]]; then
+        format=$(detect-format-from-extension "${FILEPATH}")
+    fi
+
+    # Process based on format
+    case "${format}" in
+        text)
+            ;;
+        html)
+            COPY_AS_HTML=true
+            ;;
+        markdown | md)
+            COPY_CONTENTS=$(echo "${COPY_CONTENTS}" | markdown-to-html) || return ${?}
+            COPY_AS_HTML=true
+            ;;
+        csv)
+            # Keep original CSV for clipboard CSV format, but also create HTML version
+            COPY_AS_CSV=true
+            ;;
+        *)
+            echo "error: unknown format: ${format}" >&2
+            return ${E_ERROR}
+            ;;
+    esac
+
+    return ${E_SUCCESS}
+}
 
 
 ## main ########################################################################
@@ -257,18 +609,35 @@ function parse-args() {
 function main() {
     parse-args "${@}" || return ${?}
 
-    debug-vars DO_COLOR PYGMENTS_LEXER FILEPATH DO_APPEND COPY_CONTENTS \
-               COPY_SOURCE IO OUTPUT_FORMAT
+    debug-vars DO_COLOR FILEPATH DO_APPEND DO_HIGHLIGHT HIGHLIGHT_LANG \
+               COPY_CONTENTS COPY_SOURCE IO INPUT_FORMAT OUTPUT_FORMAT
 
     local cmd_args=()
 
-    # If we're copying, do that
     if [[ "${IO}" == "copy" ]]; then
-        ${DO_APPEND} && cmd_args+=( --append )
-        [[ -n "${COPY_CONTENTS}" ]] && cmd_args+=( "${COPY_CONTENTS}" )
-        set-clipboard "${cmd_args[@]}"
+        process-input-format || return ${?}
+
+        if ${COPY_AS_HTML}; then
+            if ${DO_APPEND}; then
+                echo "warning: --append is not supported with HTML format, replacing clipboard" >&2
+            fi
+            set-clipboard-html "${COPY_CONTENTS}"
+        elif ${COPY_AS_CSV}; then
+            if ${DO_APPEND}; then
+                echo "warning: --append is not supported with CSV format, replacing clipboard" >&2
+            fi
+            set-clipboard-csv "${COPY_CONTENTS}"
+        else
+            ${DO_APPEND} && cmd_args+=( --append )
+            [[ -n "${COPY_CONTENTS}" ]] && cmd_args+=( "${COPY_CONTENTS}" )
+            set-clipboard "${cmd_args[@]}"
+        fi
     elif [[ "${IO}" == "paste" ]]; then
-        get-clipboard "--${OUTPUT_FORMAT}"
+        if [[ "${OUTPUT_FORMAT}" == "md" ]]; then
+            get-clipboard --html | html-to-markdown
+        else
+            get-clipboard "--${OUTPUT_FORMAT}"
+        fi
     fi
 }
 
