@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+#
+# Get or set system volume (0-100)
+
+
+## helpers #####################################################################
+################################################################################
+
+function error() {
+    echo "error: ${1}" >&2
+}
+
+
+## backend detection ###########################################################
+################################################################################
+
+function detect-backend() {
+    :  'Detect available volume backend
+
+        @stdout
+            Backend name: powershell, termux, macos, pulseaudio, alsa
+
+        @return
+            0 on success, 1 if no backend found
+    '
+    if command -v powershell.exe &>/dev/null; then
+        echo "powershell"
+    elif command -v termux-volume &>/dev/null; then
+        echo "termux"
+    elif command -v osascript &>/dev/null; then
+        echo "macos"
+    elif command -v pactl &>/dev/null; then
+        echo "pulseaudio"
+    elif command -v amixer &>/dev/null; then
+        echo "alsa"
+    else
+        return 1
+    fi
+}
+
+
+## backend helpers #############################################################
+################################################################################
+
+function powershell-volume() {
+    :  'Get or set volume via Windows Core Audio API
+
+        @usage
+            powershell-volume [<level>]
+
+        @arg <level>
+            Float 0.0-1.0 to set volume, omit to get current volume
+
+        @stdout
+            Current volume as integer 0-100 (when getting)
+    '
+    local -- __level="${1:-}"
+    local -- __action
+    if [[ -n "${__level}" ]]; then
+        __action="[Audio]::Volume = ${__level}"
+    else
+        __action='[math]::Round([Audio]::Volume * 100)'
+    fi
+    powershell.exe -Command "
+Add-Type -TypeDefinition @\"
+using System.Runtime.InteropServices;
+[Guid(\"5CDF2C82-841E-4546-9722-0CF74078229A\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioEndpointVolume {
+  int f(); int g(); int h(); int i();
+  int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext);
+  int j();
+  int GetMasterVolumeLevelScalar(out float pfLevel);
+}
+[Guid(\"D666063F-1587-4E43-81F1-B948E807363F\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDevice {
+  int Activate(ref System.Guid id, int clsCtx, int activationParams, out IAudioEndpointVolume aev);
+}
+[Guid(\"A95664D2-9614-4F35-A746-DE8DB63617E6\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IMMDeviceEnumerator {
+  int f();
+  int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint);
+}
+[ComImport, Guid(\"BCDE0395-E52F-467C-8E3D-C4579291692E\")] class MMDeviceEnumeratorComObject { }
+public class Audio {
+  static IAudioEndpointVolume Vol() {
+    var enumerator = new MMDeviceEnumeratorComObject() as IMMDeviceEnumerator;
+    IMMDevice dev = null;
+    Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out dev));
+    IAudioEndpointVolume epv = null;
+    var epvid = typeof(IAudioEndpointVolume).GUID;
+    Marshal.ThrowExceptionForHR(dev.Activate(ref epvid, 23, 0, out epv));
+    return epv;
+  }
+  public static float Volume {
+    get { float v = -1; Marshal.ThrowExceptionForHR(Vol().GetMasterVolumeLevelScalar(out v)); return v; }
+    set { Marshal.ThrowExceptionForHR(Vol().SetMasterVolumeLevelScalar(value, System.Guid.Empty)); }
+  }
+}
+\"@
+${__action}
+" | tr -d '\r'
+}
+
+function termux-parse-music-stream() {
+    :  'Parse termux-volume JSON for music stream values
+
+        Handles both pretty-printed and minified JSON.
+
+        @stdin
+            JSON from termux-volume
+
+        @stdout
+            Space-separated: volume max_volume
+    '
+    tr ',{}[]' '\n' | awk '
+        /"stream".*"music"/ { in_music=1 }
+        in_music && /"volume"[^_]/ {
+            match($0, /[0-9]+/); vol=substr($0, RSTART, RLENGTH)
+        }
+        in_music && /"max_volume"/ {
+            match($0, /[0-9]+/); max=substr($0, RSTART, RLENGTH)
+            print vol, max; exit
+        }
+    '
+}
+
+
+## volume operations ###########################################################
+################################################################################
+
+function get-volume() {
+    :  'Get current volume (0-100)'
+    local -- __backend="${1}"
+    local -- __output
+
+    case "${__backend}" in
+        powershell)
+            __output=$(powershell-volume) || return 1
+            ;;
+        termux)
+            local -- __vol __max
+            read -r __vol __max < <(termux-volume | termux-parse-music-stream)
+            if [[ -z "${__max}" ]] || (( __max == 0 )); then
+                error "failed to parse termux volume"
+                return 1
+            fi
+            __output=$(awk "BEGIN { printf \"%.0f\", (${__vol}/${__max})*100 }")
+            ;;
+        macos)
+            __output=$(osascript -e 'output volume of (get volume settings)') || return 1
+            ;;
+        pulseaudio)
+            # Output: "Volume: front-left: 65536 / 100% / ..."
+            __output=$(pactl get-sink-volume @DEFAULT_SINK@ | awk '{
+                for (i=1; i<=NF; i++) if ($i ~ /%/) { gsub(/%/, "", $i); print $i; exit }
+            }') || return 1
+            ;;
+        alsa)
+            # Output: "... [100%] ..."
+            __output=$(amixer get Master | awk -F'[][]' '/\[.*%\]/ { gsub(/%/, "", $2); print $2; exit }') || return 1
+            ;;
+    esac
+
+    if [[ -z "${__output}" ]]; then
+        error "failed to get volume"
+        return 1
+    fi
+    echo "${__output}"
+}
+
+function set-volume() {
+    :  'Set volume (0-100)'
+    local -- __backend="${1}"
+    local -i __level="${2}"
+
+    case "${__backend}" in
+        powershell)
+            local -- __scalar
+            __scalar=$(awk "BEGIN { printf \"%.2f\", ${__level}/100 }")
+            powershell-volume "${__scalar}" || return 1
+            ;;
+        termux)
+            local -- __vol __max
+            local -i __raw
+            read -r __vol __max < <(termux-volume | termux-parse-music-stream)
+            if [[ -z "${__max}" ]] || (( __max == 0 )); then
+                error "failed to parse termux max volume"
+                return 1
+            fi
+            (( __raw = __level * __max / 100 ))
+            termux-volume music "${__raw}" || return 1
+            ;;
+        macos)
+            osascript -e "set volume output volume ${__level}" || return 1
+            ;;
+        pulseaudio)
+            pactl set-sink-volume @DEFAULT_SINK@ "${__level}%" || return 1
+            ;;
+        alsa)
+            amixer set Master "${__level}%" >/dev/null || return 1
+            ;;
+    esac
+}
+
+
+## main ########################################################################
+################################################################################
+
+function main() {
+    local -- __backend
+    __backend=$(detect-backend) || {
+        error "no supported audio backend found"
+        return 1
+    }
+
+    # No args: show current volume
+    if [[ ${#} -eq 0 ]]; then
+        get-volume "${__backend}"
+        return
+    fi
+
+    # Validate: must be single argument
+    if [[ ${#} -ne 1 ]]; then
+        error "usage: vol [0-100 | +/- N]"
+        return 1
+    fi
+
+    local -- __arg="${1}"
+    local -i __level
+
+    # Relative adjustment: +N or -N
+    if [[ "${__arg}" =~ ^[+-][0-9]+$ ]]; then
+        local -i __current __delta
+        __current=$(get-volume "${__backend}") || return 1
+        __delta="${__arg}"
+        (( __level = __current + __delta ))
+        # Clamp to 0-100
+        (( __level < 0 )) && __level=0
+        (( __level > 100 )) && __level=100
+    # Absolute: 0-100
+    elif [[ "${__arg}" =~ ^[0-9]+$ ]] && (( __arg >= 0 && __arg <= 100 )); then
+        __level="${__arg}"
+    else
+        error "usage: vol [0-100 | +/- N]"
+        return 1
+    fi
+
+    set-volume "${__backend}" "${__level}"
+}
+
+
+## run #########################################################################
+################################################################################
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
