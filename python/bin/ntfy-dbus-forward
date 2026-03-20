@@ -4,7 +4,7 @@ Forward D-Bus desktop notifications to an ntfy server.
 
 Listens on the org.freedesktop.Notifications interface and POSTs each
 notification to a configurable ntfy topic. Designed to run as a long-lived
-daemon, managed by a cron watchdog.
+daemon, managed by a systemd user service.
 
 Environment variables:
     NTFY_URL        Base URL of the ntfy server (default: https://ntfy.shitchell.com)
@@ -12,6 +12,8 @@ Environment variables:
     NTFY_TOKEN      Optional auth token (Bearer)
     NTFY_PRIORITY   Default priority 1-5 (default: 3)
     NTFY_IGNORE     Comma-separated app names to ignore (case-insensitive)
+
+Managed by systemd user service: ~/.config/systemd/user/ntfy-dbus-forward.service
 """
 
 import os
@@ -20,7 +22,6 @@ import sys
 import time
 import urllib.request
 import urllib.error
-from pathlib import Path
 
 import dbus
 from dbus.mainloop.glib import DBusGMainLoop
@@ -34,13 +35,6 @@ NTFY_PRIORITY = os.environ.get("NTFY_PRIORITY", "3")
 NTFY_IGNORE = {
     s.strip().lower() for s in os.environ.get("NTFY_IGNORE", "").split(",") if s.strip()
 }
-
-PIDFILE = Path(
-    os.environ.get(
-        "NTFY_PIDFILE",
-        os.path.expanduser("~/.local/run/ntfy-dbus-forward.pid"),
-    )
-)
 
 # Dedup: ignore identical (app, summary, body) within this window
 DEDUP_WINDOW = 2  # seconds
@@ -97,21 +91,8 @@ def on_notification(bus, message) -> None:
     publish(app_name, summary, body)
 
 
-def write_pidfile() -> None:
-    PIDFILE.parent.mkdir(parents=True, exist_ok=True)
-    PIDFILE.write_text(str(os.getpid()))
-
-
-def remove_pidfile() -> None:
-    try:
-        PIDFILE.unlink()
-    except FileNotFoundError:
-        pass
-
-
 def shutdown(signum, frame) -> None:
     log(f"Caught signal {signum}, shutting down")
-    remove_pidfile()
     sys.exit(0)
 
 
@@ -119,12 +100,10 @@ def main() -> None:
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
-    write_pidfile()
     log(f"ntfy-dbus-forward starting (pid {os.getpid()})")
     log(f"  server:  {NTFY_URL}")
     log(f"  topic:   {NTFY_TOPIC}")
     log(f"  ignore:  {NTFY_IGNORE or '(none)'}")
-    log(f"  pidfile: {PIDFILE}")
 
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
