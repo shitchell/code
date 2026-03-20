@@ -1,0 +1,148 @@
+#!/usr/bin/python3
+"""
+Forward D-Bus desktop notifications to an ntfy server.
+
+Listens on the org.freedesktop.Notifications interface and POSTs each
+notification to a configurable ntfy topic. Designed to run as a long-lived
+daemon, managed by a cron watchdog.
+
+Environment variables:
+    NTFY_URL        Base URL of the ntfy server (default: https://ntfy.shitchell.com)
+    NTFY_TOPIC      Topic to publish to (default: desktop)
+    NTFY_TOKEN      Optional auth token (Bearer)
+    NTFY_PRIORITY   Default priority 1-5 (default: 3)
+    NTFY_IGNORE     Comma-separated app names to ignore (case-insensitive)
+"""
+
+import os
+import signal
+import sys
+import time
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+import dbus
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+
+
+NTFY_URL = os.environ.get("NTFY_URL", "https://ntfy.shitchell.com")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "desktop")
+NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
+NTFY_PRIORITY = os.environ.get("NTFY_PRIORITY", "3")
+NTFY_IGNORE = {
+    s.strip().lower()
+    for s in os.environ.get("NTFY_IGNORE", "").split(",")
+    if s.strip()
+}
+
+PIDFILE = Path(os.environ.get(
+    "NTFY_PIDFILE",
+    os.path.expanduser("~/.local/run/ntfy-dbus-forward.pid"),
+))
+
+# Dedup: ignore identical (app, summary, body) within this window
+DEDUP_WINDOW = 2  # seconds
+_recent = {}  # (app, summary, body) -> timestamp
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def publish(app_name: str, summary: str, body: str) -> None:
+    """POST a notification to the ntfy server."""
+    url = f"{NTFY_URL.rstrip('/')}/{NTFY_TOPIC}"
+    message = body if body else summary
+    headers = {
+        "Title": summary or app_name,
+        "Tags": app_name,
+        "Priority": NTFY_PRIORITY,
+    }
+    if NTFY_TOKEN:
+        headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
+
+    data = message.encode("utf-8") if message else b""
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log(f"  -> {resp.status}")
+    except urllib.error.URLError as exc:
+        log(f"  !! failed to publish: {exc}")
+
+
+def on_notification(bus, message) -> None:
+    """Handle an incoming Notify signal on the bus."""
+    args = message.get_args_list()
+    if len(args) < 5:
+        return
+
+    app_name = str(args[0])
+    summary = str(args[3])
+    body = str(args[4])
+
+    # Skip ignored apps
+    if app_name.lower() in NTFY_IGNORE:
+        return
+
+    # Dedup identical notifications within the window
+    key = (app_name, summary, body)
+    now = time.monotonic()
+    if key in _recent and (now - _recent[key]) < DEDUP_WINDOW:
+        return
+    _recent[key] = now
+
+    log(f"[{app_name}] {summary}")
+    publish(app_name, summary, body)
+
+
+def write_pidfile() -> None:
+    PIDFILE.parent.mkdir(parents=True, exist_ok=True)
+    PIDFILE.write_text(str(os.getpid()))
+
+
+def remove_pidfile() -> None:
+    try:
+        PIDFILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def shutdown(signum, frame) -> None:
+    log(f"Caught signal {signum}, shutting down")
+    remove_pidfile()
+    sys.exit(0)
+
+
+def main() -> None:
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    write_pidfile()
+    log(f"ntfy-dbus-forward starting (pid {os.getpid()})")
+    log(f"  server:  {NTFY_URL}")
+    log(f"  topic:   {NTFY_TOPIC}")
+    log(f"  ignore:  {NTFY_IGNORE or '(none)'}")
+    log(f"  pidfile: {PIDFILE}")
+
+    DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+
+    # Use eavesdrop to intercept unicast method_calls destined for the
+    # notification daemon — without this, the bus won't deliver them to us.
+    bus.add_match_string(
+        "eavesdrop='true',"
+        "type='method_call',"
+        "interface='org.freedesktop.Notifications',"
+        "member='Notify'"
+    )
+    bus.add_message_filter(on_notification)
+
+    log("Listening for notifications...")
+    loop = GLib.MainLoop()
+    loop.run()
+
+
+if __name__ == "__main__":
+    main()
