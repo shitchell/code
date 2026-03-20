@@ -32,15 +32,15 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "desktop")
 NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")
 NTFY_PRIORITY = os.environ.get("NTFY_PRIORITY", "3")
 NTFY_IGNORE = {
-    s.strip().lower()
-    for s in os.environ.get("NTFY_IGNORE", "").split(",")
-    if s.strip()
+    s.strip().lower() for s in os.environ.get("NTFY_IGNORE", "").split(",") if s.strip()
 }
 
-PIDFILE = Path(os.environ.get(
-    "NTFY_PIDFILE",
-    os.path.expanduser("~/.local/run/ntfy-dbus-forward.pid"),
-))
+PIDFILE = Path(
+    os.environ.get(
+        "NTFY_PIDFILE",
+        os.path.expanduser("~/.local/run/ntfy-dbus-forward.pid"),
+    )
+)
 
 # Dedup: ignore identical (app, summary, body) within this window
 DEDUP_WINDOW = 2  # seconds
