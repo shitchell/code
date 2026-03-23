@@ -9,6 +9,7 @@ Examples:
 """
 
 import argparse
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,18 @@ def filter_lines(text: str, head: int | None, tail: int | None) -> str:
     return "".join(lines)
 
 
+def calculate_content_width(content: str, padding: int = 2) -> int:
+    """Calculate the width needed to fit content, plus padding."""
+    lines = content.splitlines()
+    if not lines:
+        return 80
+    # Account for ANSI escape sequences by stripping them
+    import re
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+    max_width = max(len(ansi_escape.sub('', line)) for line in lines)
+    return max_width + padding
+
+
 def create_static_image(
     output: str,
     command_str: str,
@@ -52,6 +65,7 @@ def create_static_image(
     theme: str,
     head: int | None,
     tail: int | None,
+    width: int | str | None,
 ) -> bool:
     """Create PNG or SVG using rich."""
     try:
@@ -78,8 +92,16 @@ def create_static_image(
 
     full_content = "\n".join(content_parts)
 
+    # Determine width
+    if width == "auto":
+        console_width = calculate_content_width(full_content)
+    elif width is not None:
+        console_width = int(width)
+    else:
+        console_width = 120  # default
+
     # Create console and record
-    console = Console(record=True, width=120, force_terminal=True)
+    console = Console(record=True, width=console_width, force_terminal=True)
 
     # Print content (rich will handle ANSI codes)
     text = Text.from_ansi(full_content)
@@ -247,6 +269,11 @@ def main():
         help="Color theme (default: monokai)",
     )
     parser.add_argument(
+        "--width",
+        metavar="N",
+        help="Console width in chars, or 'auto' to fit content (default: 120)",
+    )
+    parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
         help="Command to run (after --)",
@@ -264,7 +291,7 @@ def main():
 
     output_path = Path(args.output)
     suffix = output_path.suffix.lower()
-    command_str = " ".join(command_args)
+    command_str = shlex.join(command_args)
     show_prompt = args.prompt and not args.no_prompt
 
     if suffix == ".gif":
@@ -300,6 +327,7 @@ def main():
             theme=args.theme,
             head=args.head,
             tail=args.tail,
+            width=args.width,
         )
     else:
         print(f"Error: Unsupported output format: {suffix}", file=sys.stderr)

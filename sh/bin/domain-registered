@@ -1,0 +1,12 @@
+#!/bin/bash
+
+let -i EXIT_CODE=0
+
+for domain in "${@}"; do
+    echo -n "${domain} : "
+    nslookup -type=ns "${domain}" | grep -Fq 'nameserver = ' \
+        && echo "REGISTERED" \
+        || { echo "NOT REGISTERED"; EXIT_CODE=1; }
+done
+
+exit ${EXIT_CODE}
