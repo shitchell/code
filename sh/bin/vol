@@ -150,10 +150,21 @@ function get-volume() {
             __output=$(osascript -e 'output volume of (get volume settings)') || return 1
             ;;
         pulseaudio)
-            # Output: "Volume: front-left: 65536 / 100% / ..."
-            __output=$(pactl get-sink-volume @DEFAULT_SINK@ | awk '{
+            # Try modern pactl (v14+) first, fall back to older method
+            if __output=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | awk '{
                 for (i=1; i<=NF; i++) if ($i ~ /%/) { gsub(/%/, "", $i); print $i; exit }
-            }') || return 1
+            }') && [[ -n "${__output}" ]]; then
+                :  # success
+            else
+                # Older pactl: parse from "pactl list sinks"
+                __output=$(pactl list sinks | awk '
+                    /^\s*Volume:/ && !done {
+                        for (i=1; i<=NF; i++) if ($i ~ /%/) {
+                            gsub(/%/, "", $i); print $i; done=1; exit
+                        }
+                    }
+                ')
+            fi
             ;;
         alsa)
             # Output: "... [100%] ..."

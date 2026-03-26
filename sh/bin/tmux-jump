@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+#
+# tmux-jump
+#
+# Fuzzy-find and jump to any tmux pane across all sessions.
+# Searches across session names, window names, pane titles, and process commands.
+#
+# Usage:
+#   tmux-jump
+#
+# Intended to be run inside a tmux display-popup:
+#   bind -n M-j display-popup -E "tmux-jump"
+
+set -euo pipefail
+
+# Must be run inside tmux
+if [[ -z "${TMUX:-}" ]]; then
+    echo "fatal: must be run within a tmux session" >&2
+    exit 1
+fi
+
+# Build a map of TTY -> "pane_id\tpretty_name"
+declare -A PANE_BY_TTY
+readarray -t ALL_PANES < <(
+    tmux list-panes -aF \
+        $'#{pane_tty}\t#{pane_id}\t#{session_name} > #{window_index}:#{window_name} > #{pane_index}:#{pane_title}'
+)
+
+for pane_info in "${ALL_PANES[@]}"; do
+    tty="${pane_info%%$'\t'*}"
+    rest="${pane_info#*$'\t'}"
+    tty="${tty#/dev/}"
+    PANE_BY_TTY["${tty}"]="${rest}"
+done
+
+# Build fzf candidates: "pane_id\tpretty_name  |  command"
+# Look up processes on each pane's TTY via ps
+candidates=()
+declare -A PANE_COMMANDS
+
+# Gather all processes with their TTYs
+while IFS=$'\t' read -r pid tty cmd; do
+    pid="${pid//[[:space:]]/}"
+    tty="${tty//[[:space:]]/}"
+    if [[ -v "PANE_BY_TTY[${tty}]" ]]; then
+        # Keep the last (deepest) process per pane for display
+        pane_data="${PANE_BY_TTY[${tty}]}"
+        pane_id="${pane_data%%$'\t'*}"
+        PANE_COMMANDS["${pane_id}"]="${cmd}"
+    fi
+done < <(ps --no-headers ax -o $'%p\t%y\t%a' 2>/dev/null)
+
+# Now build the candidate lines
+for tty in "${!PANE_BY_TTY[@]}"; do
+    pane_data="${PANE_BY_TTY[${tty}]}"
+    pane_id="${pane_data%%$'\t'*}"
+    pane_pretty="${pane_data#*$'\t'}"
+    cmd="${PANE_COMMANDS[${pane_id}]:-}"
+
+    if [[ -n "${cmd}" ]]; then
+        candidates+=("${pane_id}"$'\t'"${pane_pretty}  |  ${cmd}")
+    else
+        candidates+=("${pane_id}"$'\t'"${pane_pretty}")
+    fi
+done
+
+# Pipe into fzf
+# --with-nth=2.. hides the pane_id column from display but keeps it for extraction
+selected=$(
+    printf '%s\n' "${candidates[@]}" \
+        | fzf --with-nth=2.. \
+              --delimiter=$'\t' \
+              --prompt="jump to: " \
+              --exact \
+              --no-sort \
+              --reverse \
+              --no-info
+) || exit 0
+
+# Extract the pane_id and switch
+pane_id="${selected%%$'\t'*}"
+tmux switch-client -t "${pane_id}"
