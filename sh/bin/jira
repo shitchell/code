@@ -145,6 +145,7 @@ make_request() {
     local endpoint=""
     local fields=""
     local delimiter=$'\t'  # Default to tab
+    local -a files=()      # Files for multipart upload
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -159,6 +160,14 @@ make_request() {
                 else
                     data="$2"
                 fi
+                shift 2
+                ;;
+            -F|--file)
+                local filepath="$2"
+                if [[ ! -f "${filepath}" ]]; then
+                    error "File not found: ${filepath}"
+                fi
+                files+=("${filepath}")
                 shift 2
                 ;;
             --fields)
@@ -201,8 +210,14 @@ make_request() {
         -X "${method}"
     )
 
-    # Add data if provided
-    if [[ -n "${data}" ]]; then
+    # Add data or files
+    if [[ ${#files[@]} -gt 0 ]]; then
+        # Multipart file upload (e.g., attachments)
+        curl_cmd+=(-H "X-Atlassian-Token: no-check")
+        for f in "${files[@]}"; do
+            curl_cmd+=(-F "file=@${f}")
+        done
+    elif [[ -n "${data}" ]]; then
         curl_cmd+=(-H "Content-Type: application/json")
         curl_cmd+=(-d "${data}")
     fi
@@ -274,12 +289,13 @@ Authentication:
 
 API Requests:
   ${SCRIPT_NAME} get [--fields <fields>] [--delimiter <char>] <endpoint>
-  ${SCRIPT_NAME} post [-d/--data <json>] [--fields <fields>] [--delimiter <char>] <endpoint>
+  ${SCRIPT_NAME} post [-d/--data <json>] [-F/--file <path>] [--fields <fields>] [--delimiter <char>] <endpoint>
   ${SCRIPT_NAME} put [-d/--data <json>] <endpoint>
   ${SCRIPT_NAME} delete <endpoint>
 
 Options:
   -d/--data <json>       JSON data (use @filepath to read from file)
+  -F/--file <path>       Attach a file (multipart upload, repeatable)
   --fields <fields>      Comma-separated list of fields (dot notation supported)
   --delimiter <char>     Field delimiter (default: tab, use ',' for CSV)
 
@@ -304,6 +320,12 @@ Examples:
 
   # Read JSON data from file
   ${SCRIPT_NAME} post -d @query.json --fields key,fields.summary /search/jql
+
+  # Attach a file to an issue
+  ${SCRIPT_NAME} post -F report.pdf /issue/DEVOPS-405/attachments
+
+  # Attach multiple files
+  ${SCRIPT_NAME} post -F notes.md -F diagram.png /issue/DEVOPS-405/attachments
 
 Endpoints can be specified with or without /rest/api/3 prefix.
 EOF
