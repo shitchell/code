@@ -368,6 +368,52 @@ function detect-language-from-file() {
     echo ""
 }
 
+function demojibake-cp1252-utf8() {
+    :  'Reverse classic UTF-8-decoded-as-CP1252 mojibake.
+        Windows PowerShell (powershell.exe, .NET Framework 4.x) has a
+        long-standing bug where Clipboard.GetText(Html) decodes CF_HTML
+        as CP1252 instead of UTF-8 (the spec-mandated encoding). A real
+        ellipsis "…" (UTF-8: E2 80 A6) round-trips to the mojibake "â€¦"
+        (UTF-8: C3 A2 E2 82 AC C2 A6) by the time it reaches stdin.
+        Strategy: decode as UTF-8, re-encode as CP1252, reinterpret as
+        UTF-8. If either step fails (input has chars not in CP1252, or
+        the re-encoded bytes are not valid UTF-8), pass the input
+        through unchanged. Self-gating: no-op on clean input, fix on
+        mojibaked input.
+        @stdin - possibly-mojibaked UTF-8
+        @stdout - restored UTF-8 (or original if no clean recovery)
+    '
+    python3 -c "if True:
+    import sys
+    data = sys.stdin.buffer.read()
+    try:
+        fixed = data.decode('utf-8').encode('cp1252')
+        fixed.decode('utf-8')  # validate
+        sys.stdout.buffer.write(fixed)
+    except (UnicodeError, LookupError):
+        sys.stdout.buffer.write(data)
+"
+}
+
+function normalize-to-utf8() {
+    :  'Ensure stdin is valid UTF-8, transcoding from CP1252 if needed.
+        Clipboard HTML from Outlook/Teams/Word often contains Windows-1252
+        bytes (smart quotes, em-dashes, etc.) that pandoc rejects as invalid
+        UTF-8. Try UTF-8 first; fall back to CP1252 transcode on failure.
+        @stdin - bytes of unknown encoding
+        @stdout - valid UTF-8
+    '
+    local tmp
+    tmp=$(mktemp)
+    cat > "${tmp}"
+    if iconv -f UTF-8 -t UTF-8 "${tmp}" &>/dev/null; then
+        cat "${tmp}"
+    else
+        iconv -f WINDOWS-1252 -t UTF-8 "${tmp}"
+    fi
+    rm -f "${tmp}"
+}
+
 function extract-html-fragment() {
     :  'Extract content from HTML clipboard format
         Removes Version/StartHTML/EndHTML headers and fragment markers
@@ -436,7 +482,9 @@ function html-to-markdown() {
     '
     require-pandoc || return ${?}
 
-    extract-html-fragment | pandoc -f html -t markdown --wrap=none | sed 's/<\/*body>//g'
+    extract-html-fragment | demojibake-cp1252-utf8 | normalize-to-utf8 \
+        | pandoc -f html -t gfm-raw_html --wrap=none --strip-comments \
+        | sed 's/<\/*body>//g'
 }
 
 function csv-to-html() {
@@ -495,7 +543,7 @@ function set-clipboard-html() {
     local ps_html="${html_content//\'/\'\'}"
     local ps_text="${text_content//\'/\'\'}"
 
-    powershell.exe -command "
+    "${WSL_POWERSHELL}" -command "
 Add-Type -AssemblyName System.Windows.Forms
 \$html = @'
 Version:0.9
@@ -525,7 +573,7 @@ function set-clipboard-csv() {
     local csv_content="$1"
     local ps_csv="${csv_content//\'/\'\'}"
 
-    powershell.exe -command "
+    "${WSL_POWERSHELL}" -command "
 Add-Type -AssemblyName System.Windows.Forms
 \$dataObj = New-Object System.Windows.Forms.DataObject
 \$dataObj.SetData([System.Windows.Forms.DataFormats]::CommaSeparatedValue, '${ps_csv}')
