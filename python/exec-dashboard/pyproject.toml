@@ -15,7 +15,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
-    "textual-dev>=0.80.0",
+    "textual-dev>=1.0",
 ]
 
 [project.scripts]
@@ -26,3 +26,4 @@ packages = ["dashboard"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
