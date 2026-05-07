@@ -3,7 +3,7 @@ from typing import Any, ClassVar, Callable
 from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.command import Provider, Hit, Hits
+from textual.command import DiscoveryHit, Provider, Hit, Hits
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
 from dashboard.config import Config, Executable
@@ -16,6 +16,23 @@ from dashboard.usage import UsageTracker
 
 class DashboardCommands(Provider):
     """Command palette: Sort by mode and Switch to dashboard."""
+
+    async def discover(self) -> Hits:
+        """Show all commands before the user types anything."""
+        app: DashboardApp = self.app  # type: ignore[assignment]
+        for mode in app.SORT_MODES:
+            yield DiscoveryHit(
+                command=lambda m=mode: app.set_sort(m),
+                display=f"Sort: {mode}",
+                help=f"Sort current dashboard by {mode}",
+            )
+        names = ["All"] + [d.name for d in app.config.dashboards]
+        for name in names:
+            yield DiscoveryHit(
+                command=lambda n=name: app.switch_dashboard(n),
+                display=f"Switch: {name}",
+                help=f"Switch to {name} dashboard",
+            )
 
     async def search(self, query: str) -> Hits:
         app: DashboardApp = self.app  # type: ignore[assignment]
