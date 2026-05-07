@@ -1,33 +1,19 @@
 from __future__ import annotations
 from textual.app import App, ComposeResult
-from textual.command import Provider, Hit, Hits
+from textual.binding import Binding
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
 from dashboard.config import Config, Executable
 from dashboard.widgets.log_panel import LogPanel
 from dashboard.widgets.param_modal import ParamModal
+from dashboard.widgets.dashboard_switcher import DashboardSwitcher
 from dashboard.runner import run_executable
-
-
-class DashboardCommands(Provider):
-    """Lists dashboards (including 'All') in the command palette."""
-
-    async def search(self, query: str) -> Hits:
-        app: DashboardApp = self.app  # type: ignore[assignment]
-        names = ["All"] + [d.name for d in app.config.dashboards]
-        for name in names:
-            if query.lower() in name.lower():
-                yield Hit(
-                    score=1.0,
-                    match_display=name,
-                    command=lambda n=name: app.switch_dashboard(n),
-                    help=f"Switch to {name} dashboard",
-                )
 
 
 class DashboardApp(App):
     TITLE = "Exec Dashboard"
-    COMMANDS = {DashboardCommands}
+    COMMANDS = set()  # disable built-in command palette; we use DashboardSwitcher
+    BINDINGS = [Binding("ctrl+p", "open_switcher", "Dashboards", show=True)]
 
     CSS = """
     #buttons {
@@ -45,6 +31,8 @@ class DashboardApp(App):
         self._active_dashboard: str = (
             config.dashboards[0].name if config.dashboards else "All"
         )
+
+    # ── Layout ────────────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -71,12 +59,24 @@ class DashboardApp(App):
             if exe:
                 yield Button(exe.name, id=f"exe_{exe.id}")
 
+    # ── Dashboard switching ───────────────────────────────────────────────────
+
+    def action_open_switcher(self) -> None:
+        names = ["All"] + [d.name for d in self.config.dashboards]
+        self.push_screen(DashboardSwitcher(names), self._on_switcher_result)
+
+    def _on_switcher_result(self, name: str | None) -> None:
+        if name is not None:
+            self.run_worker(self.switch_dashboard(name))
+
     async def switch_dashboard(self, name: str) -> None:
         self._active_dashboard = name
         self.sub_title = name
         container = self.query_one("#buttons", ScrollableContainer)
         await container.remove_children()
         await container.mount(*list(self._build_buttons(name)))
+
+    # ── Button press → run ────────────────────────────────────────────────────
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
