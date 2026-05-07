@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, ClassVar, Callable
 from pathlib import Path
 from textual.app import App, ComposeResult
+from textual.command import Provider, Hit, Hits
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
 from dashboard.config import Config, Executable
@@ -12,9 +13,40 @@ from dashboard.runner import run_executable
 from dashboard.usage import UsageTracker
 
 
+class DashboardCommands(Provider):
+    """Command palette: Sort by mode and Switch to dashboard."""
+
+    async def search(self, query: str) -> Hits:
+        app: DashboardApp = self.app  # type: ignore[assignment]
+        q = query.lower()
+
+        # Sort commands — one per SORT_MODES key
+        for mode in app.SORT_MODES:
+            label = f"Sort: {mode}"
+            if not q or q in label.lower():
+                yield Hit(
+                    score=1.0,
+                    match_display=label,
+                    command=lambda m=mode: app.set_sort(m),
+                    help=f"Sort current dashboard by {mode}",
+                )
+
+        # Switch commands — All + named dashboards
+        names = ["All"] + [d.name for d in app.config.dashboards]
+        for name in names:
+            label = f"Switch: {name}"
+            if not q or q in label.lower():
+                yield Hit(
+                    score=0.9,
+                    match_display=label,
+                    command=lambda n=name: app.switch_dashboard(n),
+                    help=f"Switch to {name} dashboard",
+                )
+
+
 class DashboardApp(App):
     TITLE = "Exec Dashboard"
-    COMMANDS = set()  # no providers; ctrl+p is handled by action_command_palette below
+    COMMANDS = {DashboardCommands}
 
     SORT_MODES: ClassVar[dict[str, Callable[[str, UsageTracker], Any]]] = {
         "config": lambda exe_id, tracker: 0,
@@ -79,14 +111,9 @@ class DashboardApp(App):
 
     # ── Dashboard switching ───────────────────────────────────────────────────
 
-    def action_command_palette(self) -> None:
-        """Override ctrl+p to open our dashboard switcher instead."""
-        names = ["All"] + [d.name for d in self.config.dashboards]
-        self.push_screen(DashboardSwitcher(names), self._on_switcher_result)
-
-    def _on_switcher_result(self, name: str | None) -> None:
-        if name is not None:
-            self.run_worker(self.switch_dashboard(name))
+    def set_sort(self, mode: str) -> None:
+        self._active_sort[self._active_dashboard] = mode
+        self.run_worker(self.switch_dashboard(self._active_dashboard))
 
     async def switch_dashboard(self, name: str) -> None:
         self._active_dashboard = name
