@@ -18,7 +18,7 @@ class DashboardApp(App):
 
     SORT_MODES: ClassVar[dict[str, Callable[[str, UsageTracker], Any]]] = {
         "config": lambda exe_id, tracker: 0,
-        "usage":  lambda exe_id, tracker: -tracker.count(exe_id),
+        "usage": lambda exe_id, tracker: -tracker.count(exe_id),
     }
 
     CSS = """
