@@ -6,6 +6,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, Static
 from textual.containers import Vertical, Horizontal
 from dashboard.config import Executable
+from dashboard.widgets.file_picker import FilePickerModal
 
 
 class ParamModal(ModalScreen[dict[str, object] | None]):
@@ -29,6 +30,17 @@ class ParamModal(ModalScreen[dict[str, object] | None]):
         height: auto;
         margin-bottom: 1;
     }
+    ParamModal .path-row {
+        height: auto;
+    }
+    ParamModal .path-row Input {
+        width: 1fr;
+    }
+    ParamModal .path-row Button {
+        width: auto;
+        min-width: 10;
+        margin-left: 1;
+    }
     ParamModal .actions {
         height: auto;
         margin-top: 1;
@@ -47,6 +59,13 @@ class ParamModal(ModalScreen[dict[str, object] | None]):
                     yield Label(arg.name)
                     if arg.nargs == 0:
                         yield Checkbox(arg.name, id=f"arg_{arg.name}")
+                    elif arg.python_type is Path:
+                        with Horizontal(classes="path-row"):
+                            yield Input(
+                                placeholder="path",
+                                id=f"arg_{arg.name}",
+                            )
+                            yield Button("Browse", id=f"browse_{arg.name}")
                     else:
                         yield Input(
                             placeholder=f"{arg.type} {'(positional)' if arg.positional else arg.derived_parameter}",
@@ -56,10 +75,26 @@ class ParamModal(ModalScreen[dict[str, object] | None]):
                 yield Button("Run", variant="primary", id="run")
                 yield Button("Cancel", id="cancel")
 
-    @on(Button.Pressed, "#run")
-    def on_run(self) -> None:
+    @on(Button.Pressed)
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+
+        if btn_id.startswith("browse_"):
+            arg_name = btn_id[len("browse_"):]
+            input_widget = self.query_one(f"#arg_{arg_name}", Input)
+            start = Path(input_widget.value).expanduser() if input_widget.value else None
+            picked = await self.app.push_screen_wait(FilePickerModal(start=start))
+            if picked is not None:
+                input_widget.value = str(picked)
+
+        elif btn_id == "run":
+            self._submit()
+
+        elif btn_id == "cancel":
+            self.dismiss(None)
+
+    def _submit(self) -> None:
         values: dict[str, object] = {}
-        error: str | None = None
         for arg in self.exe.args:
             widget_id = f"arg_{arg.name}"
             if arg.nargs == 0:
@@ -73,13 +108,9 @@ class ParamModal(ModalScreen[dict[str, object] | None]):
                 else:
                     values[arg.name] = python_type(raw)
             except (ValueError, TypeError):
-                error = f"Invalid value for '{arg.name}': expected {arg.type}"
-                break
-        if error:
-            self.notify(error, severity="error")
-            return
+                self.notify(
+                    f"Invalid value for '{arg.name}': expected {arg.type}",
+                    severity="error",
+                )
+                return
         self.dismiss(values)
-
-    @on(Button.Pressed, "#cancel")
-    def on_cancel(self) -> None:
-        self.dismiss(None)
