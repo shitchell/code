@@ -15,7 +15,7 @@ TYPE_MAP: dict[str, type] = {
 class Arg:
     name: str
     positional: bool = False
-    parameter: str | None = None   # explicit flag; None = auto-derive
+    parameter: str | None = None  # explicit flag; None = auto-derive
     type: str = "str"
     nargs: int | str = 1
 
@@ -41,7 +41,7 @@ class Executable:
 @dataclass
 class Dashboard:
     name: str
-    executables: list[str]   # executable ids
+    executables: list[str]  # executable ids
 
 
 @dataclass
