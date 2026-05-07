@@ -57,6 +57,7 @@ dashboards:
     executables: [show-date, list-files, disk-usage]
 
   - name: Quick Tests
+    default_sort: usage
     executables: [echo-hello, show-date]
 
   - name: File Ops
