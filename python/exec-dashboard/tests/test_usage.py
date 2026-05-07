@@ -34,3 +34,10 @@ def test_increment_creates_file(tmp_path):
     t = UsageTracker(path)
     t.increment("bar")
     assert path.exists()
+
+
+def test_corrupted_json_recovers_to_empty(tmp_path):
+    path = tmp_path / "usage.json"
+    path.write_text("not valid json{{{")
+    t = UsageTracker(path)
+    assert t.count("foo") == 0
