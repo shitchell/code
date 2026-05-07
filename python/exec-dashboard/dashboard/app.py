@@ -1,6 +1,5 @@
 from __future__ import annotations
 from textual.app import App, ComposeResult
-from textual.binding import Binding
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
 from dashboard.config import Config, Executable
@@ -12,8 +11,7 @@ from dashboard.runner import run_executable
 
 class DashboardApp(App):
     TITLE = "Exec Dashboard"
-    COMMANDS = set()  # disable built-in command palette; we use DashboardSwitcher
-    BINDINGS = [Binding("ctrl+p", "open_switcher", "Dashboards", show=True)]
+    COMMANDS = set()  # no providers; ctrl+p is handled by action_command_palette below
 
     CSS = """
     #buttons {
@@ -61,7 +59,8 @@ class DashboardApp(App):
 
     # ── Dashboard switching ───────────────────────────────────────────────────
 
-    def action_open_switcher(self) -> None:
+    def action_command_palette(self) -> None:
+        """Override ctrl+p to open our dashboard switcher instead."""
         names = ["All"] + [d.name for d in self.config.dashboards]
         self.push_screen(DashboardSwitcher(names), self._on_switcher_result)
 
