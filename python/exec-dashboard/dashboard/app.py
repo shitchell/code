@@ -108,6 +108,10 @@ class DashboardApp(App):
     GRID_COLS = 4  # must match grid-size in CSS
 
     def on_key(self, event: Key) -> None:
+        if event.key == "escape":
+            self.set_focus(None)
+            event.prevent_default()
+            return
         if event.key not in ("up", "down", "left", "right"):
             return
         buttons = list(self.query("#buttons Button"))
