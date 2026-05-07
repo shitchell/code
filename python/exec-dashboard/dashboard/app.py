@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, ClassVar, Callable
 from pathlib import Path
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.command import Provider, Hit, Hits
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
@@ -47,6 +48,7 @@ class DashboardCommands(Provider):
 class DashboardApp(App):
     TITLE = "Exec Dashboard"
     COMMANDS = {DashboardCommands}
+    BINDINGS = [Binding("ctrl+d", "open_switcher", "Dashboards", show=True)]
 
     SORT_MODES: ClassVar[dict[str, Callable[[str, UsageTracker], Any]]] = {
         "config": lambda exe_id, tracker: 0,
@@ -110,6 +112,14 @@ class DashboardApp(App):
                 yield Button(exe.name, id=f"exe_{exe.id}")
 
     # ── Dashboard switching ───────────────────────────────────────────────────
+
+    def action_open_switcher(self) -> None:
+        names = ["All"] + [d.name for d in self.config.dashboards]
+        self.push_screen(DashboardSwitcher(names), self._on_switcher_result)
+
+    def _on_switcher_result(self, name: str | None) -> None:
+        if name is not None:
+            self.run_worker(self.switch_dashboard(name))
 
     def set_sort(self, mode: str) -> None:
         self._active_sort[self._active_dashboard] = mode
