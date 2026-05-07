@@ -4,6 +4,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import DiscoveryHit, Provider, Hit, Hits
+from textual.events import Key
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
 from dashboard.config import Config, Executable
@@ -100,6 +101,34 @@ class DashboardApp(App):
         yield LogPanel()
         yield Footer()
 
+    def on_mount(self) -> None:
+        self._focus_first_button()
+
+    def _focus_first_button(self) -> None:
+        buttons = list(self.query("#buttons Button"))
+        if buttons:
+            buttons[0].focus()
+
+    GRID_COLS = 4  # must match grid-size in CSS
+
+    def on_key(self, event: Key) -> None:
+        if event.key not in ("up", "down", "left", "right"):
+            return
+        buttons = list(self.query("#buttons Button"))
+        if not buttons or self.focused not in buttons:
+            return
+        idx = buttons.index(self.focused)
+        if event.key == "right":
+            idx = min(idx + 1, len(buttons) - 1)
+        elif event.key == "left":
+            idx = max(idx - 1, 0)
+        elif event.key == "down":
+            idx = min(idx + self.GRID_COLS, len(buttons) - 1)
+        elif event.key == "up":
+            idx = max(idx - self.GRID_COLS, 0)
+        buttons[idx].focus()
+        event.prevent_default()
+
     def _exe_map(self) -> dict[str, Executable]:
         return {exe.id: exe for exe in self.config.executables}
 
@@ -148,6 +177,7 @@ class DashboardApp(App):
         container = self.query_one("#buttons", ScrollableContainer)
         await container.remove_children()
         await container.mount(*list(self._build_buttons(name)))
+        self._focus_first_button()
 
     # ── Button press → run ────────────────────────────────────────────────────
 
