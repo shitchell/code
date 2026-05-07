@@ -81,6 +81,10 @@ class DashboardApp(App):
         grid-gutter: 1;
         padding: 1;
     }
+    Button:focus {
+        text-style: bold;
+        background: $accent-darken-1;
+    }
     """
 
     def __init__(self, config: Config, config_path: Path) -> None:
@@ -101,21 +105,17 @@ class DashboardApp(App):
         yield LogPanel()
         yield Footer()
 
-    def on_mount(self) -> None:
-        self._focus_first_button()
-
-    def _focus_first_button(self) -> None:
-        buttons = list(self.query("#buttons Button"))
-        if buttons:
-            buttons[0].focus()
-
     GRID_COLS = 4  # must match grid-size in CSS
 
     def on_key(self, event: Key) -> None:
         if event.key not in ("up", "down", "left", "right"):
             return
         buttons = list(self.query("#buttons Button"))
-        if not buttons or self.focused not in buttons:
+        if not buttons:
+            return
+        if self.focused not in buttons:
+            buttons[0].focus()
+            event.prevent_default()
             return
         idx = buttons.index(self.focused)
         if event.key == "right":
@@ -177,7 +177,6 @@ class DashboardApp(App):
         container = self.query_one("#buttons", ScrollableContainer)
         await container.remove_children()
         await container.mount(*list(self._build_buttons(name)))
-        self._focus_first_button()
 
     # ── Button press → run ────────────────────────────────────────────────────
 
