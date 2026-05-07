@@ -78,7 +78,7 @@ class DashboardApp(App):
         await container.remove_children()
         await container.mount(*list(self._build_buttons(name)))
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
         if not btn_id.startswith("exe_"):
             return
@@ -86,17 +86,16 @@ class DashboardApp(App):
         exe = self._exe_map().get(exe_id)
         if exe is None:
             return
+        self.run_worker(self._handle_exe(exe), exclusive=False)
 
+    async def _handle_exe(self, exe: Executable) -> None:
+        """Runs inside a worker so push_screen_wait and subprocess are both safe."""
         if exe.args:
             values = await self.push_screen_wait(ParamModal(exe))
             if values is None:
                 return
         else:
             values = {}
-
-        self.run_worker(self._run(exe, values), exclusive=False)
-
-    async def _run(self, exe: Executable, values: dict[str, object]) -> None:
         log = self.query_one(LogPanel)
         log.begin_run(exe.name)
         async for kind, payload in run_executable(exe, values):
