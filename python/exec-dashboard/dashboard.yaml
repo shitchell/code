@@ -58,3 +58,6 @@ dashboards:
 
   - name: Quick Tests
     executables: [echo-hello, show-date]
+
+  - name: File Ops
+    executables: [list-files, disk-usage]
