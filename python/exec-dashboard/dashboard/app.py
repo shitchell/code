@@ -1,4 +1,6 @@
 from __future__ import annotations
+from typing import Any, ClassVar, Callable
+from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Header, Footer
 from textual.containers import ScrollableContainer
@@ -7,11 +9,17 @@ from dashboard.widgets.log_panel import LogPanel
 from dashboard.widgets.param_modal import ParamModal
 from dashboard.widgets.dashboard_switcher import DashboardSwitcher
 from dashboard.runner import run_executable
+from dashboard.usage import UsageTracker
 
 
 class DashboardApp(App):
     TITLE = "Exec Dashboard"
     COMMANDS = set()  # no providers; ctrl+p is handled by action_command_palette below
+
+    SORT_MODES: ClassVar[dict[str, Callable[[str, UsageTracker], Any]]] = {
+        "config": lambda exe_id, tracker: 0,
+        "usage":  lambda exe_id, tracker: -tracker.count(exe_id),
+    }
 
     CSS = """
     #buttons {
@@ -23,9 +31,11 @@ class DashboardApp(App):
     }
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, config_path: Path) -> None:
         super().__init__()
         self.config = config
+        self._tracker = UsageTracker(config_path.parent / "usage.json")
+        self._active_sort: dict[str, str] = {}
         self._active_dashboard: str = (
             config.dashboards[0].name if config.dashboards else "All"
         )
@@ -44,11 +54,21 @@ class DashboardApp(App):
 
     def _exe_ids_for(self, dashboard_name: str) -> list[str]:
         if dashboard_name == "All":
-            return [exe.id for exe in self.config.executables]
-        for d in self.config.dashboards:
-            if d.name == dashboard_name:
-                return d.executables
-        return []
+            ids = [exe.id for exe in self.config.executables]
+            default_sort = "config"
+        else:
+            dashboard = next(
+                (d for d in self.config.dashboards if d.name == dashboard_name), None
+            )
+            if dashboard is None:
+                return []
+            ids = dashboard.executables
+            default_sort = dashboard.default_sort
+
+        mode = self._active_sort.get(dashboard_name, default_sort)
+        # fall back to "config" if mode is unrecognised
+        key_fn = self.SORT_MODES.get(mode, self.SORT_MODES["config"])
+        return sorted(ids, key=lambda i: key_fn(i, self._tracker))
 
     def _build_buttons(self, dashboard_name: str):
         exe_map = self._exe_map()
@@ -85,6 +105,7 @@ class DashboardApp(App):
         exe = self._exe_map().get(exe_id)
         if exe is None:
             return
+        self._tracker.increment(exe_id)
         self.run_worker(self._handle_exe(exe), exclusive=False)
 
     async def _handle_exe(self, exe: Executable) -> None:

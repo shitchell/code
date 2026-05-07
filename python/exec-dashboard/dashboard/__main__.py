@@ -15,7 +15,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     config = load_config_file(args.config)
-    DashboardApp(config).run()
+    DashboardApp(config, args.config).run()
 
 
 if __name__ == "__main__":
