@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
+import yaml
 
 TYPE_MAP: dict[str, type] = {
     "str": str,
@@ -48,3 +49,34 @@ class Dashboard:
 class Config:
     executables: list[Executable]
     dashboards: list[Dashboard]
+
+
+def load_config(data: dict) -> Config:
+    executables = [
+        Executable(
+            id=exe["id"],
+            name=exe["name"],
+            path=exe["path"],
+            args=[
+                Arg(
+                    name=arg["name"],
+                    positional=arg.get("positional", False),
+                    parameter=arg.get("parameter", None),
+                    type=arg.get("type", "str"),
+                    nargs=arg.get("nargs", 1),
+                )
+                for arg in exe.get("args", [])
+            ],
+        )
+        for exe in data.get("executables", [])
+    ]
+    dashboards = [
+        Dashboard(name=d["name"], executables=d.get("executables", []))
+        for d in data.get("dashboards", [])
+    ]
+    return Config(executables=executables, dashboards=dashboards)
+
+
+def load_config_file(path: Path) -> Config:
+    with open(path) as f:
+        return load_config(yaml.safe_load(f))
