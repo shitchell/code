@@ -52,6 +52,7 @@ class Config:
 
 
 def load_config(data: dict) -> Config:
+    data = data or {}
     executables = [
         Executable(
             id=exe["id"],

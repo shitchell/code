@@ -95,6 +95,11 @@ def test_load_config_dashboards():
     assert config.dashboards[0].name == "Dev"
     assert config.dashboards[0].executables == ["foo"]
 
+def test_load_config_empty():
+    config = load_config({})
+    assert config.executables == []
+    assert config.dashboards == []
+
 def test_load_config_from_file(tmp_path):
     config_file = tmp_path / "dashboard.yaml"
     config_file.write_text(SAMPLE_YAML)
