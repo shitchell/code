@@ -17,6 +17,7 @@ executables:
         positional: true
         type: pathlib.Path
         nargs: 1
+        required: false
       - name: long
         positional: false
         type: bool
@@ -40,6 +41,7 @@ executables:
         positional: true
         type: pathlib.Path
         nargs: 1
+        required: false
       - name: human-readable
         positional: false
         type: bool

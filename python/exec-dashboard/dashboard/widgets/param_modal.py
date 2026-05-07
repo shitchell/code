@@ -107,6 +107,11 @@ class ParamModal(ModalScreen[dict[str, object] | None]):
                 values[arg.name] = self.query_one(f"#{widget_id}", Checkbox).value
                 continue
             raw = self.query_one(f"#{widget_id}", Input).value.strip()
+            if not raw:
+                if not arg.required:
+                    continue  # leave optional empty fields out of values
+                self.notify(f"'{arg.name}' is required", severity="error")
+                return
             try:
                 python_type = arg.python_type
                 if python_type is Path:
