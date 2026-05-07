@@ -52,4 +52,4 @@ async def run_executable(
     async for raw in proc.stdout:
         yield ("stdout", raw.decode(errors="replace").rstrip("\n"))
     await proc.wait()
-    yield ("exit", proc.returncode)
+    yield ("exit", proc.returncode if proc.returncode is not None else -1)
