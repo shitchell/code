@@ -74,3 +74,30 @@ def test_positional_before_flags():
     )
     result = build_argv(exe, {"output": "out.txt", "verbose": True})
     assert result == ["/bin/x", "out.txt", "-v"]
+
+
+import asyncio
+from dashboard.runner import run_executable
+
+
+async def test_run_captures_stdout():
+    exe = Executable(
+        id="echo",
+        name="Echo",
+        path="/bin/echo",
+        args=[Arg(name="msg", positional=True, type="str", nargs=1)],
+    )
+    items = [item async for item in run_executable(exe, {"msg": "hello"})]
+    assert ("stdout", "hello") in items
+
+
+async def test_run_returns_exit_code_zero():
+    exe = Executable(id="true", name="True", path="/bin/true")
+    items = [item async for item in run_executable(exe, {})]
+    assert ("exit", 0) in items
+
+
+async def test_run_nonzero_exit():
+    exe = Executable(id="false", name="False", path="/bin/false")
+    items = [item async for item in run_executable(exe, {})]
+    assert ("exit", 1) in items

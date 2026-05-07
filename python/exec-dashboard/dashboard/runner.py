@@ -1,4 +1,7 @@
 from __future__ import annotations
+import asyncio
+from asyncio.subprocess import PIPE, STDOUT
+from collections.abc import AsyncGenerator
 from dashboard.config import Executable
 
 
@@ -28,3 +31,25 @@ def build_argv(exe: Executable, values: dict[str, object]) -> list[str]:
             argv.extend([arg.derived_parameter, str(val)])
 
     return argv
+
+
+async def run_executable(
+    exe: Executable,
+    values: dict[str, object],
+) -> AsyncGenerator[tuple[str, str | int], None]:
+    """
+    Async generator yielding:
+      ("stdout", line_str)  for each output line
+      ("exit", code)        when process finishes
+    """
+    argv = build_argv(exe, values)
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=PIPE,
+        stderr=STDOUT,   # merge stderr into stdout
+    )
+    assert proc.stdout is not None
+    async for raw in proc.stdout:
+        yield ("stdout", raw.decode(errors="replace").rstrip("\n"))
+    await proc.wait()
+    yield ("exit", proc.returncode)
