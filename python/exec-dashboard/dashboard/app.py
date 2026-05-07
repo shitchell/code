@@ -105,7 +105,6 @@ class DashboardApp(App):
         exe = self._exe_map().get(exe_id)
         if exe is None:
             return
-        self._tracker.increment(exe_id)
         self.run_worker(self._handle_exe(exe), exclusive=False)
 
     async def _handle_exe(self, exe: Executable) -> None:
@@ -113,9 +112,10 @@ class DashboardApp(App):
         if exe.args:
             values = await self.push_screen_wait(ParamModal(exe))
             if values is None:
-                return
+                return  # cancelled — don't count as a run
         else:
             values = {}
+        self._tracker.increment(exe.id)
         log = self.query_one(LogPanel)
         log.begin_run(exe.name)
         async for kind, payload in run_executable(exe, values):
