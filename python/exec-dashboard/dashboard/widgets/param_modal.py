@@ -56,7 +56,13 @@ class ParamModal(ModalScreen[dict[str, object] | None]):
             yield Static(f"[bold]{self.exe.name}[/bold]", markup=True)
             for arg in self.exe.args:
                 with Vertical(classes="field"):
-                    yield Label(arg.name)
+                    if arg.nargs == 0:
+                        label_text = arg.name
+                    elif arg.required:
+                        label_text = f"{arg.name} [bold red]*[/bold red]"
+                    else:
+                        label_text = f"{arg.name} [dim](optional)[/dim]"
+                    yield Label(label_text, markup=True)
                     if arg.nargs == 0:
                         yield Checkbox(arg.name, id=f"arg_{arg.name}")
                     elif arg.python_type is Path:

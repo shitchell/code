@@ -45,6 +45,12 @@ executables:
         type: bool
         nargs: 0
         parameter: "-h"
+      - name: max-depth
+        positional: false
+        type: int
+        nargs: 1
+        parameter: "--max-depth"
+        required: false
 
 dashboards:
   - name: System Tools

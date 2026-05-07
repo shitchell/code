@@ -19,6 +19,7 @@ class Arg:
     parameter: str | None = None  # explicit flag; None = auto-derive
     type: str = "str"
     nargs: int | str = 1
+    required: bool = True
 
     @property
     def derived_parameter(self) -> str:
@@ -65,6 +66,7 @@ def load_config(data: dict) -> Config:
                     parameter=arg.get("parameter", None),
                     type=arg.get("type", "str"),
                     nargs=arg.get("nargs", 1),
+                    required=arg.get("required", True),
                 )
                 for arg in exe.get("args", [])
             ],
