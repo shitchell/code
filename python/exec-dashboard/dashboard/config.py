@@ -43,7 +43,8 @@ class Executable:
 @dataclass
 class Dashboard:
     name: str
-    executables: list[str]  # executable ids
+    executables: list[str]   # executable ids
+    default_sort: str = "config"
 
 
 @dataclass
@@ -74,7 +75,11 @@ def load_config(data: dict) -> Config:
         for exe in data.get("executables", [])
     ]
     dashboards = [
-        Dashboard(name=d["name"], executables=d.get("executables", []))
+        Dashboard(
+            name=d["name"],
+            executables=d.get("executables", []),
+            default_sort=d.get("default_sort", "config"),
+        )
         for d in data.get("dashboards", [])
     ]
     return Config(executables=executables, dashboards=dashboards)

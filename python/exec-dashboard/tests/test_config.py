@@ -106,3 +106,47 @@ def test_load_config_from_file(tmp_path):
     from dashboard.config import load_config_file
     config = load_config_file(config_file)
     assert config.executables[0].id == "foo"
+
+
+def test_dashboard_default_sort_defaults_to_config():
+    d = Dashboard(name="Dev", executables=["foo"])
+    assert d.default_sort == "config"
+
+
+def test_load_config_dashboard_default_sort():
+    import yaml
+    import textwrap
+
+    data = yaml.safe_load(
+        textwrap.dedent("""
+        executables:
+          - id: foo
+            name: Foo
+            path: /bin/foo
+        dashboards:
+          - name: Dev
+            executables: [foo]
+            default_sort: usage
+    """)
+    )
+    config = load_config(data)
+    assert config.dashboards[0].default_sort == "usage"
+
+
+def test_load_config_dashboard_sort_default_omitted():
+    import yaml
+    import textwrap
+
+    data = yaml.safe_load(
+        textwrap.dedent("""
+        executables:
+          - id: foo
+            name: Foo
+            path: /bin/foo
+        dashboards:
+          - name: Dev
+            executables: [foo]
+    """)
+    )
+    config = load_config(data)
+    assert config.dashboards[0].default_sort == "config"
