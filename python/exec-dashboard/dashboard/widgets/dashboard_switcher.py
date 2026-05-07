@@ -1,6 +1,7 @@
 from __future__ import annotations
 from textual import on
 from textual.app import ComposeResult
+from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, ListView
 from textual.containers import Vertical
@@ -62,6 +63,20 @@ class DashboardSwitcher(ModalScreen[str | None]):
         q = event.value.strip().lower()
         for item in self.query(_DashItem):
             item.display = not q or q in item.dash_name.lower()
+
+    @on(Input.Submitted)
+    def on_input_submitted(self) -> None:
+        """Enter in the filter box selects the first visible item."""
+        for item in self.query(_DashItem):
+            if item.display:
+                self.dismiss(item.dash_name)
+                return
+
+    def on_key(self, event: Key) -> None:
+        """Down arrow from the filter box moves focus to the list."""
+        if event.key == "down" and self.query_one(Input).has_focus:
+            self.query_one(ListView).focus()
+            event.prevent_default()
 
     @on(ListView.Selected)
     def on_selected(self, event: ListView.Selected) -> None:
