@@ -1,5 +1,4 @@
 from __future__ import annotations
-import asyncio
 from textual.app import App, ComposeResult
 from textual.command import Provider, Hit, Hits
 from textual.widgets import Button, Header, Footer
@@ -72,13 +71,12 @@ class DashboardApp(App):
             if exe:
                 yield Button(exe.name, id=f"exe_{exe.id}")
 
-    def switch_dashboard(self, name: str) -> None:
+    async def switch_dashboard(self, name: str) -> None:
         self._active_dashboard = name
         self.sub_title = name
         container = self.query_one("#buttons", ScrollableContainer)
-        container.remove_children()
-        for btn in self._build_buttons(name):
-            container.mount(btn)
+        await container.remove_children()
+        await container.mount(*list(self._build_buttons(name)))
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
@@ -96,7 +94,7 @@ class DashboardApp(App):
         else:
             values = {}
 
-        asyncio.create_task(self._run(exe, values))
+        self.run_worker(self._run(exe, values), exclusive=False)
 
     async def _run(self, exe: Executable, values: dict[str, object]) -> None:
         log = self.query_one(LogPanel)
