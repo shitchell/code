@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# clip.gpaste — GPaste D-Bus clipboard backend.
+#
+# The preferred libre backend on GNOME: gpaste-client talks to the GPaste
+# daemon over D-Bus, which is fast and reliable, unlike Mutter's Wayland
+# selection path (see clip.wl). This is the provider the dispatcher should
+# pick on a GNOME desktop.
+#
+# Provider contract (executable, +x):
+#   probe        -> "score N" then (if usable) "caps ..."
+#   get <type>   -> print clipboard content of <type> to stdout
+#   set <type>   -> store stdin as clipboard content of <type>
+#
+# This provider does NOT need clip::real_binary: gpaste-client is not one of
+# our shims, so there is no recursion risk.
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then "caps get:plain set:plain" when usable.
+      @return 0 always (an unusable backend still prints "score 0")
+  '
+  command -v gpaste-client >/dev/null 2>&1 || { echo "score 0"; return; }
+  # gpaste-client auto-activates the daemon over D-Bus, so we only need the
+  # client to respond — no separate pgrep on the daemon required.
+  gpaste-client --version >/dev/null 2>&1 || { echo "score 0"; return; }
+  local score=40
+  [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] && score=70
+  echo "score $score"
+  echo "caps get:plain set:plain"
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 type (plain)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   [[ "$2" == plain ]] && gpaste-client --use-index get 0 ;;
+    set)   [[ "$2" == plain ]] && gpaste-client add "$(cat)" ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
