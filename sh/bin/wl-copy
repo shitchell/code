@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# wl-copy — standard-name shim. Always a write; routes to clipin.
+# Thin by design — see the clip plan, Phase 4.
+exec clipin

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# xclip — standard-name shim. Routes the xclip dialect into our suite so tools
+# (tmux, vim, scripts) that call `xclip` transparently use clipin/clipout.
+#
+#   -o | -out  => read  (exec clipout)
+#   anything else (incl. -i/-in) => write (exec clipin)
+#
+# We only care about read-vs-write; selection/target flags are ignored (our
+# providers pick the best backend). Thin by design — see the clip plan, Phase 4.
+mode=write
+for a in "$@"; do
+  case "$a" in
+    -o|-ou|-out) mode=read ;;
+    -i|-in)      mode=write ;;
+  esac
+done
+[[ $mode == read ]] && exec clipout || exec clipin

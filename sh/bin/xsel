@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# xsel — standard-name shim. Routes the xsel dialect into our suite.
+#
+#   -o | -out (incl. `-b -o`) => read  (exec clipout)
+#   anything else             => write (exec clipin)
+#
+# xsel's -b/-p/-s select the X selection; we ignore them and only detect the
+# -o/--output read flag. Thin by design — see the clip plan, Phase 4.
+mode=write
+for a in "$@"; do
+  case "$a" in
+    -o|-ou|-out|--output) mode=read ;;
+    -i|-in|--input)       mode=write ;;
+  esac
+done
+[[ $mode == read ]] && exec clipout || exec clipin

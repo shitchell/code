@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# wl-paste — standard-name shim. Always a read; routes to clipout.
+#
+# Maps `-t text/html` to `clipout --format rich` (the trivial rich case); any
+# other -t/flags are dropped (plain text). Thin by design — see the clip plan,
+# Phase 4. MUST live here so tools calling `wl-paste` use our suite; providers
+# reach the REAL wl-paste via clip::real_binary --need-binary (no recursion).
+fmt=plain
+while (($#)); do
+  case "$1" in
+    -t|--type)
+      case "$2" in text/html) fmt=rich ;; esac
+      shift 2 ;;
+    -t*) case "${1#-t}" in text/html) fmt=rich ;; esac; shift ;;
+    --type=*) case "${1#--type=}" in text/html) fmt=rich ;; esac; shift ;;
+    *) shift ;;
+  esac
+done
+[[ $fmt == rich ]] && exec clipout --format rich || exec clipout
