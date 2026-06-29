@@ -12,3 +12,17 @@ EOF
   chmod +x "$dir/$1"
   export PATH="$dir:$PATH"
 }
+
+frontends_only_path() {
+  # Expose the suite's front-end commands (clipin/clipout/clipinout/clip) on a
+  # clean PATH that contains NONE of the real clip.<tag> providers, so negative
+  # and DWIM tests control which providers exist purely via make_provider.
+  # Symlinks preserve readlink -f resolution back to sh/bin (so the front-ends
+  # still source ../lib/clip.sh correctly).
+  local fe="$BATS_TEST_TMPDIR/fe" f
+  mkdir -p "$fe"
+  for f in clipin clipout clipinout clip; do
+    ln -sf "$BATS_TEST_DIRNAME/../../sh/bin/$f" "$fe/$f"
+  done
+  export PATH="$fe:/usr/bin:/bin"
+}

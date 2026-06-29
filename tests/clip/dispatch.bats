@@ -22,6 +22,27 @@ setup() { load helpers; source "$BATS_TEST_DIRNAME/../../sh/lib/clip.sh"; }
   [[ "$output" == *"no provider for get:image"* ]]
 }
 
+@test "a provider that drains stdin during probe does not truncate enumeration" {
+  # Regression: real backends like gpaste-client read stdin. The dispatcher
+  # feeds the provider list on the probe loop's stdin via process substitution,
+  # so a stdin-draining provider would eat the remaining provider names and
+  # truncate enumeration unless the probe call has its stdin redirected.
+  local dir="$BATS_TEST_TMPDIR/bin"; mkdir -p "$dir"
+  cat > "$dir/clip.aaa" <<'EOF'
+#!/bin/bash
+case "$1" in
+  probe) cat >/dev/null; echo "score 10"; echo "caps get:plain set:plain" ;;
+  get)   printf 'AAA' ;;
+esac
+EOF
+  chmod +x "$dir/clip.aaa"          # sorts first; drains stdin in probe
+  export PATH="$dir:$PATH"
+  make_provider clip.zzz 90 "get:plain set:plain" "ZZZVAL"   # sorts last
+  run clip::dispatch get plain
+  [ "$status" -eq 0 ]
+  [ "$output" = "ZZZVAL" ]
+}
+
 @test "real_binary skips our shim (in HOME) and returns the system binary" {
   # fake a shim under a HOME-like dir and a 'real' one elsewhere
   HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/code/sh/bin" "$BATS_TEST_TMPDIR/usr"

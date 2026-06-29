@@ -1,4 +1,4 @@
-setup() { load helpers; export PATH="$BATS_TEST_DIRNAME/../../sh/bin:$PATH"; }
+setup() { load helpers; frontends_only_path; }
 
 @test "clipin from args" {
   make_provider clip.g 70 "get:plain set:plain" ""
