@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# clip.xsel — xsel (X11 / XWayland) backend.
+#
+# A baseline X11 backend. On a Wayland session it runs against XWayland, whose
+# clipboard may or may not mirror the Wayland selection; it requires $DISPLAY.
+#
+# We reach the REAL xsel via clip::real_binary so the provider never recurses
+# into an xsel shim. Sourced directly (not via include-source) for the same
+# worktree reason described in clip.wl.
+source "$(dirname "$(readlink -f "$0")")/../lib/clip.sh"
+
+XSEL="$(clip::real_binary xsel)"
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable. 0 without an X display.
+      @return 0 always
+  '
+  [[ -n "$DISPLAY" && -n "$XSEL" ]] || { echo "score 0"; return; }
+  echo "score 50"
+  echo "caps get:plain set:plain"
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 type (plain)
+  '
+  case "$1" in
+    probe) probe ;;
+    get) [[ "$2" == plain ]] && "$XSEL" -ob ;;
+    set) [[ "$2" == plain ]] && "$XSEL" -ib ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
