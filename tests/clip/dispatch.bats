@@ -14,3 +14,10 @@ setup() { load helpers; source "$BATS_TEST_DIRNAME/../../sh/lib/clip.sh"; }
   run clip::dispatch get rich
   [ "$status" -eq 0 ]; [ "$output" = "RICH40" ]
 }
+
+@test "image with no provider errors with hint and exit 3" {
+  make_provider clip.txt 50 "get:plain set:plain" "X"
+  run clip::dispatch get image
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"no provider for get:image"* ]]
+}
