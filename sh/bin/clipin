@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# clipin — copy args (or stdin) to the clipboard as plain text.
+#
+# See clipout for why we source the dispatcher directly rather than via
+# include-source (include-source does not reliably resolve this worktree's
+# sh/lib/clip.sh).
+source "$(dirname "$(readlink -f "$0")")/../lib/clip.sh"
+
+main() {
+  : 'Copy CLI args (joined by spaces) or stdin to the clipboard.
+
+      @arg $@ optional text to copy; if absent, read from stdin
+      @stdin  text to copy when no args are given
+      @return passthrough from clip::dispatch set plain (3 if no provider)
+  '
+  if (($#)); then
+    printf '%s' "$*" | clip::dispatch set plain
+  else
+    clip::dispatch set plain
+  fi
+}
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
