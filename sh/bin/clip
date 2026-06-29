@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# clip — DWIM clipboard: piped/redirected input => clipin ; otherwise => clipout.
+#
+# See clipout for why we source the dispatcher directly rather than via
+# include-source. `clip` itself delegates to the clipin/clipout front-ends, but
+# sourcing keeps it consistent with the suite and available for future use.
+source "$(dirname "$(readlink -f "$0")")/../lib/clip.sh"
+
+main() {
+  : 'Route to clipin when stdin carries input, else clipout (image DWIM).
+
+      Input detection: a pipe or a regular-file redirect on stdin means "copy"
+      (clipin). A tty or an empty char device (e.g. /dev/null) means "paste"
+      (clipout). On paste, prefer text; if the clipboard holds non-text and
+      stdout is redirected, emit the raw image bytes; otherwise print a hint.
+
+      @stdin  text to copy (copy mode only)
+      @stdout clipboard content (paste mode)
+      @return 0 on success; 3 when non-text and stdout is a tty
+  '
+  if [[ -p /dev/stdin || -f /dev/stdin ]]; then
+    exec clipin "$@"
+  fi
+  # Paste mode. Prefer text.
+  if clipout 2>/dev/null; then
+    return 0
+  fi
+  # No text available — image DWIM.
+  if [[ ! -t 1 ]]; then
+    clipout --image
+  else
+    echo "clip: clipboard holds non-text; redirect for bytes or use 'clipout --image'" >&2
+    return 3
+  fi
+}
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

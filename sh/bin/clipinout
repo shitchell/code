@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# clipinout — copy args (or stdin) to the clipboard, then print it back.
+#
+# Delegates to the clipin/clipout front-ends (found on PATH). Using `exec` here
+# would replace this process with clipin and never reach clipout, so we run them
+# as an ordinary && pipeline instead.
+clipin "$@" && clipout
