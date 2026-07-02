@@ -26,10 +26,10 @@ teardown() {
   [ "$score" -ge 40 ]
 }
 
-@test "clip.gpaste scores 70 on GNOME" {
+@test "clip.gpaste scores 50 on GNOME (fallback below clip.wl)" {
   [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] || skip "not GNOME"
   run clip.gpaste probe
-  [[ "$output" == *"score 70"* ]]
+  [[ "$output" == *"score 50"* ]]
 }
 
 @test "clip.gpaste round-trips plain text" {

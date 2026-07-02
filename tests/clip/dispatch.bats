@@ -43,6 +43,42 @@ EOF
   [ "$output" = "ZZZVAL" ]
 }
 
+@test "both providers present: wl (70) wins plain over gpaste (50)" {
+  # Task B: wl-clipboard is the chosen primary and must out-score gpaste where
+  # both exist. Fakes model the new scores/caps deterministically.
+  make_provider clip.wl     70 "get:plain set:plain get:rich set:rich get:image set:image" "WLVAL"
+  make_provider clip.gpaste 50 "get:plain set:plain" "GPVAL"
+  run clip::dispatch get plain
+  [ "$status" -eq 0 ]
+  [ "$output" = "WLVAL" ]
+}
+
+@test "both providers present: rich routes to wl (only wl offers it)" {
+  make_provider clip.wl     70 "get:plain set:plain get:rich set:rich get:image set:image" "WLRICH"
+  make_provider clip.gpaste 50 "get:plain set:plain" "GPVAL"
+  run clip::dispatch get rich
+  [ "$status" -eq 0 ]
+  [ "$output" = "WLRICH" ]
+}
+
+@test "both providers present: image routes to wl (only wl offers it)" {
+  make_provider clip.wl     70 "get:plain set:plain get:rich set:rich get:image set:image" "WLIMG"
+  make_provider clip.gpaste 50 "get:plain set:plain" "GPVAL"
+  run clip::dispatch get image
+  [ "$status" -eq 0 ]
+  [ "$output" = "WLIMG" ]
+}
+
+@test "gpaste-only box (wl scores 0): gpaste still wins plain" {
+  # On a machine with gpaste but no wl-* binaries, clip.wl probes score 0 and is
+  # ineligible, so gpaste is selected for plain.
+  make_provider clip.wl     0  "" ""
+  make_provider clip.gpaste 50 "get:plain set:plain" "GPVAL"
+  run clip::dispatch get plain
+  [ "$status" -eq 0 ]
+  [ "$output" = "GPVAL" ]
+}
+
 @test "real_binary skips our shim (in HOME) and returns the system binary" {
   # fake a shim under a HOME-like dir and a 'real' one elsewhere
   HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/code/sh/bin" "$BATS_TEST_TMPDIR/usr"

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # clip.gpaste — GPaste D-Bus clipboard backend.
 #
-# The preferred libre backend on GNOME: gpaste-client talks to the GPaste
-# daemon over D-Bus, which is fast and reliable, unlike Mutter's Wayland
-# selection path (see clip.wl). This is the provider the dispatcher should
-# pick on a GNOME desktop.
+# gpaste-client talks to the GPaste daemon over D-Bus (fast, reliable). It used
+# to be the preferred GNOME backend, but per the Task B decision clip.wl is now
+# the chosen primary (it alone offers rich/image, and the dispatcher's timeout +
+# fallback covers wl stalls). gpaste is kept as a lower-priority PLAIN-ONLY
+# fallback: it scores 50 on GNOME, below clip.wl's 70, so it only wins when wl
+# is unavailable (no wl-* binaries) or when wl fails and the dispatcher falls
+# back to it.
 #
 # Provider contract (executable, +x):
 #   probe        -> "score N" then (if usable) "caps ..."
@@ -25,7 +28,7 @@ probe() {
   # client to respond — no separate pgrep on the daemon required.
   gpaste-client --version >/dev/null 2>&1 || { echo "score 0"; return; }
   local score=40
-  [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] && score=70
+  [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] && score=50   # fallback, below clip.wl (70)
   echo "score $score"
   echo "caps get:plain set:plain"
 }

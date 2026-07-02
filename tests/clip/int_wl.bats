@@ -1,7 +1,8 @@
 # Integration tests for clip.wl — run on a Wayland machine.
 #
-# The important assertion here is clip.wl's SELF-RATING: on GNOME/Mutter it must
-# report a LOW score (20) so clip.gpaste wins. That needs no clipboard round-trip.
+# The important assertion here is clip.wl's SELF-RATING: wl-clipboard is now the
+# chosen PRIMARY backend, so it must rate HIGH even on GNOME (score 70), out-
+# scoring gpaste (see Task B). That needs no clipboard round-trip.
 #
 # The round-trip itself CAN STALL 30-50s on GNOME/Mutter (the bug this project
 # came from), so it is wrapped in `timeout` and skipped on a stall — never let it
@@ -21,11 +22,11 @@ teardown() {
   fi
 }
 
-@test "clip.wl probe scores LOW (20) on GNOME/Mutter" {
+@test "clip.wl probe scores HIGH (70) on GNOME (chosen primary)" {
   [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] || skip "not GNOME"
   run clip.wl probe
   [ "$status" -eq 0 ]
-  [[ "$output" == *"score 20"* ]]
+  [[ "$output" == *"score 70"* ]]
   [[ "$output" == *"get:plain"* ]]
 }
 
