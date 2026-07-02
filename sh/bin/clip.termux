@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# clip.termux — Android/Termux clipboard backend, via termux-clipboard-*.
+#
+# UNTESTED: authored without a Termux device available. Trivial per the plan
+# (termux-clipboard-get reads, termux-clipboard-set writes). Requires the
+# Termux:API app + termux-api package. Plain text only.
+#
+# Provider contract (executable, +x):
+#   probe        -> "score N" then (if usable) "caps ..."
+#   get <type>   -> print clipboard content of <type> to stdout
+#   set <type>   -> store stdin as clipboard content of <type>
+#
+# No clip::real_binary needed: termux-clipboard-* are not among our shims.
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then "caps get:plain set:plain" when usable.
+      @return 0 always (an unusable backend still prints "score 0")
+  '
+  command -v termux-clipboard-get >/dev/null 2>&1 || { echo "score 0"; return; }
+  echo "score 70"
+  echo "caps get:plain set:plain"
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 type (plain)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   [[ "$2" == plain ]] && termux-clipboard-get ;;
+    set)   [[ "$2" == plain ]] && termux-clipboard-set ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

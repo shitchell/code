@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# clip.macos — macOS clipboard backend, via pbcopy/pbpaste.
+#
+# UNTESTED: authored without a Mac available. The logic is trivial (pbpaste
+# reads, pbcopy writes) and matches the Phase 3 Task 12 plan, but it has NOT
+# been exercised on real hardware. Verify on a Mac before relying on it.
+#
+# Basic v1: plain text only. pbpaste/pbcopy are line-oriented text tools; rich
+# (HTML/RTF) and image would require `osascript` or `pbpaste -Prefer` handling
+# and are intentionally out of scope for this unit.
+#
+# Provider contract (executable, +x):
+#   probe        -> "score N" then (if usable) "caps ..."
+#   get <type>   -> print clipboard content of <type> to stdout
+#   set <type>   -> store stdin as clipboard content of <type>
+#
+# This provider does NOT need clip::real_binary: pbcopy/pbpaste are not among
+# our shims, so there is no recursion risk. (pbcopy/pbpaste shims exist as
+# front-end wrappers, but those are separate names; the real Apple binaries
+# live in /usr/bin.)
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then "caps get:plain set:plain" when usable.
+      @return 0 always (an unusable backend still prints "score 0")
+  '
+  [[ "$(uname)" == Darwin ]] || { echo "score 0"; return; }
+  command -v pbpaste >/dev/null 2>&1 || { echo "score 0"; return; }
+  echo "score 70"
+  echo "caps get:plain set:plain"
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 type (plain)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   [[ "$2" == plain ]] && pbpaste ;;
+    set)   [[ "$2" == plain ]] && pbcopy ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
