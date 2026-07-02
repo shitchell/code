@@ -47,15 +47,24 @@ teardown() {
   [[ "$output" != "$HOME"/bin/* ]] || false
 }
 
+# NOTE on the `set` stages: wl-copy DAEMONIZES (forks a background process that
+# keeps holding the selection) and inherits the command's stdout/stderr. If we
+# let `run` capture that output over a pipe, `run` blocks on the forked child's
+# open fd even after `timeout` kills the foreground wl-copy — so the test would
+# hang past its own timeout. We therefore feed input from a file and redirect
+# the set stage's stdout+stderr to /dev/null, so the forked daemon holds no fd
+# that `run` is waiting on and the timeout can actually fire + skip.
+
 @test "clip.wl round-trips plain text (timeout-guarded; skips on Mutter stall)" {
-  export VAL="rt-wl-$$-$RANDOM"
-  run bash -c 'printf "%s" "$VAL" | timeout 60 clip.wl set plain'
+  local val="rt-wl-$$-$RANDOM" f="$BATS_TEST_TMPDIR/plain.txt"
+  printf '%s' "$val" > "$f"
+  run bash -c "timeout 60 clip.wl set plain < '$f' >/dev/null 2>&1"
   if [ "$status" -eq 124 ]; then skip "wl set stalled (known Mutter issue)"; fi
   [ "$status" -eq 0 ]
   run timeout 60 clip.wl get plain
   if [ "$status" -eq 124 ]; then skip "wl get stalled (known Mutter issue)"; fi
   [ "$status" -eq 0 ]
-  [ "$output" = "$VAL" ]
+  [ "$output" = "$val" ]
 }
 
 @test "clip.wl round-trips a PNG image (timeout-guarded; skips on Mutter stall)" {
@@ -65,7 +74,7 @@ teardown() {
   local png="$BATS_TEST_TMPDIR/px.png"
   # 1x1 transparent PNG (base64).
   printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPgPAAEEAQB9ssjfAAAAAElFTkSuQmCC' | base64 -d > "$png"
-  run bash -c "timeout 30 clip.wl set image < '$png'"
+  run bash -c "timeout 30 clip.wl set image < '$png' >/dev/null 2>&1"
   if [ "$status" -eq 124 ]; then skip "wl set image stalled (known Mutter issue)"; fi
   [ "$status" -eq 0 ]
   run bash -c "timeout 30 clip.wl get image | cmp -s - '$png'"
