@@ -29,6 +29,15 @@ teardown() {
   [[ "$output" == *"get:plain"* ]]
 }
 
+@test "clip.wl probe advertises image caps" {
+  # Task A: wl-clipboard is the formatting-capable primary, so it must offer
+  # image round-tripping. Caps-only assertion — no clipboard round-trip needed.
+  run clip.wl probe
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"get:image"* ]]
+  [[ "$output" == *"set:image"* ]]
+}
+
 @test "clip.wl resolves a real (non-shim) wl-paste binary" {
   # Recursion guard: the backend must reach a real binary, not our own shim.
   source "$BATS_TEST_DIRNAME/../../sh/lib/clip.sh"
@@ -46,4 +55,19 @@ teardown() {
   if [ "$status" -eq 124 ]; then skip "wl get stalled (known Mutter issue)"; fi
   [ "$status" -eq 0 ]
   [ "$output" = "$VAL" ]
+}
+
+@test "clip.wl round-trips a PNG image (timeout-guarded; skips on Mutter stall)" {
+  # Task A: optional real round-trip. Uses a tiny 1x1 PNG. The daemon on this
+  # box is finicky, so every wl call is timeout-guarded and skips on stall; the
+  # clipboard is restored from SAVED_CLIP in teardown.
+  local png="$BATS_TEST_TMPDIR/px.png"
+  # 1x1 transparent PNG (base64).
+  printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPgPAAEEAQB9ssjfAAAAAElFTkSuQmCC' | base64 -d > "$png"
+  run bash -c "timeout 30 clip.wl set image < '$png'"
+  if [ "$status" -eq 124 ]; then skip "wl set image stalled (known Mutter issue)"; fi
+  [ "$status" -eq 0 ]
+  run bash -c "timeout 30 clip.wl get image | cmp -s - '$png'"
+  if [ "$status" -eq 124 ]; then skip "wl get image stalled (known Mutter issue)"; fi
+  [ "$status" -eq 0 ]
 }
