@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# clip.wsl — Windows clipboard backend for WSL, via PowerShell.
+#
+# Bridges the WSL Linux clipboard suite to the real Windows clipboard using
+# PowerShell's Get-Clipboard / Set-Clipboard. Plain + rich (HTML). Image is not
+# implemented (see caps below); it is left for a future unit.
+#
+# THE ORIGINAL BUG THIS MUST NOT REPRODUCE:
+#   On this WSL box, opening micro used to WIPE the Windows clipboard because a
+#   *read* was mis-dispatched to a *write*. Here, `get` is a PURE READ: it only
+#   runs Get-Clipboard and must leave the clipboard byte-for-byte unchanged.
+#   The integration test (tests/clip/int_wsl.bats) asserts exactly this.
+#
+# PowerShell resolution (CRITICAL for SSH):
+#   In non-interactive SSH shells, powershell.exe is often NOT on PATH. We fall
+#   back to its absolute System32 location. Without this fallback, probe would
+#   report score 0 over SSH even though PowerShell is present.
+#
+# Prior art folded in (from ~/code/wsl/bin on the WSL box):
+#   - clipout.exe:  `powershell.exe -command 'Get-Clipboard -Raw' | tr -d '\r\0'`
+#   - clipin.exe:   Set-Clipboard with single-quote escaping ('  ->  '')
+#
+# Provider contract (executable, +x):
+#   probe        -> "score N" then (if usable) "caps ..."
+#   get <type>   -> print clipboard content of <type> to stdout
+#   set <type>   -> store stdin as clipboard content of <type>
+#
+# This provider does NOT need clip::real_binary: powershell.exe is not one of
+# our shims, so there is no recursion risk.
+
+PSH="$(command -v powershell.exe || echo /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe)"
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then "caps ..." when usable (plain + rich).
+      @return 0 always (an unusable backend still prints "score 0")
+  '
+  grep -qi microsoft /proc/version 2>/dev/null || { echo "score 0"; return; }
+  [[ -x "$PSH" ]] || { echo "score 0"; return; }
+  echo "score 70"
+  # NOTE: no get:image — image is not implemented in this unit.
+  echo "caps get:plain set:plain get:rich set:rich"
+}
+
+clip_get() {
+  : 'Read the Windows clipboard. PURE READ — never mutates the clipboard.
+
+      @arg $1 type (plain|rich)
+      @stdout clipboard content
+  '
+  case "$1" in
+    plain)
+      # -Raw preserves internal newlines as a single string. tr strips the CRs
+      # PowerShell emits (CRLF) and any stray NULs, matching clipout.exe.
+      "$PSH" -NoProfile -Command 'Get-Clipboard -Raw' | tr -d '\r\0'
+      ;;
+    rich)
+      # Best-effort HTML. If no HTML is on the clipboard this yields empty.
+      "$PSH" -NoProfile -Command 'Get-Clipboard -TextFormatType Html' | tr -d '\r\0'
+      ;;
+  esac
+}
+
+clip_set() {
+  : 'Write stdin to the Windows clipboard.
+
+      @arg $1 type (plain|rich)
+      @stdin content to store
+  '
+  local content
+  # Read ALL of stdin, including a possible lack of trailing newline. Command
+  # substitution strips trailing newlines, which is the desired clipboard
+  # behavior (Windows tools do not preserve a trailing newline either).
+  content="$(cat)"
+  case "$1" in
+    plain)
+      # Escape for a PowerShell single-quoted string: a literal ' becomes ''.
+      # This is the exact escaping clipin.exe used and is safe for arbitrary
+      # text (single-quoted strings do not interpret $, backticks, etc.).
+      local escaped="${content//\'/\'\'}"
+      "$PSH" -NoProfile -Command "Set-Clipboard -Value '${escaped}'"
+      ;;
+    rich)
+      # Best-effort: store the HTML as the clipboard's text value. Registering a
+      # true CF_HTML flavor is out of scope for this unit; keep it simple.
+      local escaped="${content//\'/\'\'}"
+      "$PSH" -NoProfile -Command "Set-Clipboard -Value '${escaped}'"
+      ;;
+  esac
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 type (plain|rich)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   clip_get "$2" ;;
+    set)   clip_set "$2" ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
