@@ -6,110 +6,28 @@
 ## imports #####################################################################
 ################################################################################
 
-include-source 'debug.sh'
+include-source 'parseargs.sh'
 
 
-## exit codes ##################################################################
+## options #####################################################################
 ################################################################################
 
-declare -ri E_SUCCESS=0
-declare -ri E_ERROR=1
-
-
-## usage functions #############################################################
-################################################################################
-
-function help-usage() {
-    # {{TODO: UPDATE USAGE}}
-    echo "usage: $(basename "${0}") [-h]"
-}
-
-function help-epilogue() {
-    # {{TODO: UPDATE EPILOGUE}}
-    echo "escape regular expression characters in a string"
-}
-
-function help-full() {
-    help-usage
-    help-epilogue
-    echo
-    echo "Some extra info."
-    echo
-    echo "Options:"
-    cat << EOF
-    -h                display usage
-    --help            display this help message
-    -E/--extended     escape characters for an extended regular expression
-    -B/--basic        escape characters for a basic regular expression
-    -P/--perl         escape characters for a Perl regular expression
-    -A/--awk          escape characters for an awk regular expression
-    -J/--javascript   escape characters for a JavaScript regular expression
-EOF
-}
-
-function parse-args() {
-    # Default values
-    STRING=""
-    REGEX_TYPE="extended"
-
-    # Loop over the arguments
-    while [[ ${#} -gt 0 ]]; do
-        case ${1} in
-            -h)
-                help-usage
-                help-epilogue
-                exit ${E_SUCCESS}
-                ;;
-            --help)
-                help-full
-                exit ${E_SUCCESS}
-                ;;
-            -E | --extended)
-                REGEX_TYPE="extended"
-                ;;
-            -B | --basic)
-                REGEX_TYPE="basic"
-                ;;
-            -P | --perl)
-                REGEX_TYPE="perl"
-                ;;
-            -A | --awk)
-                REGEX_TYPE="awk"
-                ;;
-            -J | --javascript)
-                REGEX_TYPE="javascript"
-                ;;
-            --)
-                shift 1
-                break
-                ;;
-            -*)
-                echo "error: unknown option: ${1}" >&2
-                return ${E_ERROR}
-                ;;
-            *)
-                [[ -n "${STRING}" ]] && STRING+=" "
-                STRING+="${1}"
-                ;;
-        esac
-        shift 1
-    done
-
-    # If -- was used, collect the remaining arguments
-    while [[ ${#} -gt 0 ]]; do
-        [[ -n "${STRING}" ]] && STRING+=" "
-        STRING+="${1}"
-        shift 1
-    done
-
-    # Ensure a string was provided
-    if [[ -z "${STRING}" ]]; then
-        echo "error: no string provided" >&2
-        help-usage >&2
-        return ${E_ERROR}
-    fi
-
-    return ${E_SUCCESS}
+function setup-options() {
+    parseargs-set-usage "usage: $(basename "${0}") [-h] [-E|-B|-P|-A|-J] [--] STRING..."
+    parseargs-set-help "escape regular expression characters in a string"
+    parseargs-add-flag "-E/--extended" --const extended --store REGEX_TYPE \
+        --default extended \
+        --help "escape characters for an extended regular expression"
+    parseargs-add-flag "-B/--basic" --const basic --store REGEX_TYPE \
+        --help "escape characters for a basic regular expression"
+    parseargs-add-flag "-P/--perl" --const perl --store REGEX_TYPE \
+        --help "escape characters for a Perl regular expression"
+    parseargs-add-flag "-A/--awk" --const awk --store REGEX_TYPE \
+        --help "escape characters for an awk regular expression"
+    parseargs-add-flag "-J/--javascript" --const javascript --store REGEX_TYPE \
+        --help "escape characters for a JavaScript regular expression"
+    parseargs-add-positional "STRING" --optional \
+        --help "the string to escape (multiple args are joined with spaces)"
 }
 
 
@@ -160,17 +78,27 @@ function escape-perl() {
 ################################################################################
 
 function main() {
-    parse-args "${@}" || return ${?}
+    setup-options
+    parseargs-parse-or-exit "${@}"
+
+    local string="${PARSEARGS_POSARGS[*]}"
+
+    # Ensure a string was provided
+    if [[ -z "${string}" ]]; then
+        echo "error: no string provided" >&2
+        echo "${PARSEARGS_USAGE}" >&2
+        return ${E_MISSING_ARGUMENT}
+    fi
 
     # Try to find the escape function
-    local escape_function="escape-${REGEX_TYPE}"
-    if ! declare -f "${escape_function}" &>/dev/null; then
-        echo "error: unknown regex type: ${REGEX_TYPE}" >&2
-        return ${E_ERROR}
+    local escape_function="escape-${PARSEARGS_OPTS[REGEX_TYPE]}"
+    if ! declare -F "${escape_function}" &>/dev/null; then
+        echo "error: unknown regex type: ${PARSEARGS_OPTS[REGEX_TYPE]}" >&2
+        return ${E_UNKNOWN_VALUE}
     fi
 
     # Escape the string
-    "${escape_function}" "${STRING}"
+    "${escape_function}" "${string}"
 }
 
 
