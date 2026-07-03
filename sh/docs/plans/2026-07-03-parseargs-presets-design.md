@@ -107,3 +107,41 @@ TDD (red/green) into `lib/tests/parseargs-presets.bats` +
 green. Then refactor `bin/srt-format` against its characterization suite,
 updating the accepted-delta tests (exit codes, error wording, KNOWN BUG
 fixes) deliberately.
+
+## Migrating a script (the recipe)
+
+Refactored so far: `srt-format` (324->180), `regescape` (181->113),
+`find-mimetype` (195->128). `markdown-table` has a suite but is deferred
+(needs pattern options / attached short values). Each migration:
+
+1. **Characterize first.** Write `bin/bats/<script>.bats` pinning stdout,
+   stderr, and exit codes for happy paths, error paths, and edge cases.
+   Capture goldens by RUNNING the current script, not by reading it.
+   Pin discovered bugs as `KNOWN BUG` tests. Green against the untouched
+   script before refactoring.
+2. **Map the options.**
+   - value options            -> `parseargs-add-parameter` (+ `--choices`,
+                                 `--type`, `--default`)
+   - repeatable value options -> `--repeat` (accumulates into the
+                                 store-named global array)
+   - mode-selection flags     -> `--const` flags sharing a `--store`
+   - counted flags            -> `--count`
+   - `-c/--color`, `--config-file` -> `parseargs-include colors config`
+   - `-s/--silent`, `-v/--verbose` -> free (built-ins); define your own to
+                                      claim the names
+   - positional args          -> `parseargs-add-positional` (`--optional`);
+                                 read `PARSEARGS_POSARGS`
+3. **Structure**: `include-source 'parseargs.sh'`, a `setup-options`
+   function (set-usage/-help/-epilog + registrations), core functions
+   untouched, `main` starts with `setup-options; parseargs-parse-or-exit
+   "${@}"`.
+4. **Update the deltas deliberately**: parseargs error wording,
+   granular E_* exit codes, generated help (loose pins recommended:
+   first usage line + key content). Flip `KNOWN BUG` tests to `FIXED`.
+5. Commit the script + suite together; bump the lib submodule if lib
+   features were added.
+
+Accepted standard deltas: `Error: Unknown option: X` + E_UNKNOWN_OPTION(15),
+`Error: Invalid value ...` + E_INVALID_VALUE(16), E_HELP_DISPLAYED handled
+by parse-or-exit (exit 0), -h prints the full generated help (no short
+variant), choices validated on CLI values only (config/env values bypass).
