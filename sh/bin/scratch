@@ -64,28 +64,53 @@ EOF
     cat << EOF
     -h                  display usage
     --help              display this help message
+    --config-file <file>
+                        use the specified configuration file, defaults to
+                        ~/.$(basename "${0}").conf
     -e / --editor       the editor to use, defaults to the value of the EDITOR
                         environment variable
     -d / --dir <dir>    the directory to use for the scratch directory, defaults
                         to the directory used by \`mktemp\`. if no argument is
                         given, prints the scratch directory and exits
-    -u / --user-dirs    create \`scratch-<uid>\` directories in the scratch dir
     -u / --unique       guarantees a unique, unused scratch file
     -l / --last         use the last modified scratch file
-    -e / --exec <cmd>   execute the specified command on the scratch file
+    -x / --exec <cmd>   execute the specified command on the scratch file
     -I <string>         replace \`<string>\` with the scratch file in the
                         command, e.g.: \`scratch -I {} --exec "cp {} ~/"\`
     --no-exec           do not execute the specified command on the scratch file
 EOF
     echo "* to be implemented"
+    echo
+    echo "Configuration:"
+    cat << EOF
+    The config file is a bash script sourced before defaults are applied, so
+    values set there override the environment, and command line options
+    override the config file. Supported variables:
+        SCRATCH_DIR     the scratch directory
+        EDITOR          the editor to use
+        PAGER           the pager to use
+        SUMMARY_LENGTH  max preview length for --list
+EOF
 }
 
 function parse-args() {
+    # Parse the arguments first for a config file to load default values from
+    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
+    for ((i=0; i<${#}; i++)); do
+        case "${!i}" in
+            --config-file)
+                let i++
+                CONFIG_FILE="${!i}"
+                ;;
+        esac
+    done
+    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
+
     # Default values
     EDITOR="${EDITOR:-vi}"
     PAGER="${PAGER:-less}"
     TMP_DIR=$(dirname "$(mktemp -u)")
-    SCRATCH_DIR="${TMP_DIR}/scratch-$(id -u)"
+    SCRATCH_DIR="${SCRATCH_DIR:-${TMP_DIR}/scratch-$(id -u)}"
     FILENAME=$(date +%Y%m%d)
     DO_SUMMARY=1
     DEFAULT_ACTION="scratch"
@@ -93,10 +118,10 @@ function parse-args() {
     # actions: scratch, view, exec, clear, rmdir, list, rm, page, rename
     EXEC_CMD=""
     EXEC_PLACEHOLDER=""
-    SUMMARY_LENGTH=50
+    SUMMARY_LENGTH="${SUMMARY_LENGTH:-50}"
     RENAME_OLD=""
     RENAME_NEW=""
-    
+
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
@@ -108,6 +133,10 @@ function parse-args() {
             --help)
                 help-full
                 exit 0
+                ;;
+            --config-file)
+                # already handled in the pre-parse loop above
+                shift
                 ;;
             -e | --editor)
                 EDITOR="${2}"
@@ -139,7 +168,7 @@ function parse-args() {
                 ACTION="page"
                 shift
                 ;;
-            -e | --exec)
+            -x | --exec)
                 if [[ -z "${2}" ]]; then
                     echo-stderr "no command specified"
                     exit 1
@@ -149,7 +178,7 @@ function parse-args() {
                 shift
                 ;;
             --no-exec)
-                ACTION="${DEFAULT_ACTION}}"
+                ACTION="${DEFAULT_ACTION}"
                 ;;
             -I)
                 if [[ -z "${2}" ]]; then
@@ -276,7 +305,7 @@ function list-files() {
     fi
 
     # List the files in the directory
-    (    
+    (
         cd "${directory}"
         shopt -s nullglob
         filepaths=( * )
@@ -340,7 +369,7 @@ function bytes-to-human-readable() {
     local units=( B KiB MiB GiB TiB PiB EiB ZiB YiB )
     local unit_index=0
     local unit
-    
+
     # Default values
     local bytes
     local precision=2
@@ -419,14 +448,9 @@ function main() {
     # Create the scratch directory if it doesn't exist
     if [ ! -d "${SCRATCH_DIR}" ]; then
         mkdir -p "${SCRATCH_DIR}"
-    fi
-
-    # Create the scratch directory if it doesn't exist
-    if [ ! -d "${SCRATCH_DIR}" ]; then
-        mkdir -p "${SCRATCH_DIR}"
         # Ensure the scratch directory is readable and writable only by the
         # current user
-        chmod -R 600 "${SCRATCH_DIR}" 2>/dev/null
+        chmod 700 "${SCRATCH_DIR}" 2>/dev/null
     fi
 
     # Do the thing
