@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# fbterm-session - launch the framebuffer terminal session
+#
+# Paints ${FBTERM_BG} (a raw /dev/fb0 dump, see fbterm-genbg) onto the
+# framebuffer if set, then execs fbterm running an auto-attach tmux session.
+# Invoked from ~/.profile on /dev/tty${FBTERM_TTY:-2}.
+#
+# Environment:
+#   FBTERM_BG            path to a raw fb0 dump (per-machine, ~/.profile.local)
+#   FBTERM_TMUX_SESSION  tmux session name (default: tty)
+#
+# Note: detaching tmux exits fbterm; with getty autologin on the VT, the
+# session respawns and re-attaches immediately (by design — immortal session).
+#
+# Design: ~/Documents/notes/docs/plans/2026-07-04-cli-boot-fbterm-design.md
+
+if [ -n "${FBTERM_BG:-}" ] && [ -r "${FBTERM_BG}" ]; then
+	cat "${FBTERM_BG}" > /dev/fb0 2>/dev/null
+fi
+export FBTERM_BACKGROUND_IMAGE=1
+
+# console-init race guard (kept from the original tty1 setup)
+sleep .5
+
+exec fbterm -- tmux new-session -A -s "${FBTERM_TMUX_SESSION:-tty}"

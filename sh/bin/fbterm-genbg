@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# fbterm-genbg - generate a per-machine fbterm background from an image
+#
+# usage: fbterm-genbg <image> [tty-number]
+#
+# 1. cover-fits the image to the framebuffer resolution (a la CSS
+#    background-size: cover), working in /tmp
+# 2. paints it on the given VT with fbi
+# 3. dumps the raw framebuffer to ~/Pictures/bgs/<hostname>-<date>.fbimg
+#    (raw fb0 dumps are resolution/format specific, hence per-machine)
+# 4. points FBTERM_BG at it in ~/.profile.local, commenting out any old line
+#
+# Needs write access to /dev/fb0 and the target VT (video group, or sudo with
+# HOME preserved: sudo env HOME="$HOME" fbterm-genbg ...).
+
+set -euo pipefail
+
+image="${1:?usage: fbterm-genbg <image> [tty-number]}"
+tty_num="${2:-${FBTERM_TTY:-2}}"
+[ -r "${image}" ] || { echo "cannot read: ${image}" >&2; exit 1; }
+
+# framebuffer resolution, e.g. 1920x1080
+res=$(cut -d, -f1,2 --output-delimiter=x /sys/class/graphics/fb0/virtual_size)
+
+tmp_img=$(mktemp /tmp/fbterm-genbg-XXXXXX.png)
+fbi_pid=""
+cleanup() {
+	[ -n "${fbi_pid}" ] && kill "${fbi_pid}" 2>/dev/null
+	rm -f "${tmp_img}"
+}
+trap cleanup EXIT
+
+# CSS-style "cover": scale to fill, center, crop overflow
+magick=$(command -v magick || command -v convert)
+"${magick}" "${image}" -resize "${res}^" -gravity center -extent "${res}" "${tmp_img}"
+
+out_dir="${HOME}/Pictures/bgs"
+out="${out_dir}/$(hostname)-$(date +%Y%m%d).fbimg"
+mkdir -p "${out_dir}"
+
+# fbi restores the console when it exits, so it must stay alive while we dump
+fbi -T "${tty_num}" -d /dev/fb0 --noverbose "${tmp_img}" >/dev/null 2>&1 &
+fbi_pid=$!
+sleep 2
+cat /dev/fb0 > "${out}"
+kill "${fbi_pid}" 2>/dev/null && fbi_pid=""
+
+# update ~/.profile.local: comment out any live FBTERM_BG line, append the new one
+profile_local="${HOME}/.profile.local"
+if [ -f "${profile_local}" ] && grep -q '^[[:space:]]*export FBTERM_BG=' "${profile_local}"; then
+	sed -i 's/^[[:space:]]*export FBTERM_BG=/# &/' "${profile_local}"
+fi
+echo "export FBTERM_BG=\"${out}\"" >> "${profile_local}"
+
+echo "wrote: ${out} ($(du -h "${out}" | cut -f1))"
+echo "FBTERM_BG updated in ${profile_local}"
