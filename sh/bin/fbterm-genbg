@@ -24,9 +24,9 @@ tty_num="${2:-${FBTERM_TTY:-2}}"
 res=$(cut -d, -f1,2 --output-delimiter=x /sys/class/graphics/fb0/virtual_size)
 
 tmp_img=$(mktemp /tmp/fbterm-genbg-XXXXXX.png)
-fbi_pid=""
 cleanup() {
-	[ -n "${fbi_pid}" ] && kill "${fbi_pid}" 2>/dev/null
+	# fbi forks away from the pid we spawn, so kill by (unique) tmpfile pattern
+	pkill -f "fbi .*${tmp_img}" 2>/dev/null
 	rm -f "${tmp_img}"
 }
 trap cleanup EXIT
@@ -41,10 +41,9 @@ mkdir -p "${out_dir}"
 
 # fbi restores the console when it exits, so it must stay alive while we dump
 fbi -T "${tty_num}" -d /dev/fb0 --noverbose "${tmp_img}" >/dev/null 2>&1 &
-fbi_pid=$!
 sleep 2
 cat /dev/fb0 > "${out}"
-kill "${fbi_pid}" 2>/dev/null && fbi_pid=""
+pkill -f "fbi .*${tmp_img}" 2>/dev/null || true
 
 # update ~/.profile.local: comment out any live FBTERM_BG line, append the new one
 profile_local="${HOME}/.profile.local"
