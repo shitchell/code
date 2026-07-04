@@ -23,4 +23,6 @@ export FBTERM_BACKGROUND_IMAGE=1
 # console-init race guard (kept from the original tty1 setup)
 sleep .5
 
-exec fbterm -- tmux new-session -A -s "${FBTERM_TMUX_SESSION:-tty}"
+# TERM=fbterm (256-color terminfo) for the tmux client — the inherited
+# TERM=linux would put tmux in 8-color mode (unreadable styling)
+exec fbterm -- env TERM=fbterm tmux new-session -A -s "${FBTERM_TMUX_SESSION:-tty}"
