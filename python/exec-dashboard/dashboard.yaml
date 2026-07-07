@@ -1,0 +1,64 @@
+# dashboard.yaml — example config, edit freely
+executables:
+  - id: echo-hello
+    name: Echo Hello
+    path: /bin/echo
+    args:
+      - name: message
+        positional: true
+        type: str
+        nargs: 1
+        required: true
+
+  - id: list-files
+    name: List Files
+    path: /bin/ls
+    args:
+      - name: path
+        positional: true
+        type: pathlib.Path
+        nargs: 1
+      - name: long
+        positional: false
+        type: bool
+        nargs: 0
+        parameter: "-l"
+      - name: all
+        positional: false
+        type: bool
+        nargs: 0
+        parameter: "-a"
+
+  - id: show-date
+    name: Show Date
+    path: /usr/bin/date
+
+  - id: disk-usage
+    name: Disk Usage
+    path: /usr/bin/du
+    args:
+      - name: path
+        positional: true
+        type: pathlib.Path
+        nargs: 1
+      - name: human-readable
+        positional: false
+        type: bool
+        nargs: 0
+        parameter: "-h"
+      - name: max-depth
+        positional: false
+        type: int
+        nargs: 1
+        parameter: "--max-depth"
+
+dashboards:
+  - name: System Tools
+    executables: [show-date, list-files, disk-usage]
+
+  - name: Quick Tests
+    default_sort: usage
+    executables: [echo-hello, show-date]
+
+  - name: File Ops
+    executables: [list-files, disk-usage]
