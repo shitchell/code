@@ -152,3 +152,7 @@ dist/
 
 # work stuff
 /trinoor/
+
+# Vendored third-party deps (e.g. powerline-fontpatcher for vtui-patch-font).
+# Kept on disk, not linted; re-clone per each VENDORED.md. See vtui README.
+python/vendor/
