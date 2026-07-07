@@ -62,3 +62,39 @@ def test_box_hline_clamped_to_cell():
     m.fix_box_seams(f)  # mutates f in place
     xmin, ymin, xmax, ymax = _bounds(f, 0x2500)
     assert xmin >= -0.5 and xmax <= adv + 0.5
+
+
+import os
+import pytest
+
+DEJAVU = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+_dejavu = pytest.mark.skipif(
+    not os.path.exists(DEJAVU), reason="DejaVu TTF not installed"
+)
+
+
+@_dejavu
+def test_box_seams_glyf_clamp_survives_save_reload(tmp_path):
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(DEJAVU)
+    g = f.getBestCmap()[0x2500]
+    adv = f["hmtx"][g][0]
+    m.fix_box_seams(f)
+    out = tmp_path / "dejavu-patched.ttf"
+    f.save(str(out))
+    f2 = TTFont(str(out))
+    xmin, ymin, xmax, ymax = _bounds(f2, 0x2500)  # AFTER save+reload
+    assert xmin >= -0.5 and xmax <= adv + 0.5
+
+
+@_dejavu
+def test_box_seams_preserves_composite_block_glyph():
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(DEJAVU)
+    m.fix_box_seams(f)
+    b = _bounds(f, 0x2580)  # upper-half block, a composite in DejaVu
+    assert b is not None  # not blanked

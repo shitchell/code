@@ -6,7 +6,7 @@ alignment] -> [fbterm-friendly size report]. Single file so it's easy to share.
 """
 VERSION = "0.1.0"
 
-from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.pens.boundsPen import BoundsPen
@@ -23,7 +23,7 @@ def _adv(font, gname):
 def _rewrite_glyph(font, gname, adv, xform):
     """Redraw one glyph through xform(point)->point. Handles CFF and glyf."""
     gs = font.getGlyphSet()
-    rec = RecordingPen()
+    rec = DecomposingRecordingPen(gs)
     gs[gname].draw(rec)
 
     def apply(pen):
@@ -46,7 +46,10 @@ def _rewrite_glyph(font, gname, adv, xform):
     else:
         pen = TTGlyphPen(gs)
         apply(pen)
-        font["glyf"][gname] = pen.glyph()
+        glyph = pen.glyph()
+        font["glyf"][gname] = glyph
+        glyph.recalcBounds(font["glyf"])
+        font["hmtx"][gname] = (adv, getattr(glyph, "xMin", 0))
 
 
 def fix_box_seams(font):
@@ -66,7 +69,7 @@ def fix_box_seams(font):
         xmin, _, xmax, _ = bp.bounds
         if xmin >= 0 and xmax <= adv:
             continue
-        _rewrite_glyph(font, g, adv, lambda p: (max(0, min(adv, p[0])), p[1]))
+        _rewrite_glyph(font, g, adv, lambda p, adv=adv: (max(0, min(adv, p[0])), p[1]))
         n += 1
     return n
 
