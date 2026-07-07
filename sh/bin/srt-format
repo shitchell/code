@@ -5,74 +5,22 @@
 ## imports #####################################################################
 ################################################################################
 
-include-source 'colors.sh'
-include-source 'debug.sh'
+include-source 'parseargs.sh'
 
 
-## exit codes ##################################################################
+## options #####################################################################
 ################################################################################
 
-declare -ri E_SUCCESS=0
-declare -ri E_ERROR=1
+function setup-options() {
+    parseargs-set-usage "usage: $(basename "${0}") [-h] [-f/--format FORMAT] [FILE]"
+    parseargs-set-help "$(cat << 'EOF'
+format SRT subtitle files with customizable output templates
 
-
-## colors ######################################################################
-################################################################################
-function custom-colors() {
-    C_TITLE="${S_BOLD}${C_BLUE}"
-    C_VARIABLE="${C_CYAN}"
-    C_EXAMPLE="${S_BOLD}${C_GREEN}"
-}
-
-## traps #######################################################################
-################################################################################
-
-function silence-output() {
-    :  'Silence all script output'
-    exec 3>&1 4>&2 1>/dev/null 2>&1
-}
-
-# @usage restore-output
-function restore-output() {
-    :  'Restore script output after a call to `silence-output`'
-    [[ -t 3 ]] && exec 1>&3 3>&-
-    [[ -t 4 ]] && exec 2>&4 4>&-
-}
-
-function trap-exit() {
-    :  'An exit trap to restore output on script end'
-    restore-output
-}
-trap trap-exit EXIT
-
-
-## usage functions #############################################################
-################################################################################
-
-function help-usage() {
-    echo "usage: $(basename "${0}") [-h] [-f/--format FORMAT] [FILE]"
-}
-
-function help-epilogue() {
-    echo "format SRT subtitle files with customizable output templates"
-}
-
-function help-full() {
-    help-usage
-    help-epilogue
-    echo
-    echo "Converts SRT subtitle format to a custom text format using template variables."
-    echo "Reads from FILE or stdin if no file is provided."
-    echo
-    echo "Options:"
-    cat << 'EOF'
-    -h                    display usage
-    --help                display this help message
-    -f/--format FORMAT    output format template (default: "**{start_timestamp}:** {text}")
-    -c/--color <when>     when to use color ("auto", "always", "never")
-    -s/--silent           suppress all output
-    --config-file <file>  use the specified configuration file
-
+Converts SRT subtitle format to a custom text format using template
+variables. Reads from FILE or stdin if no file is provided.
+EOF
+    )"
+    parseargs-set-epilog "$(cat << 'EOF'
 Available template variables:
     {index}             - Subtitle index number
     {start_hour}        - Start hour (00-23)
@@ -89,129 +37,22 @@ Available template variables:
 
 Examples:
     # Default format
-    srt-format.sh input.srt
+    srt-format input.srt
 
     # Custom format from stdin
-    cat input.srt | srt-format.sh -f '{index}. [{start_timestamp}] {text}'
+    cat input.srt | srt-format -f '{index}. [{start_timestamp}] {text}'
 
     # Tab-separated output
-    srt-format.sh -f '{start_timestamp}\t{end_timestamp}\t{text}' input.srt
-
-    # Markdown timestamp format
-    srt-format.sh -f '**{start_hour}:{start_minute}:{start_seconds}** {text}' input.srt
+    srt-format -f '{start_timestamp}\t{end_timestamp}\t{text}' input.srt
 EOF
-}
+    )"
 
-function parse-args() {
-    # Parse the arguments first for a config file to load default values from
-    CONFIG_FILE="${HOME}/.$(basename "${0}").conf"
-    for ((i=0; i<${#}; i++)); do
-        case "${!i}" in
-            -c | --config-file)
-                let i++
-                CONFIG_FILE="${!i}"
-                ;;
-        esac
-    done
-    [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
-
-    # Default values
-    FORMAT='**{start_timestamp}:** {text}'
-    INPUT_FILE=""
-    DO_COLOR=false
-    DO_SILENT=false
-    local __color_when="${COLOR:-auto}" # auto, on, yes, always, off, no, never
-
-    # Loop over the arguments
-    while [[ ${#} -gt 0 ]]; do
-        case ${1} in
-            -h)
-                help-usage
-                help-epilogue
-                exit ${E_SUCCESS}
-                ;;
-            --help)
-                help-full
-                exit ${E_SUCCESS}
-                ;;
-            --config-file)
-                shift 1
-                ;;
-            -f | --format)
-                FORMAT="${2}"
-                shift 1
-                ;;
-            -c | --color)
-                __color_when="${2}"
-                shift 1
-                ;;
-            -s | --silent)
-                DO_SILENT=true
-                ;;
-            --)
-                shift 1
-                break
-                ;;
-            -*)
-                echo "error: unknown option: ${1}" >&2
-                return ${E_ERROR}
-                ;;
-            *)
-                if [[ -z "${INPUT_FILE}" ]]; then
-                    INPUT_FILE="${1}"
-                else
-                    echo "error: multiple input files specified" >&2
-                    return ${E_ERROR}
-                fi
-                ;;
-        esac
-        shift 1
-    done
-
-    # If -- was used, collect the remaining argument as input file
-    if [[ ${#} -gt 0 ]]; then
-        if [[ -z "${INPUT_FILE}" ]]; then
-            INPUT_FILE="${1}"
-        else
-            echo "error: multiple input files specified" >&2
-            return ${E_ERROR}
-        fi
-    fi
-
-    # Validate input file if provided
-    if [[ -n "${INPUT_FILE}" && ! -f "${INPUT_FILE}" ]]; then
-        echo "error: file not found: ${INPUT_FILE}" >&2
-        return ${E_ERROR}
-    fi
-
-    # If in silent mode, silence the output
-    ${DO_SILENT} && silence-output
-
-    # Set up colors
-    if ! ${DO_SILENT}; then
-        case "${__color_when}" in
-            on | yes | always)
-                DO_COLOR=true
-                ;;
-            off | no | never)
-                DO_COLOR=false
-                ;;
-            auto)
-                if ${__IN_TERMINAL}; then
-                    DO_COLOR=true
-                else
-                    DO_COLOR=false
-                fi
-                ;;
-            *)
-                echo "error: invalid color mode: ${__color_when}" >&2
-                return ${E_ERROR}
-                ;;
-        esac
-        ${DO_COLOR} && setup-colors || unset-colors
-    fi
-
-    return ${E_SUCCESS}
+    parseargs-add-parameter "-f/--format" --store FORMAT \
+        --default '**{start_timestamp}:** {text}' \
+        --help "output format template"
+    parseargs-include colors config
+    parseargs-add-positional "FILE" --optional \
+        --help "SRT file to process (stdin if omitted)"
 }
 
 
@@ -312,9 +153,21 @@ BEGIN {
 ################################################################################
 
 function main() {
-    parse-args "${@}" || return ${?}
+    setup-options
+    parseargs-parse-or-exit "${@}"
 
-    format-srt "${FORMAT}" "${INPUT_FILE}"
+    local input_file="${PARSEARGS_POSARGS[0]:-}"
+
+    if [[ ${#PARSEARGS_POSARGS[@]} -gt 1 ]]; then
+        echo "error: multiple input files specified" >&2
+        return ${E_INVALID_ARGUMENT}
+    fi
+    if [[ -n "${input_file}" && ! -f "${input_file}" ]]; then
+        echo "error: file not found: ${input_file}" >&2
+        return ${E_FILE_NOT_FOUND}
+    fi
+
+    format-srt "${PARSEARGS_OPTS[FORMAT]}" "${input_file}"
 }
 
 
