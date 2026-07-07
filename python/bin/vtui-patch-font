@@ -132,6 +132,57 @@ def friendly_sizes(
     return out
 
 
+def junction_classes(font):
+    """Split box line/corner/tee glyphs (U+2500-257F) into (up_stem, plain_bar).
+
+    up_stem = ink reaches near the em top (fbterm shoves these down);
+    plain_bar = ink tops out at the horizontal bar (rendered correctly).
+    Thresholds scale with unitsPerEm so this works for any font.
+    """
+    cmap = font.getBestCmap()
+    gs = font.getGlyphSet()
+    upm = font["head"].unitsPerEm
+    up, plain = set(), set()
+    for cp in range(0x2500, 0x2580):
+        g = cmap.get(cp)
+        if not g:
+            continue
+        bp = BoundsPen(gs)
+        gs[g].draw(bp)
+        if bp.bounds is None:
+            continue
+        ymax = bp.bounds[3]
+        if ymax >= 0.85 * upm:
+            up.add(g)
+        elif ymax <= 0.55 * upm:
+            plain.add(g)
+    return up, plain
+
+
+def default_shove_px(size):
+    """Heuristic default fbterm shove: measured 2px at size 15, scaled.
+
+    NOT exact for arbitrary fonts/sizes — the real value depends on the system
+    FreeType + fontconfig hinting. Use --verify to measure it on your fbterm.
+    """
+    return max(1, round(2 * size / 15))
+
+
+def junction_shift_units(font, size, shove_px):
+    """Font units to move the plain-bar glyphs DOWN (negative; font y is up)."""
+    upm = font["head"].unitsPerEm
+    return -round(shove_px * upm / size)
+
+
+def align_box_junctions(font, size, shove_px):
+    """Shift no-up-stem bar glyphs down so their bar meets the up-stem junctions."""
+    _up, plain = junction_classes(font)
+    dy = junction_shift_units(font, size, shove_px)
+    for g in plain:
+        _rewrite_glyph(font, g, _adv(font, g), lambda p, _dy=dy: (p[0], p[1] + _dy))
+    return dy
+
+
 def main(argv=None):
     raise SystemExit(0)
 

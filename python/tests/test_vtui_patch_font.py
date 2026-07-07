@@ -115,3 +115,47 @@ def test_powerline_separator_fills_cell_box():
     xmin, ymin, xmax, ymax = _bounds(f, 0xE0B0)
     assert abs(xmin) < 2 and abs(xmax - adv) < 2  # spans full width
     assert ymin <= -395 and ymax >= 995  # spans U+2588 box (-400..1000)
+
+
+def test_junction_classes_split_by_ymax():
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(HASKLUG)
+    cm = f.getBestCmap()
+    up, plain = m.junction_classes(f)
+    assert cm[0x253C] in up and cm[0x2534] in up  # ┼ ┴ up-stem
+    assert cm[0x2500] in plain and cm[0x252C] in plain  # ─ ┬ no-up-stem
+    assert cm[0x253C] not in plain and cm[0x2500] not in up
+
+
+def test_default_shove_px():
+    m = load()
+    assert m.default_shove_px(15) == 2  # measured ground truth
+    assert m.default_shove_px(30) == 4  # ~scales
+    assert m.default_shove_px(7) >= 1  # never zero
+
+
+def test_junction_shift_units_2px_at_15():
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(HASKLUG)
+    units = m.junction_shift_units(f, size=15, shove_px=2)  # font units, DOWN
+    assert units < 0  # font y is up, so down = negative
+    px = abs(units) / (f["head"].unitsPerEm / 15)
+    assert abs(px - 2.0) < 0.3  # ~2px -> ~-133 units
+
+
+def test_align_shifts_plain_bars_not_up_stems():
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(HASKLUG)
+    before_hline = _bounds(f, 0x2500)[1]  # ymin of ─
+    before_cross = _bounds(f, 0x253C)[1]  # ymin of ┼
+    m.align_box_junctions(f, size=15, shove_px=2)
+    after_hline = _bounds(f, 0x2500)[1]
+    after_cross = _bounds(f, 0x253C)[1]
+    assert after_hline < before_hline - 100  # ─ moved down ~133 units
+    assert abs(after_cross - before_cross) < 1  # ┼ (up-stem) untouched
