@@ -37,3 +37,28 @@ def test_friendly_sizes_reports_cell_dims():
         with_cells=True,
     )
     assert (10, 6) in [(s, w) for (s, w, h) in rows]  # 10px -> 6px cell width
+
+
+def _bounds(font, cp):
+    from fontTools.pens.boundsPen import BoundsPen
+
+    gs = font.getGlyphSet()
+    g = font.getBestCmap()[cp]
+    bp = BoundsPen(gs)
+    gs[g].draw(bp)
+    return bp.bounds
+
+
+HASKLUG = "/home/guy/.local/share/fonts/HasklugNerdFont/HasklugNerdFontMono-Regular.otf"
+
+
+def test_box_hline_clamped_to_cell():
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(HASKLUG)
+    g = f.getBestCmap()[0x2500]
+    adv = f["hmtx"][g][0]
+    m.fix_box_seams(f)  # mutates f in place
+    xmin, ymin, xmax, ymax = _bounds(f, 0x2500)
+    assert xmin >= -0.5 and xmax <= adv + 0.5

@@ -6,6 +6,70 @@ alignment] -> [fbterm-friendly size report]. Single file so it's easy to share.
 """
 VERSION = "0.1.0"
 
+from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.t2CharStringPen import T2CharStringPen
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.pens.boundsPen import BoundsPen
+
+
+def _is_cff(font):
+    return "CFF " in font
+
+
+def _adv(font, gname):
+    return font["hmtx"][gname][0]
+
+
+def _rewrite_glyph(font, gname, adv, xform):
+    """Redraw one glyph through xform(point)->point. Handles CFF and glyf."""
+    gs = font.getGlyphSet()
+    rec = RecordingPen()
+    gs[gname].draw(rec)
+
+    def apply(pen):
+        for op, args in rec.value:
+            if op in ("moveTo", "lineTo"):
+                getattr(pen, op)(xform(args[0]))
+            elif op == "curveTo":
+                pen.curveTo(*[xform(p) for p in args])
+            elif op == "qCurveTo":
+                pen.qCurveTo(*[xform(p) if p else None for p in args])
+            elif op in ("closePath", "endPath"):
+                getattr(pen, op)()
+
+    if _is_cff(font):
+        cff = font["CFF "].cff
+        td = cff[cff.fontNames[0]]
+        pen = T2CharStringPen(adv, gs)
+        apply(pen)
+        td.CharStrings[gname] = pen.getCharString(td.Private)
+    else:
+        pen = TTGlyphPen(gs)
+        apply(pen)
+        font["glyf"][gname] = pen.glyph()
+
+
+def fix_box_seams(font):
+    """Clamp box-drawing glyph x-extents to [0, advance] (kills the cell seam)."""
+    cmap = font.getBestCmap()
+    gs = font.getGlyphSet()
+    n = 0
+    for cp in range(0x2500, 0x2600):
+        g = cmap.get(cp)
+        if not g:
+            continue
+        adv = _adv(font, g)
+        bp = BoundsPen(gs)
+        gs[g].draw(bp)
+        if bp.bounds is None:
+            continue
+        xmin, _, xmax, _ = bp.bounds
+        if xmin >= 0 and xmax <= adv:
+            continue
+        _rewrite_glyph(font, g, adv, lambda p: (max(0, min(adv, p[0])), p[1]))
+        n += 1
+    return n
+
 
 def friendly_sizes(
     advance, upm, lo=8, hi=32, tol=0.12, ascent=None, descent=None, with_cells=False
