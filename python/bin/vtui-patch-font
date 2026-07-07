@@ -7,8 +7,12 @@ alignment] -> [fbterm-friendly size report]. Single file so it's easy to share.
 VERSION = "0.1.0"
 
 import argparse
+import glob
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.t2CharStringPen import T2CharStringPen
@@ -229,6 +233,35 @@ def _representative_advance(font):
     return next(iter(font["hmtx"].metrics.values()))[0]
 
 
+_PL_PATCHER = (
+    "/home/guy/code/python/vendor/powerline-fontpatcher/scripts/powerline-fontpatcher"
+)
+
+
+def add_powerline(src, workdir):
+    """Add powerline separator glyphs to `src` via the vendored fontforge
+    patcher. Writes into `workdir`; returns the path to the patched font.
+    Requires fontforge on PATH.
+    """
+    src = os.path.abspath(src)
+    before = set(os.listdir(workdir))
+    subprocess.run(
+        ["fontforge", "-script", _PL_PATCHER, "--no-rename", src],
+        cwd=workdir,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+    produced = [
+        f
+        for f in os.listdir(workdir)
+        if f not in before and f.lower().endswith((".ttf", ".otf"))
+    ]
+    if not produced:
+        raise RuntimeError("powerline patcher produced no font file")
+    return os.path.join(workdir, produced[0])
+
+
 def main(argv=None):
     from fontTools.ttLib import TTFont
 
@@ -270,12 +303,14 @@ def main(argv=None):
     shove = args.shove_px if args.shove_px is not None else default_shove_px(size)
 
     have_powerline = 0xE0B0 in font.getBestCmap()
-    if have_powerline:
-        pass  # glyphs already present; nothing to add
-    else:
-        print(
-            "* adding powerline glyphs ... skipped (install fontforge; --nerd coming)"
-        )
+    if not have_powerline:
+        if shutil.which("fontforge"):
+            workdir = tempfile.mkdtemp(prefix="vtui-pl-")
+            added = add_powerline(args.input, workdir)
+            font = TTFont(added)
+            print("* adding powerline glyphs ... done")
+        else:
+            print("* adding powerline glyphs ... skipped (fontforge not found)")
 
     nb = fix_box_seams(font)
     print(f"* fixing box-drawing seams ... done ({nb} glyphs)")

@@ -188,3 +188,41 @@ def test_end_to_end_cli_patches_and_renames(tmp_path, capsys):
     # progress + size report printed
     captured = capsys.readouterr().out
     assert "done" in captured and "FbTerm-friendly sizes" in captured
+
+
+import shutil
+
+DEJAVU_PLAIN = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+_needs_ff = pytest.mark.skipif(
+    not shutil.which("fontforge") or not os.path.exists(DEJAVU_PLAIN),
+    reason="fontforge or DejaVu missing",
+)
+
+
+@_needs_ff
+def test_add_powerline_to_plain_font(tmp_path):
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    assert 0xE0B0 not in TTFont(DEJAVU_PLAIN).getBestCmap()  # plain, no powerline
+    out = m.add_powerline(DEJAVU_PLAIN, str(tmp_path))
+    assert os.path.exists(out)
+    assert 0xE0B0 in TTFont(out).getBestCmap()  # powerline added
+
+
+@_needs_ff
+def test_cli_end_to_end_on_plain_font(tmp_path):
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    out = tmp_path / "dejavu-VTui.ttf"
+    m.main([DEJAVU_PLAIN, "--size", "16", "-o", str(out)])
+    f = TTFont(str(out))
+    cm = f.getBestCmap()
+    assert 0xE0B0 in cm  # powerline was added
+    # box seam applied on a real TTF (exercises glyf path end-to-end)
+    g = cm[0x2500]
+    adv = f["hmtx"][g][0]
+    xmin, _, xmax, _ = _bounds(f, 0x2500)
+    assert xmin >= -0.5 and xmax <= adv + 0.5
+    assert "VTui" in f["name"].getDebugName(1)
