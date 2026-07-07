@@ -72,7 +72,11 @@ Layout and contract copied from clip (see clipboard design §3–§8):
   consolidating the three copies is a possible later change.
 - Caps vocabulary: `get:volume set:volume get:mute set:mute` and
   `get:brightness set:brightness` — a provider may honestly advertise a
-  subset (e.g. a backend with no mute concept).
+  subset (e.g. a backend with no mute concept). Optional cap
+  `set:volume-relative` (apply a signed delta natively, print the result):
+  the front-end tries it first for `±N` and falls back to read-modify-write
+  math. Advertise it ONLY if the backend clamps (wpctl `--limit 1.0` does;
+  pactl runs past 100% so it must stay on the math path).
 - Numbers are integer percent 0–100 end to end. Providers get/set raw state
   only; the front-ends own `±N` math and clamping (0–100; `bright` floors at
   1 so a typo can't black the panel).

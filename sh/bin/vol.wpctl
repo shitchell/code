@@ -16,7 +16,7 @@ probe() {
   # would eat the dispatcher timeout for nothing.
   [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pipewire-0" ]] || { echo "score 0"; return; }
   echo "score 80"
-  echo "caps get:volume set:volume get:mute set:mute"
+  echo "caps get:volume set:volume set:volume-relative get:mute set:mute"
 }
 
 get_volume() {
@@ -29,6 +29,22 @@ get_mute() {
     *'[MUTED]'*) echo on ;;
     *)           echo off ;;
   esac
+}
+
+set_volume_relative() {
+  : 'Apply a signed percent delta natively and print the resulting volume.
+
+      wpctl does the math AND the ceiling in one call (--limit 1.0), so the
+      front-end skips its read-modify-write round trip. Only providers that
+      can clamp should advertise set:volume-relative — pactl, for one,
+      happily goes past 100% and must stay on the front-end math path.
+
+      @arg $1 delta like +5 / -10
+  '
+  local delta="$1" sign mag
+  sign="${delta:0:1}" mag="${delta:1}"
+  wpctl set-volume --limit 1.0 @DEFAULT_AUDIO_SINK@ "${mag}%${sign}" || return 1
+  get_volume
 }
 
 set_mute() {
@@ -53,8 +69,9 @@ main() {
            mute)   get_mute ;;
          esac ;;
     set) case "$2" in
-           volume) wpctl set-volume @DEFAULT_AUDIO_SINK@ "$3%" ;;
-           mute)   set_mute "$3" ;;
+           volume)          wpctl set-volume @DEFAULT_AUDIO_SINK@ "$3%" ;;
+           volume-relative) set_volume_relative "$3" ;;
+           mute)            set_mute "$3" ;;
          esac ;;
   esac
 }

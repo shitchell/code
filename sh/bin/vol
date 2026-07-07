@@ -54,6 +54,13 @@ main() {
   local -i level
   # Relative adjustment: +N or -N (clamped); absolute: 0-100
   if [[ "$arg" =~ ^[+-][0-9]+$ ]]; then
+    # Fast path: a provider that can apply (and clamp!) the delta natively
+    # prints the resulting volume in one call. No such provider — or a
+    # failure — falls through to the classic read-modify-write below.
+    local out
+    if out=$(vol::dispatch set volume-relative "$arg" 2>/dev/null); then
+      echo "$out"; return 0
+    fi
     local -i current
     current=$(vol::dispatch get volume) || return $?
     (( level = current + arg ))

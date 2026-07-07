@@ -39,8 +39,21 @@ notify() {
   lnotify --group "$1" --timeout 1500 --app vtcon "$2" >/dev/null 2>&1 || true
 }
 
+TIMING_FILE="${XDG_RUNTIME_DIR:-/tmp}/vtcon-timing"
+timing() {
+  : 'Latency checkpoint: appended (wall-clock µs) only while TIMING_FILE
+      exists — `touch` it to trace, `rm` to stop. Correlate with
+      `journalctl --user -u lnotifyd -o short-precise` (also wall-clock).
+      @arg $1 checkpoint label
+  '
+  [[ -e "$TIMING_FILE" && -n "$EPOCHREALTIME" ]] || return 0
+  printf '%s %s %s\n' "$EPOCHREALTIME" "${0##*/}" "$1" >> "$TIMING_FILE"
+}
+
 main() {
+  timing "start($*)"
   vt_active || return 0
+  timing gate-passed
 
   # One vol invocation only — this runs on every keypress and each invocation
   # costs real milliseconds (bash + dispatcher). vol prints the resulting
@@ -48,6 +61,7 @@ main() {
   local self_dir out msg
   self_dir="$(dirname "$(readlink -f "$0")")"
   out="$("$self_dir/vol" "$@")" || return $?
+  timing vol-done
 
   case "$1" in
     mute)  [[ "$out" == on ]] && msg="Muted" || msg="Unmuted" ;;
@@ -55,6 +69,7 @@ main() {
     *)     msg="Volume: ${out}%" ;;
   esac
   notify volume "$msg"
+  timing notify-sent
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

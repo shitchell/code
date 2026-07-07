@@ -27,16 +27,29 @@ notify() {
   lnotify --group "$1" --timeout 1500 --app vtcon "$2" >/dev/null 2>&1 || true
 }
 
+TIMING_FILE="${XDG_RUNTIME_DIR:-/tmp}/vtcon-timing"
+timing() {
+  : 'Latency checkpoint — see the twin in vtvol.
+      @arg $1 checkpoint label
+  '
+  [[ -e "$TIMING_FILE" && -n "$EPOCHREALTIME" ]] || return 0
+  printf '%s %s %s\n' "$EPOCHREALTIME" "${0##*/}" "$1" >> "$TIMING_FILE"
+}
+
 main() {
+  timing "start($*)"
   vt_active || return 0
+  timing gate-passed
 
   # One bright invocation only (see vtvol): bright prints the resulting
   # state after a set, so the toast needs no follow-up query.
   local self_dir out
   self_dir="$(dirname "$(readlink -f "$0")")"
   out="$("$self_dir/bright" "$@")" || return $?
+  timing bright-done
 
   notify brightness "Brightness: ${out}%"
+  timing notify-sent
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
