@@ -74,6 +74,42 @@ def fix_box_seams(font):
     return n
 
 
+STRETCH = {0xE0B0, 0xE0B2, 0xE0B8, 0xE0BA, 0xE0BC, 0xE0BE} | set(range(0xE0C0, 0xE0C8))
+CELL_Y = (-400, 1000)  # U+2588 FULL BLOCK y-bounds == fbterm cell box
+
+
+def fix_powerline(font):
+    """Stretch solid powerline separators to fill the fbterm cell box."""
+    cmap = font.getBestCmap()
+    gs = font.getGlyphSet()
+    n = 0
+    for cp in STRETCH:
+        g = cmap.get(cp)
+        if not g:
+            continue
+        adv = _adv(font, g)
+        bp = BoundsPen(gs)
+        gs[g].draw(bp)
+        if bp.bounds is None:
+            continue
+        xmin, ymin, xmax, ymax = bp.bounds
+        if xmax == xmin or ymax == ymin:
+            continue
+        sx = adv / (xmax - xmin)
+        sy = (CELL_Y[1] - CELL_Y[0]) / (ymax - ymin)
+        _rewrite_glyph(
+            font,
+            g,
+            adv,
+            lambda p, _x=xmin, _y=ymin, _sx=sx, _sy=sy: (
+                (p[0] - _x) * _sx,
+                (p[1] - _y) * _sy + CELL_Y[0],
+            ),
+        )
+        n += 1
+    return n
+
+
 def friendly_sizes(
     advance, upm, lo=8, hi=32, tol=0.12, ascent=None, descent=None, with_cells=False
 ):

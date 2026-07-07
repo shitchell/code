@@ -98,3 +98,20 @@ def test_box_seams_preserves_composite_block_glyph():
     m.fix_box_seams(f)
     b = _bounds(f, 0x2580)  # upper-half block, a composite in DejaVu
     assert b is not None  # not blanked
+
+
+def test_powerline_separator_fills_cell_box():
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    f = TTFont(HASKLUG)
+    if 0xE0B0 not in f.getBestCmap():
+        import pytest
+
+        pytest.skip("fixture has no powerline glyphs")
+    g = f.getBestCmap()[0xE0B0]
+    adv = f["hmtx"][g][0]
+    m.fix_powerline(f)
+    xmin, ymin, xmax, ymax = _bounds(f, 0xE0B0)
+    assert abs(xmin) < 2 and abs(xmax - adv) < 2  # spans full width
+    assert ymin <= -395 and ymax >= 995  # spans U+2588 box (-400..1000)
