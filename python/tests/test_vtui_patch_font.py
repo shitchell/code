@@ -159,3 +159,32 @@ def test_align_shifts_plain_bars_not_up_stems():
     after_cross = _bounds(f, 0x253C)[1]
     assert after_hline < before_hline - 100  # ─ moved down ~133 units
     assert abs(after_cross - before_cross) < 1  # ┼ (up-stem) untouched
+
+
+def test_recommend_size_prefers_midrange():
+    m = load()
+    # 0.6em font: friendly sizes 10,15,20,25; recommend one in ~14-18
+    assert m.recommend_size([5, 10, 15, 20, 25]) == 15
+    assert m.recommend_size([8, 12, 16, 20]) == 16
+
+
+def test_end_to_end_cli_patches_and_renames(tmp_path, capsys):
+    m = load()
+    from fontTools.ttLib import TTFont
+
+    out = tmp_path / "out.otf"
+    rc = m.main([HASKLUG, "--size", "15", "-o", str(out)])
+    assert rc in (0, None)
+    assert out.exists()
+    f = TTFont(str(out))
+    # family renamed to a VTui variant
+    fam = f["name"].getDebugName(1)
+    assert "VTui" in fam
+    # box seam applied (U+2500 within cell)
+    g = f.getBestCmap()[0x2500]
+    adv = f["hmtx"][g][0]
+    xmin, ymin, xmax, ymax = _bounds(f, 0x2500)
+    assert xmin >= -0.5 and xmax <= adv + 0.5
+    # progress + size report printed
+    captured = capsys.readouterr().out
+    assert "done" in captured and "FbTerm-friendly sizes" in captured

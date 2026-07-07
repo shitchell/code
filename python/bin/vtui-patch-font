@@ -6,6 +6,10 @@ alignment] -> [fbterm-friendly size report]. Single file so it's easy to share.
 """
 VERSION = "0.1.0"
 
+import argparse
+import os
+import sys
+
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -183,9 +187,119 @@ def align_box_junctions(font, size, shove_px):
     return dy
 
 
+def recommend_size(sizes, lo=14, hi=18):
+    """Pick a legible default from friendly sizes: prefer the [lo,hi] band,
+    else the size closest to the band's midpoint."""
+    if not sizes:
+        return None
+    band = [s for s in sizes if lo <= s <= hi]
+    if band:
+        return band[len(band) // 2]
+    mid = (lo + hi) / 2
+    return min(sizes, key=lambda s: abs(s - mid))
+
+
+def set_family_name(font, new_family):
+    """Rename the font family so the patched font coexists with the original."""
+    name = font["name"]
+    ps = new_family.replace(" ", "")
+    for rec in list(name.names):
+        if rec.nameID in (1, 16):  # family / typographic family
+            name.setName(
+                new_family, rec.nameID, rec.platformID, rec.platEncID, rec.langID
+            )
+        elif rec.nameID == 4:  # full name
+            name.setName(
+                new_family, rec.nameID, rec.platformID, rec.platEncID, rec.langID
+            )
+        elif rec.nameID in (3, 6):  # unique id / postscript name
+            name.setName(ps, rec.nameID, rec.platformID, rec.platEncID, rec.langID)
+    if _is_cff(font):
+        cff = font["CFF "].cff
+        cff.fontNames[0] = ps
+
+
+def _representative_advance(font):
+    """Monospace advance width: prefer space, else U+2500, else any glyph."""
+    cmap = font.getBestCmap()
+    for cp in (0x20, 0x2500):
+        g = cmap.get(cp)
+        if g:
+            return _adv(font, g)
+    return next(iter(font["hmtx"].metrics.values()))[0]
+
+
 def main(argv=None):
-    raise SystemExit(0)
+    from fontTools.ttLib import TTFont
+
+    p = argparse.ArgumentParser(
+        prog="vtui-patch-font", description="Make a mono font fbterm-ready."
+    )
+    p.add_argument("input", help="input font (.otf/.ttf)")
+    p.add_argument(
+        "--size",
+        type=int,
+        default=None,
+        help="target fbterm size (default: recommended)",
+    )
+    p.add_argument(
+        "--shove-px",
+        type=int,
+        default=None,
+        help="junction shove override (default: heuristic)",
+    )
+    p.add_argument("--nerd", action="store_true", help="(later) add full Nerd icon set")
+    p.add_argument(
+        "--verify",
+        action="store_true",
+        help="(later) measure junction shove on real fbterm",
+    )
+    p.add_argument(
+        "-o", "--output", default=None, help="output path (default: <stem>-VTui<ext>)"
+    )
+    args = p.parse_args(argv)
+
+    font = TTFont(args.input)
+    upm = font["head"].unitsPerEm
+    adv = _representative_advance(font)
+    asc = font["hhea"].ascent
+    desc = font["hhea"].descent
+    friendly = friendly_sizes(adv, upm, ascent=asc, descent=desc, with_cells=True)
+    friendly_px = [s for (s, w, h) in friendly]
+    size = args.size or recommend_size(friendly_px) or 15
+    shove = args.shove_px if args.shove_px is not None else default_shove_px(size)
+
+    have_powerline = 0xE0B0 in font.getBestCmap()
+    if have_powerline:
+        pass  # glyphs already present; nothing to add
+    else:
+        print(
+            "* adding powerline glyphs ... skipped (install fontforge; --nerd coming)"
+        )
+
+    nb = fix_box_seams(font)
+    print(f"* fixing box-drawing seams ... done ({nb} glyphs)")
+    npl = fix_powerline(font)
+    print(f"* fixing powerline separators ... done ({npl} glyphs)")
+    align_box_junctions(font, size, shove)
+    print(f"* aligning box junctions (exact @{size}px) ... done")
+
+    base_family = font["name"].getDebugName(1) or "Font"
+    set_family_name(font, base_family + " VTui")
+
+    if args.output:
+        out = args.output
+    else:
+        stem, ext = os.path.splitext(args.input)
+        out = f"{os.path.basename(stem)}-VTui{ext}"
+    font.save(out)
+
+    print(f"\nPatched font saved to {out}")
+    rec = recommend_size(friendly_px)
+    pretty = ", ".join(f"{s}px*" if s == rec else f"{s}px" for s in friendly_px)
+    print(f"FbTerm-friendly sizes: {pretty}   (* recommended)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
