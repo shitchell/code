@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# fbterm-genbg - generate a per-machine fbterm background from an image
+# vtui-fbterm-genbg - generate a per-machine fbterm background from an image
 #
-# usage: fbterm-genbg <image> [tty-number]
+# usage: vtui-fbterm-genbg <image> [tty-number]
 #
 # 1. cover-fits the image to the framebuffer resolution (a la CSS
 #    background-size: cover), working in /tmp
@@ -12,18 +12,18 @@
 # 4. points FBTERM_BG at it in ~/.profile.local, commenting out any old line
 #
 # Needs write access to /dev/fb0 and the target VT (video group, or sudo with
-# HOME preserved: sudo env HOME="$HOME" fbterm-genbg ...).
+# HOME preserved: sudo env HOME="$HOME" vtui-fbterm-genbg ...).
 
 set -euo pipefail
 
-image="${1:?usage: fbterm-genbg <image> [tty-number]}"
+image="${1:?usage: vtui-fbterm-genbg <image> [tty-number]}"
 tty_num="${2:-${FBTERM_TTY:-2}}"
 [ -r "${image}" ] || { echo "cannot read: ${image}" >&2; exit 1; }
 
 # framebuffer resolution, e.g. 1920x1080
 res=$(cut -d, -f1,2 --output-delimiter=x /sys/class/graphics/fb0/virtual_size)
 
-tmp_img=$(mktemp /tmp/fbterm-genbg-XXXXXX.png)
+tmp_img=$(mktemp /tmp/vtui-fbterm-genbg-XXXXXX.png)
 cleanup() {
 	# fbi forks away from the pid we spawn, so kill by (unique) tmpfile pattern
 	pkill -f "fbi .*${tmp_img}" 2>/dev/null

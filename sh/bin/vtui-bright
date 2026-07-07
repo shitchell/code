@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vtbright — VT-gated bright with lnotify feedback. Companion to vtvol; see
+# vtui-bright — VT-gated bright with lnotify feedback. Companion to vtui-vol; see
 # the gate rationale there and in
 # sh/docs/plans/2026-07-06-unified-vol-bright-design.md §4.
 
@@ -29,7 +29,7 @@ notify() {
 
 TIMING_FILE="${XDG_RUNTIME_DIR:-/tmp}/vtcon-timing"
 timing() {
-  : 'Latency checkpoint — see the twin in vtvol.
+  : 'Latency checkpoint — see the twin in vtui-vol.
       @arg $1 checkpoint label
   '
   [[ -e "$TIMING_FILE" && -n "$EPOCHREALTIME" ]] || return 0
@@ -41,7 +41,7 @@ main() {
   vt_active || return 0
   timing gate-passed
 
-  # One bright invocation only (see vtvol): bright prints the resulting
+  # One bright invocation only (see vtui-vol): bright prints the resulting
   # state after a set, so the toast needs no follow-up query.
   local self_dir out
   self_dir="$(dirname "$(readlink -f "$0")")"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vtvol — VT-gated vol with lnotify feedback. The tmux-facing entry point:
+# vtui-vol — VT-gated vol with lnotify feedback. The tmux-facing entry point:
 # tracked .tmux.conf binds media keys here, and outside a text-VT context the
 # whole thing is a silent no-op (GNOME et al. handle media keys themselves).
 #

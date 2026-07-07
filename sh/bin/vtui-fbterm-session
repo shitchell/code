@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# fbterm-session - launch the framebuffer terminal session
+# vtui-fbterm-session - launch the framebuffer terminal session
 #
-# Paints ${FBTERM_BG} (a raw /dev/fb0 dump, see fbterm-genbg) onto the
+# Paints ${FBTERM_BG} (a raw /dev/fb0 dump, see vtui-fbterm-genbg) onto the
 # framebuffer if set, then execs fbterm running an auto-attach tmux session.
 # Invoked from ~/.profile on /dev/tty${FBTERM_TTY:-2}.
 #
