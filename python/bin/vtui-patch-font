@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""vtui-patch-font — make any monospace font fbterm-ready.
+
+Pipeline: [add powerline] -> [box seam + powerline geometry] -> [junction
+alignment] -> [fbterm-friendly size report]. Single file so it's easy to share.
+"""
+VERSION = "0.1.0"
+
+
+def main(argv=None):
+    raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    main()
