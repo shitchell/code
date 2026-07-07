@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# vt-capture - capture a VT's framebuffer pixels, even if it isn't active
+#
+# Background VTs have no pixels anywhere (one hardware framebuffer, and fbterm
+# suspends drawing when its VT loses focus), so this briefly switches to the
+# target VT, waits for it to repaint, grabs /dev/fb0, and switches back to
+# wherever you were. Expect the display to blip for ~half a second.
+#
+# Requires: sudo chvt (VT switching), read access to /dev/fb0 (video group).
+# PNG output requires python3 + PIL; omit -o or use a .raw path to skip it.
+#
+# usage: vt-capture [-t VT] [-d DELAY] [-o OUTPUT]
+#   -t VT      target VT number (default: 6, the fbterm VT)
+#   -d DELAY   seconds to wait for repaint after switching (default: 0.5)
+#   -o OUTPUT  output path; *.png converts, anything else is a raw fb dump
+#              (default: /tmp/vt<N>.png)
+
+set -euo pipefail
+
+target=6
+delay=0.5
+output=""
+
+while getopts "t:d:o:h" opt; do
+    case "${opt}" in
+        t) target="${OPTARG}" ;;
+        d) delay="${OPTARG}" ;;
+        o) output="${OPTARG}" ;;
+        h) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) exit 1 ;;
+    esac
+done
+[[ -z "${output}" ]] && output="/tmp/vt${target}.png"
+
+fb=/dev/fb0
+read -r xres yres < <(tr ',' ' ' < /sys/class/graphics/fb0/virtual_size)
+bpp=$(< /sys/class/graphics/fb0/bits_per_pixel)
+if [[ "${bpp}" != 32 ]]; then
+    echo "vt-capture: only 32bpp framebuffers supported (got ${bpp})" >&2
+    exit 1
+fi
+
+original=$(< /sys/class/tty/tty0/active)   # e.g. "tty6"
+original="${original#tty}"
+
+switched=false
+restore() {
+    if ${switched}; then
+        sudo chvt "${original}"
+    fi
+}
+trap restore EXIT
+
+if [[ "${original}" != "${target}" ]]; then
+    sudo chvt "${target}"
+    switched=true
+    sleep "${delay}"
+fi
+
+raw="${output}"
+[[ "${output}" == *.png ]] && raw=$(mktemp /tmp/vt-capture.XXXXXX.raw)
+dd if="${fb}" of="${raw}" bs=1M 2>/dev/null
+
+# switch back before the (slower) png conversion
+restore
+switched=false
+trap - EXIT
+
+if [[ "${output}" == *.png ]]; then
+    python3 - "${raw}" "${output}" "${xres}" "${yres}" <<'EOF'
+import sys
+from PIL import Image
+raw, out, w, h = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+data = open(raw, "rb").read()[: w * h * 4]
+Image.frombuffer("RGBA", (w, h), data, "raw", "BGRA", 0, 1).convert("RGB").save(out)
+EOF
+    rm -f "${raw}"
+fi
+
+echo "${output}"
