@@ -7,6 +7,28 @@ alignment] -> [fbterm-friendly size report]. Single file so it's easy to share.
 VERSION = "0.1.0"
 
 
+def friendly_sizes(
+    advance, upm, lo=8, hi=32, tol=0.12, ascent=None, descent=None, with_cells=False
+):
+    """fbterm sizes whose cell width lands within `tol` px of a whole pixel.
+
+    Cell width px = size * advance / upm; a large fractional part leaves a dead
+    column (seam). Returns a sorted list of sizes, or (size, cell_w, cell_h)
+    tuples when with_cells=True (cell_h is None unless ascent/descent given).
+    """
+    out = []
+    for size in range(lo, hi + 1):
+        w = size * advance / upm
+        dead = min(w % 1, 1 - (w % 1))
+        if dead <= tol:
+            wc = round(w)
+            hc = (
+                round(size * ((ascent - descent) / upm)) if ascent is not None else None
+            )
+            out.append((size, wc, hc) if with_cells else size)
+    return out
+
+
 def main(argv=None):
     raise SystemExit(0)
 

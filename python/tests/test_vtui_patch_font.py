@@ -14,3 +14,26 @@ def load():
 def test_module_loads_and_has_version():
     m = load()
     assert isinstance(m.VERSION, str) and m.VERSION
+
+
+def test_friendly_sizes_hasklug_like():
+    m = load()
+    # advance 600 / upm 1000 = 0.6em -> multiples of 5 are exact
+    sizes = m.friendly_sizes(advance=600, upm=1000, lo=8, hi=26, tol=0.12)
+    assert 10 in sizes and 15 in sizes and 20 in sizes and 25 in sizes
+    assert 16 not in sizes  # 9.6px -> 0.4 dead, too fuzzy
+
+
+def test_friendly_sizes_reports_cell_dims():
+    m = load()
+    rows = m.friendly_sizes(
+        advance=600,
+        upm=1000,
+        lo=8,
+        hi=16,
+        tol=0.12,
+        ascent=800,
+        descent=-200,
+        with_cells=True,
+    )
+    assert (10, 6) in [(s, w) for (s, w, h) in rows]  # 10px -> 6px cell width
