@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# vol.wpctl — PipeWire/WirePlumber backend, via wpctl.
+#
+# The modern Linux primary: pactl is often absent on PipeWire systems (libre,
+# 2026-07-06 — the reason this provider exists), while wpctl ships with
+# WirePlumber itself.
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable. 80 — primary on PipeWire boxes.
+      @return 0 always (an unusable backend still prints "score 0")
+  '
+  command -v wpctl >/dev/null 2>&1 || { echo "score 0"; return; }
+  # A live PipeWire socket, not just the binary: wpctl against a dead server
+  # would eat the dispatcher timeout for nothing.
+  [[ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/pipewire-0" ]] || { echo "score 0"; return; }
+  echo "score 80"
+  echo "caps get:volume set:volume get:mute set:mute"
+}
+
+get_volume() {
+  # "Volume: 0.64" or "Volume: 0.64 [MUTED]" -> integer percent
+  wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{ printf "%.0f\n", $2 * 100 }'
+}
+
+get_mute() {
+  case "$(wpctl get-volume @DEFAULT_AUDIO_SINK@)" in
+    *'[MUTED]'*) echo on ;;
+    *)           echo off ;;
+  esac
+}
+
+set_mute() {
+  case "$1" in
+    on)     wpctl set-mute @DEFAULT_AUDIO_SINK@ 1 ;;
+    off)    wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 ;;
+    toggle) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+  esac
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (volume|mute)
+      @arg $3 value for set
+  '
+  case "$1" in
+    probe) probe ;;
+    get) case "$2" in
+           volume) get_volume ;;
+           mute)   get_mute ;;
+         esac ;;
+    set) case "$2" in
+           volume) wpctl set-volume @DEFAULT_AUDIO_SINK@ "$3%" ;;
+           mute)   set_mute "$3" ;;
+         esac ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

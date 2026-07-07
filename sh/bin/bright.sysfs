@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# bright.sysfs — generic /sys/class/backlight backend. Device-agnostic: works
+# for intel_backlight, acpi_video0 (libre's, verified 2026-07-06), amdgpu_bl0,
+# etc. When several devices exist, the largest max_brightness wins (vendor
+# devices expose fine-grained ranges; acpi_video is often a coarse 0-100 —
+# same heuristic brightnessctl uses).
+#
+# Writing needs root on stock systems (sysfs file is 0644 root). Try a direct
+# write first (covers machines with a udev rule opening it to group video),
+# then sudo -n (passwordless sudo only — never prompt from a keybinding),
+# then fail so the dispatcher can fall through to another provider.
+
+device() {
+  : 'Pick the backlight device directory.
+
+      @stdout path to the chosen /sys/class/backlight/<dev>
+      @return 0 if one exists, 1 otherwise
+  '
+  local d best="" best_max=-1 max
+  for d in /sys/class/backlight/*/; do
+    [[ -r "${d}brightness" && -r "${d}max_brightness" ]] || continue
+    max=$(<"${d}max_brightness")
+    (( max > best_max )) && { best="${d%/}"; best_max=$max; }
+  done
+  [[ -n "$best" ]] && printf '%s\n' "$best"
+}
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable. 60 — below brightnessctl (70),
+              whose logind path needs no sudo.
+      @return 0 always
+  '
+  device >/dev/null || { echo "score 0"; return; }
+  echo "score 60"
+  echo "caps get:brightness set:brightness"
+}
+
+get_brightness() {
+  local dev cur max
+  dev=$(device) || return 1
+  cur=$(<"$dev/brightness")
+  max=$(<"$dev/max_brightness")
+  (( max > 0 )) || return 1
+  echo $(( (100 * cur + max / 2) / max ))
+}
+
+set_brightness() {
+  local -i level="$1" raw
+  local dev max
+  dev=$(device) || return 1
+  max=$(<"$dev/max_brightness")
+  (( raw = level * max / 100 ))
+  (( raw < 1 && level >= 1 )) && raw=1
+  # The braces matter: a failed `>` open reports on the *script's* stderr
+  # before a trailing 2>/dev/null would apply, so silence the whole group.
+  if { printf '%s\n' "$raw" > "$dev/brightness"; } 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$raw" | sudo -n tee "$dev/brightness" >/dev/null 2>&1
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (brightness)
+      @arg $3 value for set (percent)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   [[ "$2" == brightness ]] && get_brightness ;;
+    set)   [[ "$2" == brightness ]] && set_brightness "$3" ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

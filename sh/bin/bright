@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# bright — get or set screen brightness (1-100) via bright.<tag> providers.
+# Replaces the abandoned bin/brightness draft (removed 2026-07-06).
+#
+# Sourced directly (not via include-source): the dispatcher lib does not
+# resolve through include-source in this worktree (BASH_LIB_PATH points at the
+# main repo). Same pattern as clipin/clipout.
+source "$(dirname "$(readlink -f "$0")")/../lib/bright.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bright             show current brightness (percent)
+       bright <1-100>     set brightness
+       bright +N | -N     adjust brightness, clamped to 1-100
+EOF
+}
+
+main() {
+  : 'Get/set brightness through the provider dispatcher.
+
+      The floor is 1, not 0: a 0% write blacks the panel on most backlights,
+      which is never what a repeated "down" keypress means.
+
+      @return 0 on success; 1 bad usage; 3 no capable provider
+  '
+  # No args: show current brightness
+  if (( $# == 0 )); then
+    bright::dispatch get brightness
+    return
+  fi
+
+  case "$1" in -h|--help) usage; return 0 ;; esac
+  (( $# == 1 )) || { usage; return 1; }
+
+  local arg="${1%\%}"
+  local -i level
+  # Relative adjustment: +N or -N (clamped); absolute: 1-100
+  if [[ "$arg" =~ ^[+-][0-9]+$ ]]; then
+    local -i current
+    current=$(bright::dispatch get brightness) || return $?
+    (( level = current + arg ))
+    (( level < 1 )) && level=1
+    (( level > 100 )) && level=100
+  elif [[ "$arg" =~ ^[0-9]+$ ]] && (( arg >= 1 && arg <= 100 )); then
+    level="$arg"
+  else
+    usage; return 1
+  fi
+
+  bright::dispatch set brightness "$level"
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

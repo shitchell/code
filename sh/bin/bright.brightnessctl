@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# bright.brightnessctl — backend via brightnessctl, which can set brightness
+# unprivileged through systemd-logind (no sudo), hence out-scoring bright.sysfs.
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable.
+      @return 0 always
+  '
+  command -v brightnessctl >/dev/null 2>&1 || { echo "score 0"; return; }
+  brightnessctl -m info >/dev/null 2>&1 || { echo "score 0"; return; }
+  echo "score 70"
+  echo "caps get:brightness set:brightness"
+}
+
+get_brightness() {
+  # -m: "device,class,current,percent%,max"
+  brightnessctl -m info | awk -F, '{ gsub(/%/, "", $4); print $4; exit }'
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (brightness)
+      @arg $3 value for set (percent)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   [[ "$2" == brightness ]] && get_brightness ;;
+    set)   [[ "$2" == brightness ]] && brightnessctl -q set "$3%" ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

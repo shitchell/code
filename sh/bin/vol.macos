@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# vol.macos — macOS backend, via osascript. Ported from the monolithic
+# bin/vol (pre-2026-07-06), mute support added (get/set volume settings
+# carries an "output muted" field).
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable.
+      @return 0 always
+  '
+  command -v osascript >/dev/null 2>&1 || { echo "score 0"; return; }
+  [[ "$(uname -s 2>/dev/null)" == Darwin ]] || { echo "score 0"; return; }
+  echo "score 70"
+  echo "caps get:volume set:volume get:mute set:mute"
+}
+
+get_mute() {
+  case "$(osascript -e 'output muted of (get volume settings)')" in
+    true)  echo on ;;
+    false) echo off ;;
+    *)     return 1 ;;
+  esac
+}
+
+set_mute() {
+  case "$1" in
+    on)     osascript -e 'set volume output muted true' ;;
+    off)    osascript -e 'set volume output muted false' ;;
+    toggle) if [[ "$(get_mute)" == on ]]; then set_mute off; else set_mute on; fi ;;
+  esac
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (volume|mute)
+      @arg $3 value for set
+  '
+  case "$1" in
+    probe) probe ;;
+    get) case "$2" in
+           volume) osascript -e 'output volume of (get volume settings)' ;;
+           mute)   get_mute ;;
+         esac ;;
+    set) case "$2" in
+           volume) osascript -e "set volume output volume $3" ;;
+           mute)   set_mute "$3" ;;
+         esac ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

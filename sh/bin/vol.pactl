@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# vol.pactl — PulseAudio backend, via pactl (also serves PipeWire's pulse
+# compat layer when pactl happens to be installed). Ported from the
+# monolithic bin/vol (pre-2026-07-06).
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable. 70 — below vol.wpctl (80).
+      @return 0 always
+  '
+  command -v pactl >/dev/null 2>&1 || { echo "score 0"; return; }
+  pactl info >/dev/null 2>&1 || { echo "score 0"; return; }
+  echo "score 70"
+  echo "caps get:volume set:volume get:mute set:mute"
+}
+
+get_volume() {
+  local out
+  # Modern pactl (v14+) first, fall back to parsing `pactl list sinks`.
+  if out=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | awk '{
+        for (i=1; i<=NF; i++) if ($i ~ /%/) { gsub(/%/, "", $i); print $i; exit }
+      }') && [[ -n "$out" ]]; then
+    :
+  else
+    out=$(pactl list sinks | awk '
+        /^\s*Volume:/ && !done {
+            for (i=1; i<=NF; i++) if ($i ~ /%/) {
+                gsub(/%/, "", $i); print $i; done=1; exit
+            }
+        }
+    ')
+  fi
+  [[ -n "$out" ]] || return 1
+  echo "$out"
+}
+
+get_mute() {
+  local out
+  if out=$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null); then
+    case "$out" in
+      *yes*) echo on ;;
+      *no*)  echo off ;;
+      *)     return 1 ;;
+    esac
+  else
+    case "$(pactl list sinks | awk '/^\s*Mute:/ { print $2; exit }')" in
+      yes) echo on ;;
+      no)  echo off ;;
+      *)   return 1 ;;
+    esac
+  fi
+}
+
+set_mute() {
+  case "$1" in
+    on)     pactl set-sink-mute @DEFAULT_SINK@ 1 ;;
+    off)    pactl set-sink-mute @DEFAULT_SINK@ 0 ;;
+    toggle) pactl set-sink-mute @DEFAULT_SINK@ toggle ;;
+  esac
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (volume|mute)
+      @arg $3 value for set
+  '
+  case "$1" in
+    probe) probe ;;
+    get) case "$2" in
+           volume) get_volume ;;
+           mute)   get_mute ;;
+         esac ;;
+    set) case "$2" in
+           volume) pactl set-sink-volume @DEFAULT_SINK@ "$3%" ;;
+           mute)   set_mute "$3" ;;
+         esac ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

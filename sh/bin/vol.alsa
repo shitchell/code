@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# vol.alsa — raw ALSA backend, via amixer. Last-ditch Linux fallback: on
+# PipeWire/Pulse systems amixer may only see a virtual "Master", and on some
+# it fails outright — hence the low score and the probe actually exercising
+# `amixer get Master`. Ported from the monolithic bin/vol (pre-2026-07-06).
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable. 40 — below wpctl/pactl.
+      @return 0 always
+  '
+  command -v amixer >/dev/null 2>&1 || { echo "score 0"; return; }
+  amixer get Master >/dev/null 2>&1 || { echo "score 0"; return; }
+  echo "score 40"
+  echo "caps get:volume set:volume get:mute set:mute"
+}
+
+get_volume() {
+  # Output line: "... [100%] ..."
+  amixer get Master | awk -F'[][]' '/\[.*%\]/ { gsub(/%/, "", $2); print $2; exit }'
+}
+
+get_mute() {
+  # Output line: "... [100%] [on]" — [on] means audible, so mute is the inverse.
+  case "$(amixer get Master | awk -F'[][]' '/\[on\]|\[off\]/ { print $(NF-1); exit }')" in
+    off) echo on ;;
+    on)  echo off ;;
+    *)   return 1 ;;
+  esac
+}
+
+set_mute() {
+  case "$1" in
+    on)     amixer set Master mute >/dev/null ;;
+    off)    amixer set Master unmute >/dev/null ;;
+    toggle) amixer set Master toggle >/dev/null ;;
+  esac
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (volume|mute)
+      @arg $3 value for set
+  '
+  case "$1" in
+    probe) probe ;;
+    get) case "$2" in
+           volume) get_volume ;;
+           mute)   get_mute ;;
+         esac ;;
+    set) case "$2" in
+           volume) amixer set Master "$3%" >/dev/null ;;
+           mute)   set_mute "$3" ;;
+         esac ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

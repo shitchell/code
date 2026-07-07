@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# vol.termux — Android/Termux backend, via termux-volume (music stream).
+# No mute concept in termux-volume, so only volume caps are advertised.
+# Ported from the monolithic bin/vol (pre-2026-07-06).
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable.
+      @return 0 always
+  '
+  command -v termux-volume >/dev/null 2>&1 || { echo "score 0"; return; }
+  echo "score 70"
+  echo "caps get:volume set:volume"
+}
+
+parse_music_stream() {
+  : 'Parse termux-volume JSON for music stream values.
+
+      Handles both pretty-printed and minified JSON.
+
+      @stdin  JSON from termux-volume
+      @stdout space-separated: volume max_volume
+  '
+  tr ',{}[]' '\n' | awk '
+      /"stream".*"music"/ { in_music=1 }
+      in_music && /"volume"[^_]/ {
+          match($0, /[0-9]+/); vol=substr($0, RSTART, RLENGTH)
+      }
+      in_music && /"max_volume"/ {
+          match($0, /[0-9]+/); max=substr($0, RSTART, RLENGTH)
+          print vol, max; exit
+      }
+  '
+}
+
+get_volume() {
+  local vol max
+  read -r vol max < <(termux-volume | parse_music_stream)
+  if [[ -z "$max" ]] || (( max == 0 )); then
+    echo "vol.termux: failed to parse termux volume" >&2
+    return 1
+  fi
+  awk "BEGIN { printf \"%.0f\\n\", ($vol/$max)*100 }"
+}
+
+set_volume() {
+  local -i level="$1" raw
+  local vol max
+  read -r vol max < <(termux-volume | parse_music_stream)
+  if [[ -z "$max" ]] || (( max == 0 )); then
+    echo "vol.termux: failed to parse termux max volume" >&2
+    return 1
+  fi
+  (( raw = level * max / 100 ))
+  termux-volume music "$raw"
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 control (volume)
+      @arg $3 value for set
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   [[ "$2" == volume ]] && get_volume ;;
+    set)   [[ "$2" == volume ]] && set_volume "$3" ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
