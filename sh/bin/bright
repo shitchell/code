@@ -47,7 +47,9 @@ main() {
     usage; return 1
   fi
 
-  bright::dispatch set brightness "$level"
+  # Print the level we just set (echo, not a provider re-query: cheaper, and
+  # close enough even where the hardware quantizes, e.g. acpi_video0's 60->59).
+  bright::dispatch set brightness "$level" && echo "$level"
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

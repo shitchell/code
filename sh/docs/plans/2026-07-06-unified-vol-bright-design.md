@@ -76,6 +76,20 @@ Layout and contract copied from clip (see clipboard design §3–§8):
 - Numbers are integer percent 0–100 end to end. Providers get/set raw state
   only; the front-ends own `±N` math and clamping (0–100; `bright` floors at
   1 so a typo can't black the panel).
+- Front-ends print the resulting state after a set (`vol +5` → `85`,
+  `vol mute` → `on|off`), so vtvol/vtbright build their toast from a single
+  invocation (added 2026-07-06 after a measured ~1.5s keypress→toast lag:
+  ~90ms probe sweep + ~120ms bash/dispatcher overhead × 3 invocations × up
+  to 4 dispatches).
+- Winning providers are cached per `op:control` in `XDG_RUNTIME_DIR` with a
+  60s TTL (`VOL_CACHE_TTL`/`BRIGHT_CACHE_TTL`) + failure invalidation: a
+  cached provider that errors is dropped and the same invocation re-probes,
+  so a backend swap never errors a keypress — it pays ~90ms once. TTL chosen
+  over background re-validation (always-fast, self-corrects next press) for
+  simplicity: no background jobs or cache-write races from a mashed
+  keybinding. Quote: "what are the odds i press the volume key, which
+  updates the cache, then swap out the backend in a breaking-change sort of
+  way and in less than 60 seconds, then press the volume key again".
 - Front-end CLI (unchanged from existing `vol`, extended):
   - `vol` → print percent; `vol 40` → set; `vol +5` / `vol -5` → relative
   - `vol mute [on|off|toggle]` → default `toggle`; `vol muted` → query
@@ -105,7 +119,8 @@ Layout and contract copied from clip (see clipboard design §3–§8):
    Requirement (quote, 2026-07-06): "i'd prefer if these shortcuts did *not*
    fire (or at least, if the helper scripts didn't do anything) while i'm in
    a GUI / not in a VT".
-2. **Delegate** — `vol "$@"` / `bright "$@"`, then re-query state for display.
+2. **Delegate** — one `vol "$@"` / `bright "$@"` invocation; the toast text
+   comes from the state it prints (mute toggles toast "Muted"/"Unmuted").
 3. **Toast if configured** — when `lnotify` is on PATH *and* its daemon
    socket exists: `lnotify --group volume|brightness --timeout 1500 …`
    (`--group` collapses repeated presses into one updating toast). Absent or

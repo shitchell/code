@@ -30,11 +30,13 @@ notify() {
 main() {
   vt_active || return 0
 
-  local self_dir
+  # One bright invocation only (see vtvol): bright prints the resulting
+  # state after a set, so the toast needs no follow-up query.
+  local self_dir out
   self_dir="$(dirname "$(readlink -f "$0")")"
-  "$self_dir/bright" "$@" >/dev/null || return $?
+  out="$("$self_dir/bright" "$@")" || return $?
 
-  notify brightness "Brightness: $("$self_dir/bright")%"
+  notify brightness "Brightness: ${out}%"
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

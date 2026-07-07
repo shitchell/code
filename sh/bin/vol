@@ -32,7 +32,10 @@ main() {
     mute)
       local state="${2:-toggle}"
       case "$state" in
-        on|off|toggle) vol::dispatch set mute "$state" ;;
+        on|off|toggle)
+          # Print the resulting state so callers (vtvol) get everything from
+          # one invocation — with toggle it can't be known without asking.
+          vol::dispatch set mute "$state" && vol::dispatch get mute ;;
         *) usage; return 1 ;;
       esac
       return
@@ -62,7 +65,9 @@ main() {
     usage; return 1
   fi
 
-  vol::dispatch set volume "$level"
+  # Print the level we just set (echo, not a provider re-query: cheaper, and
+  # the clamped target is the truthful answer for every current backend).
+  vol::dispatch set volume "$level" && echo "$level"
 }
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
