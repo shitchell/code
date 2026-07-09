@@ -67,10 +67,11 @@ def create_static_image(
     head: int | None,
     tail: int | None,
     width: int | str | None,
+    font: str | None = None,
 ) -> bool:
     """Create PNG or SVG using rich."""
     try:
-        from rich.console import Console
+        from rich.console import Console, CONSOLE_SVG_FORMAT
         from rich.text import Text
         from rich.theme import Theme
         import io
@@ -114,8 +115,25 @@ def create_static_image(
     # Export based on format
     suffix = output_path.suffix.lower()
 
+    # By default rich's SVG export declares "Fira Code, monospace" as the
+    # font-family and tries to pull Fira Code from a CDN. When that font
+    # isn't installed locally (and PNG export via cairosvg never fetches
+    # the CDN @font-face), renderers resolve the *first* family name via
+    # fontconfig instead of falling through to the "monospace" generic,
+    # which on most systems resolves "Fira Code" to a proportional font
+    # (e.g. DejaVu Sans) -- silently breaking column alignment. --font
+    # lets callers pin an installed monospace family explicitly.
+    code_format = CONSOLE_SVG_FORMAT
+    if font:
+        code_format = code_format.replace(
+            "font-family: Fira Code, monospace;",
+            f'font-family: "{font}", monospace;',
+        )
+
     if suffix == ".svg":
-        svg_content = console.export_svg(title=command_str if show_prompt else None)
+        svg_content = console.export_svg(
+            title=command_str if show_prompt else "", code_format=code_format
+        )
         output_path.write_text(svg_content)
         return True
     elif suffix == ".png":
@@ -128,7 +146,9 @@ def create_static_image(
             )
             return False
 
-        svg_content = console.export_svg(title=command_str if show_prompt else None)
+        svg_content = console.export_svg(
+            title=command_str if show_prompt else "", code_format=code_format
+        )
         cairosvg.svg2png(bytestring=svg_content.encode(), write_to=str(output_path))
         return True
     else:
@@ -298,6 +318,15 @@ def main():
         help="Console width in chars, or 'auto' to fit content (default: 120)",
     )
     parser.add_argument(
+        "--font",
+        metavar="FONT",
+        default=None,
+        help="Font family for static (PNG/SVG) output, e.g. 'DejaVu Sans Mono'. "
+        "Overrides the default 'Fira Code' web font, which silently falls back "
+        "to a proportional font (breaking column alignment) when not installed "
+        "locally. Ignored for GIF output.",
+    )
+    parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
         help="Command to run (after --)",
@@ -354,6 +383,7 @@ def main():
             head=args.head,
             tail=args.tail,
             width=args.width,
+            font=args.font,
         )
     else:
         print(f"Error: Unsupported output format: {suffix}", file=sys.stderr)
