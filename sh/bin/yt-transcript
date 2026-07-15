@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 #
-# Download a youtube video transcript
-# curl -s 'https://www.youtube.com/youtubei/v1/get_transcript?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8' \
-# the key seems unnecessary?
-# curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
-#    -H 'Content-Type: application/json' \
-#    --data-raw '{
-#     "context": {
-#         "client": {
-#             "clientName": "WEB",
-#             "clientVersion": "2.2021111",
-#         }
-#     },
-#     "params": "'"$(printf '\n\x0bcC1LFC0KFSw' | base64)"'"
-# }'
+# Download a youtube video transcript.
+#
+# Uses yt-dlp to fetch the video's caption track (preferring human-authored
+# subtitles, falling back to auto-generated captions) in the timed "json3"
+# format, then parses it with jq into per-line time + text segments.
+#
+# History: this previously spoke to the private youtubei `get_transcript`
+# endpoint directly. That API kept changing its `params`/client-version
+# handshake and eventually started returning HTTP 400 FAILED_PRECONDITION, so
+# it was replaced with yt-dlp (which tracks YouTube's changes for us).
 
 ## imports #####################################################################
 ################################################################################
@@ -38,7 +34,7 @@ function help-full() {
     help-usage
     help-epilogue
     echo
-    echo "Uses youtubei to download a video transcript. The transcript is"
+    echo "Uses yt-dlp to download a video transcript. The transcript is"
     echo "formatted as a list of lines, each line containing the time and text."
     echo "The format of each line can be specified using the --format option:"
     echo "    {timeStart}      the time the line starts in HH:MM:SS format"
@@ -55,7 +51,7 @@ function help-full() {
     --help                     display this help message
     -f / --format <format>     display each line of the transcript in the
                                specified format
-                               (default: '{timeStart} {text}')
+                               (default: '{timeStart}  {text}')
     -c / --color               colorize the output
     --no-color                 do not colorize the output
     --color-time <ansi code>   colorize the time using the specified ansi code.
@@ -63,9 +59,16 @@ function help-full() {
     --color-text <ansi code>   colorize the text using the specified ansi code
                                if specified, implies --color (default: 0)
     -l/--lang <language code>  the language code of the transcript to download
-                               if available (defaults to the video default)
+                               if available (default: en)
+    --no-cache                 do not read from or write to the transcript cache
+    --refresh                  ignore any cached copy and re-fetch, updating the
+                               cache
     -v                         verbose output
     -o <output file>           write the transcript to the specified file
+
+Fetched transcripts are cached under ~/.cache/yt-transcript as
+<video id>.<lang>.json3 to avoid repeat network requests (YouTube rate-limits
+yt-dlp quickly without a signed-in session).
 EOF
 }
 
@@ -77,7 +80,9 @@ function parse-args() {
     COLOR_TEXT=0
     FORMAT="{timeStart}  {text}"
     OUTPUT_FILE=""
-    LANG=""
+    SUB_LANG=""
+    USE_CACHE=1
+    REFRESH_CACHE=0
 
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
@@ -110,12 +115,20 @@ function parse-args() {
                 shift 2
                 ;;
             -l | --lang)
-                LANG="${2}"
+                SUB_LANG="${2}"
                 shift 2
                 ;;
             -f | --format)
                 FORMAT="${2}"
                 shift 2
+                ;;
+            --no-cache)
+                USE_CACHE=0
+                shift 1
+                ;;
+            --refresh)
+                REFRESH_CACHE=1
+                shift 1
                 ;;
             -v)
                 VERBOSE=1
@@ -155,6 +168,22 @@ function parse-args() {
 ## helpful functions ###########################################################
 ################################################################################
 
+# @description Verify that required external tools are installed
+# @usage check-dependencies
+function check-dependencies() {
+    local dep missing=()
+
+    for dep in yt-dlp jq; do
+        command -v "${dep}" &>/dev/null || missing+=("${dep}")
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo-error "missing required dependencies: ${missing[*]}"
+        echo-error "install with e.g.: pipx install yt-dlp && apt install jq"
+        return 1
+    fi
+}
+
 function parse-video-id() {
     local string="${1}"
     local video_id
@@ -179,416 +208,214 @@ function parse-video-id() {
     echo "${video_id}"
 }
 
-# @description Build the youtubei request params
-# @usage yt-transcript-build-params-old <video id> [<lang>]
-function yt-transcript-build-params-old() {
-    local video_id="${1}"
-    local lang="${2}"
-    local params
+# @description Convert milliseconds to HH:MM:SS, storing the result in a variable
+# @usage ms-to-hms-var <varname> <milliseconds>
+# @arg $1 {string} name of the variable to assign the result to
+# @arg $2 {number} milliseconds
+function ms-to-hms-var() {
+    local __ms="${2}" __s __m __h
 
-    # Format the language code
-    ## https://stackoverflow.com/a/70013529
-    ## 1. Get the language initials like "ru" for russian
-    ## 2. Encode \n\x00\x12\x02LANGUAGE_INITIALS\x1a\x00 in base64, e.g.:
-    ##    A=$(printf '\n\x00\x12\x02LANGUAGE_INITIALS\x1a\x00' | base64)
-    ##    => CgASAnJ1GgA=
-    ## 3. Encode the result as a URL by replacing the = to %3D, e.g.:
-    ##    B=$(printf %s $A | jq -sRr @uri)
-    ##    => CgASAnJ1GgA%3D
-    ## 4. Only if using shell commands: replace the single % to two %, e.g.:
-    ##    C=$(echo $B | sed 's/%/%%/')
-    ##    => CgASAnJ1GgA%%3D
-    ## 5. Encode \n\x0bVIDEO_ID\x12\x0e$C, e.g. for VIDEO_ID=lo0X2ZdElQ4:
-    ##    D=$(printf "\n\x0bVIDEO_ID\x12\x0e$C" | base64)
-    ##    => CgtsbzBYMlpkRWxRNBIOQ2dBU0FuSjFHZ0ElM0Q=
-    ## 6. Use this params value from the Captions in default language section:
-    ##    curl -s 'https://www.youtube.com/y
-    if [[ -n "${lang}" ]]; then
-        local A=$(printf '\n\x00\x12\x02%s\x1a\x00' "${lang}" | base64)
-        debug "lang_b64.A: ${A}"
-        local B=$(urlencode "${A}")
-        debug "lang_b64.B: ${B}"
-        local C=$(echo "${B}" | sed 's/%/%%/')
-        debug "lang_b64.C: ${C}"
-        local lang_b64=$'\x12\x0e'"${C}"
-        debug "lang_b64: ${lang_b64}"
-    fi
-    params=$(printf '\n\x0b%s%s' "${video_id}" "${lang_b64}" | base64)
-    debug "video_id: ${video_id}"
-    debug "lang: ${lang}"
-    debug "params: ${params}"
-    echo "${params}"
+    __s=$(( __ms / 1000 ))
+    __m=$(( __s / 60 ))
+    __h=$(( __m / 60 ))
+
+    # printf -v assigns without a subshell, keeping this cheap for long
+    # transcripts (thousands of segments)
+    printf -v "${1}" '%02d:%02d:%02d' "$(( __h ))" "$(( __m % 60 ))" "$(( __s % 60 ))"
 }
 
-# @description Build the youtubei request params
-# @usage yt-transcript-build-params <video id> [<lang>]
-function yt-transcript-build-params() {
-    ## Updated as of 2024-08-07 to conform to the new youtubei API
-    # This is based on the following working request:
-    #   curl 'https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false' \
-    #       -H "content-type: application/json" \
-    #       --data-raw '{
-    #           "context": {
-    #               "client": {
-    #                   "hl": "en",
-    #                   "gl": "US",
-    #                   "clientName": "WEB",
-    #                   "clientVersion": "2.20240806.01.00"
-    #               }
-    #           },
-    #           "params": "CgtiX1RrRmhqOW1naxIOQ2dBU0FtVnVHZ0ElM0QYASozZW5nYWdlbWVudC1wYW5lbC1zZWFyY2hhYmxlLXRyYW5zY3JpcHQtc2VhcmNoLXBhbmVsMAA4AUAB"
-    #           }
-    #       '
-    #
-    # The params value is a base64 encoded string that decodes to the following:
-    #   CgtiX1RrRmhqOW1naxIOQ2dBU0FtVnVHZ0ElM0QYASozZW5nYWdlbWVudC1wYW5lbC1zZWFyY2hhYmxlLXRyYW5zY3JpcHQtc2VhcmNoLXBhbmVsMAA4AUAB
-    #   => \n\x0bb_TkFhj9mgk\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
-    # The segment "CgASAmVuGgA%3D" decodes to:
-    #   \n\x00\x12\x02en\x1a\x00
-    #
-    # This can be broken down as follows:
-    #   - \n\x0b
-    #   - {{VIDEO_ID}} (e.g. b_TkFhj9mgk)
-    #   - \x12\x0e
-    #   - {{LANG_B64}} (e.g. \n\x00\x12\x02en\x1a\x00 => CgASAmVuGgA%3D)
-    #   - \x18\x01
-    #   - *3engagement-panel-searchable-transcript-search-panel0
-    #   - \x00
-    #   - 8 (??)
-    #   - \x01
-    #   - @ (??)
-    #   - \x01
-    #
-    # Note the following changes:
-    #   - The language code is now included in the "context.client" object under
-    #     the "hl" and "gl" keys AS WELL AS the "params" value
-    #   - The "params" value now includes a new field "*3engagement
-    #     -panel-searchable-transcript-search-panel0" with a value of 8
-    #   - The "params" value now includes an 8 and @ for... some reason
-    #
-    # Just got a new params that seems to be different for a different video:
-    #   Cgs3d3pudUIwc0tsdxISQ2dOaGMzSVNBbVZ1R2dBJTNEGAEqM2VuZ2FnZW1lbnQtcGFuZWwtc2VhcmNoYWJsZS10cmFuc2NyaXB0LXNlYXJjaC1wYW5lbDAAOAFAAQ%3D%3D
-    #   => \n\x0b7wznuB0sKlw\x12\x12CgNhc3ISAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
-    # The above rules incorrectly produced the following:
-    #   => \n\x0b7wznuB0sKlw\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
-    #   => CgASAmVuGgA%3D = \n\x03asr\x12\x02en\x1a\x00
-    #
-    # All collected decoded params side-by-side:
-    #   b_TkFhj9mgk: \n\x0bb_TkFhj9mgk\x12\x0eCgASAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
-    #   7wznuB0sKlw: \n\x0b7wznuB0sKlw\x12\x12CgNhc3ISAmVuGgA%3D\x18\x01*3engagement-panel-searchable-transcript-search-panel0\x008\x01@\x01
-    #
-    # Adjusted rules for the new params:
-    #   - \n\x0b
-    #   - {{VIDEO_ID}} (e.g. 7wznuB0sKlw)
-    #   - \x12
-    #   - (\x0e | \x12) ??
-    #   - {{LANG_B64}} (e.g. \n\x00\x12\x02en\x1a\x00 => CgASAmVuGgA%3D)
-    #   - \x18\x01
-    #   - *3engagement-panel-searchable-transcript-search-panel0
-    #   - \x00
-    #   - 8 (??)
-    #   - \x01
-    #   - @ (??)
-    #   - \x01
-
+# @description Fetch a video's caption track as json3 via yt-dlp
+# @usage yt-transcript-fetch-json3 <video id> [<lang>]
+# @arg $1 {string} video id
+# @arg $2 {string} language code (default: en)
+# @stdout the json3 caption document
+function yt-transcript-fetch-json3() {
     local video_id="${1}"
-    local lang="${2:-en}"  # Default language to 'en' if not provided
-    local params
-    local lang_b64
-    local engagement_field="*3engagement-panel-searchable-transcript-search-panel0"
-
-    # Step 1: Encode the language initials
-    lang_b64=$(printf '\n\x00\x12\x02%s\x1a\x00' "${lang}" | base64)
-    debug "lang_b64: $(printf '%q' "${lang_b64}")"
-
-    # Step 2: URL encode the base64 encoded language value
-    lang_b64=$(urlencode "${lang_b64}")
-    debug "URL encoded lang_b64: $(printf '%q' "${lang_b64}")"
-
-    # Step 3: Prepare the initial part of the params value
-    params=$(printf '\n\x0b%s\x12\x0e%s' "${video_id}" "${lang_b64}")
-    debug "Initial params: $(printf '%q' "${params}")"
-
-    # Step 4: Append the engagement panel field
-    params+=$(printf '\x18\x01%s' "${engagement_field}")
-    params+=$'\xff0'
-    debug "After adding engagement panel field: $(printf '%q' "${params}")"
-
-    # Step 5: Append the '8' marker
-    params+='8'
-    debug "After adding the '8' marker: $(printf '%q' "${params}")"
-
-    # Step 6: Append the '\x01' marker
-    params+=$(printf '\x01')
-    debug "After adding the '\x01' marker: $(printf '%q' "${params}")"
-
-    # Step 7: Append the '@' marker
-    params+=$(printf '@')
-    debug "After adding the '@' marker: $(printf '%q' "${params}")"
-
-    # Step 8: Append the final \x01 marker
-    params+=$(printf '\x01')
-    debug "Final params with \x01 marker: $(printf '%q' "${params}")"
-    debug "Final params, null byte unescaped: $(printf '%s' "${params}" | cse0 | invisicat.py -I)"
-
-    # Step 9: Encode the entire params value in base64
-    params=$(printf '%s' "${params}" | cse0 | base64)
-    debug "Encoded params: $(printf '%q' "${params}")"
-
-    # Return the final params value
-    echo "${params}"
-}
-
-# @description Build the youtubei data payload
-# @usage yt-transcript-build-data <video id> [<lang>]
-function yt-transcript-build-data() {
-    local video_id="${1}"
-    local lang="${2}"
-    local params data
-
-    params=$(yt-transcript-build-params "${video_id}" "${lang}")
-    data='{
-        "context": {
-            "client": {
-                "clientName": "WEB",
-                "clientVersion": "2.2021111"
-            }
-        },
-        "params": "'"${params}"'"
-    }'
-    debug "data: ${data}"
-    echo "${data}"
-}
-
-# @description Fetch the youtubei JSON response for a video transcript
-# @usage yt-transcript-fetch <video id> [<lang>]
-function yt-transcript-fetch() {
-    local video_id="${1}"
-    local lang="${2}"
-    local response
-
-    # Set up the cache directory and response file
+    local lang="${2:-en}"
+    local url="https://www.youtube.com/watch?v=${video_id}"
     local cache_dir="${HOME}/.cache/yt-transcript"
-    local cache_response="${cache_dir}/${video_id}"
-    [[ -n "${lang}" ]] && cache_response+="-${lang}"
-    cache_response+=".json"
-    mkdir -p "${cache_dir}" &>/dev/null
+    local cache_file="${cache_dir}/${video_id}.${lang}.json3"
+    local tmpdir base file mode
+    local yt_err=/dev/null
 
-    # Check if a cached response exists
-    if [[ -f "${cache_response}" ]]; then
-        debug "using cached response: ${cache_response}"
-        response=$(<"${cache_response}")
-    else
-        debug "no cached response found, fetching from youtube"
-        response=$(
-            curl -s 'https://www.youtube.com/youtubei/v1/get_transcript' \
-            -H 'Content-Type: application/json' \
-            --data-raw "$(yt-transcript-build-data "${video_id}" "${lang}")"
-        )
-        debug "response: ${response}"
-        [[ -d "${cache_dir}" && -w "${cache_dir}" ]] && {
-            echo "${response}" >"${cache_response}"
-        }
+    # Surface yt-dlp's own chatter only in verbose mode
+    [[ "${VERBOSE}" -eq 1 ]] && yt_err=/dev/stderr
+
+    # Serve from cache when possible. Transcripts are effectively immutable, and
+    # YouTube rate-limits/blocks yt-dlp quickly without a signed-in session, so
+    # caching by <video>.<lang> avoids repeat network hits. --refresh forces a
+    # re-fetch; --no-cache disables both reading and writing.
+    if [[ "${USE_CACHE}" -eq 1 && "${REFRESH_CACHE}" -ne 1 && -s "${cache_file}" ]]; then
+        debug "serving transcript from cache: ${cache_file}"
+        cat "${cache_file}"
+        return 0
     fi
 
-    echo "${response}"
-}
+    # NOTE: this function's stdout is the JSON data channel (piped into jq), so
+    # every diagnostic here must be forced to stderr -- echo-error writes to
+    # stdout by default, which would otherwise corrupt the pipe.
+    tmpdir="$(mktemp -d)" || {
+        echo-error "could not create temporary directory" >&2
+        return 1
+    }
+    base="${tmpdir}/sub"
 
-# @description Parse the youtubei response for the transcript
-# @usage yt-transcript-parse <response>
-function yt-transcript-parse() {
-    local response="${1}"
-
-    awk -v color="${DO_COLOR}" -v format="${FORMAT}" \
-    -v color_time="${COLOR_TIME}" -v color_text="${COLOR_TEXT}" '
-        # ---- Functions -------------------------------------------------------
-
-        # Convert milliseconds to HH:MM:SS
-        function ms_to_hms(ms) {
-            local seconds
-            local minutes
-            local hours
-
-            seconds = int(ms / 1000);
-            minutes = int(seconds / 60);
-            hours = int(minutes / 60);
-            seconds = seconds % 60;
-            minutes = minutes % 60;
-            return sprintf("%02d:%02d:%02d", hours, minutes, seconds);
-        }
-
-        # Unescape common escape sequences
-        function unescape(text) {
-            gsub(/\\n/, "\n", text);
-            gsub(/\\t/, "\t", text);
-            gsub(/\\r/, "\r", text);
-            gsub(/\\"/, "\"", text);
-            gsub(/\\\\/, "\\", text);
-            return text;
-        }
-
-        # ---- Setup -----------------------------------------------------------
-
-        BEGIN {
-            ms_start = 0;
-            ms_end = 0;
-            ms_duration = 0;
-            text = "";
-            if (color) {
-                ms_color_start = "\033[" color_time "m";
-                ms_color_end = "\033[0m";
-                text_color_start = "\033[" color_text "m";
-                text_color_end = "\033[0m";
-            }
-        }
-
-        # ---- Main ------------------------------------------------------------
-
-        # Ignore all lines until we reach this point
-        /"transcriptSegmentListRenderer": {/ {
-            # ---- Stop ignoring lines -----------------------------------------
-            ignore = "false";
-            next;
-        }
-
-        # Once we stop ignoring lines, parse the transcript segments
-        ignore == "false" {
-            if ($0 ~ /"transcriptSegmentRenderer": {/) {
-                # ---- Reset the segment variables -----------------------------
-                ms_start = 0;
-                ms_end = 0;
-                ms_duration = 0;
-                text = "";
-            } else if ($0 ~ /"startMs":/) {
-                # ---- ms_start / Start of the segment -------------------------
-                ms_start = gensub(/"startMs": "(.*)",/, "\\1", 1);
-                if (ms_end > 0 && ms_duration == 0) {
-                    ms_duration = ms_end - ms_start;
-                } else if (ms_duration > 0 && ms_end == 0) {
-                    ms_end = ms_start + ms_duration;
-                }
-            } else if ($0 ~ /"durationMs":/) {
-                # --- ms_duration / Duration of the segment --------------------
-                ms_duration = gensub(/.*"durationMs": "(.*)".*/, "\\1", 1);
-                if (ms_start > 0 && ms_end == 0) {
-                    ms_end = ms_start + ms_duration;
-                } else if (ms_end > 0 && ms_start == 0) {
-                    ms_start = ms_end - ms_duration;
-                }
-            } else if ($0 ~ /"endMs":/) {
-                # ---- ms_end / End of the segment -----------------------------
-                ms_end = gensub(/"endMs": "(.*)",/, "\\1", 1);
-                if (ms_start > 0 && ms_duration == 0) {
-                    ms_duration = ms_end - ms_start;
-                } else if (ms_duration > 0 && ms_end == 0) {
-                    ms_end = ms_start + ms_duration;
-                }
-            } else if ($0 ~ /"text":/) {
-                # ---- text / Text of the segment ------------------------------
-                text = gensub(/.*"text" ?: ?/, "", "g", $0);
-                text = gensub(/^"(.*)"$/, "\\1", "g", text);
-            } else if ($0 ~ /^                      },/) {
-                # ---- End of a segment, print the text ------------------------
-                ms_end = ms_start + ms_duration;
-                ms_start = ms_to_hms(ms_start);
-                ms_end = ms_to_hms(ms_end);
-                ms_duration = ms_to_hms(ms_duration);
-
-                # Validate that we have some text
-                if (text == "") {
-                    next;
-                } else {
-                    text = unescape(text);
-                }
-
-                # Split it on newlines
-                split(text, lines, "\n");
-
-                # Format the lines
-                result = "";
-                for (i = 1; i <= length(lines); i++) {
-                    text = lines[i];
-                    line = format;
-                    gsub(/{timeStart}/, ms_color_start ms_start ms_color_end, line);
-                    gsub(/{timeEnd}/, ms_color_start ms_end ms_color_end, line);
-                    gsub(/{timeDuration}/, ms_color_start ms_duration ms_color_end, line);
-                    gsub(/{text}/, text_color_start text text_color_end, line);
-                    gsub(/{n}/, "\n", line);
-                    gsub(/{t}/, "\t", line);
-                    if (result) {
-                        result = result "\n" line;
-                    } else {
-                        result = line;
-                    }
-                }
-
-                # Print it
-                print result;
-            }
-        }' <<< "${response}"
-}
-
-# @description Convert milliseconds to HH:MM:SS
-# @usage ms-to-hms <milliseconds>
-# @arg $1 {number} milliseconds
-# @return {string} HH:MM:SS
-function ms-to-hms() {
-    local ms="${1}"
-    local seconds
-    local minutes
-    local hours
-
-    seconds=$((ms / 1000))
-    minutes=$((seconds / 60))
-    hours=$((minutes / 60))
-
-    seconds=$((seconds % 60))
-    minutes=$((minutes % 60))
-
-    printf "%02d:%02d:%02d" "${hours}" "${minutes}" "${seconds}"
-}
-
-# @description URL encode a string
-# @usage urlencode <string>
-function urlencode() {
-    local string="${1}"
-    local encoded=""
-    local char
-
-    for (( i=0; i<${#string}; i++ )); do
-        char="${string:$i:1}"
-        case "${char}" in
-            [a-zA-Z0-9.~_-]) encoded+="${char}" ;;
-            *) printf -v encoded "%s%%%02X" "${encoded}" "'${char}" ;;
-        esac
+    # Prefer human-authored subtitles; fall back to auto-generated captions
+    for mode in --write-subs --write-auto-subs; do
+        debug "fetching subtitles via yt-dlp ${mode} (lang=${lang})"
+        yt-dlp --quiet --no-warnings --skip-download "${mode}" \
+            --sub-langs "${lang}" --sub-format json3 \
+            -o "${base}" "${url}" 2>"${yt_err}"
+        file="$(ls "${base}".*.json3 2>/dev/null | head -n1)"
+        [[ -s "${file}" ]] && break
+        file=""
     done
 
-    echo "${encoded}"
+    if [[ -z "${file}" ]]; then
+        rm -rf "${tmpdir}"
+        echo-error "no '${lang}' transcript available for video: ${video_id}" >&2
+        return 1
+    fi
+
+    # Populate the cache (best-effort -- a cache miss must never fail the fetch)
+    if [[ "${USE_CACHE}" -eq 1 ]] && mkdir -p "${cache_dir}" 2>/dev/null; then
+        if cp "${file}" "${cache_file}" 2>/dev/null; then
+            debug "cached transcript to: ${cache_file}"
+        fi
+    fi
+
+    debug "using subtitle file: ${file}"
+    cat "${file}"
+    rm -rf "${tmpdir}"
 }
 
-# Handle escaping/unescaping null bytes via \xFF
-esc0() { sed 's/\xFF/\xFF\xFF/g; s/\x00/\xFF0/g'; }
-cse0() { sed 's/\xFF0/\xFF\x00/g; s/\xFF\(.\)/\1/g'; }
+# @description Convert a json3 caption document into start/dur/text TSV
+# @usage yt-transcript-json3-to-tsv < json3
+# @stdin the json3 caption document
+# @stdout tab-separated: <startMs> <durationMs> <text>
+function yt-transcript-json3-to-tsv() {
+    # json3 events carry timing (tStartMs/dDurationMs) plus one or more text
+    # `segs`. Rolling auto-captions emit whitespace-only filler events between
+    # real lines; collapsing whitespace and dropping empties removes those.
+    jq -r '
+        .events[]?
+        | select(.segs != null)
+        | { s: (.tStartMs // 0),
+            d: (.dDurationMs // 0),
+            t: ([.segs[].utf8] | join("") | gsub("\\s+"; " ") | gsub("^ +| +$"; "")) }
+        | select(.t != "")
+        | [.s, .d, .t]
+        | @tsv
+    '
+}
+
+# @description Split a format template into alternating literal/token parts
+# @usage parse-format <format>
+# @arg $1 {string} the format template
+# @sets FMT_LITERALS array of literal chunks (one more element than FMT_TOKENS)
+# @sets FMT_TOKENS array of token names, interleaved between the literals
+function parse-format() {
+    local fmt="${1}"
+    local n=${#fmt} i=0 tok tlen lit=""
+
+    FMT_LITERALS=()
+    FMT_TOKENS=()
+
+    while (( i < n )); do
+        # Try to match a known token at the current position. Braces are
+        # literal in `case` glob patterns, so these match exactly.
+        tok=""
+        case "${fmt:i}" in
+            '{timeStart}'*)    tok="timeStart";    tlen=11 ;;
+            '{timeEnd}'*)      tok="timeEnd";      tlen=9  ;;
+            '{timeDuration}'*) tok="timeDuration"; tlen=13 ;;
+            '{text}'*)         tok="text";         tlen=6  ;;
+            '{n}'*)            tok="n";            tlen=3  ;;
+            '{t}'*)            tok="t";            tlen=3  ;;
+            '{{}'*)            tok="lbrace";       tlen=3  ;;
+            '{}}'*)            tok="rbrace";       tlen=3  ;;
+        esac
+        if [[ -n "${tok}" ]]; then
+            FMT_LITERALS+=( "${lit}" )
+            FMT_TOKENS+=( "${tok}" )
+            lit=""
+            (( i += tlen ))
+        else
+            lit+="${fmt:i:1}"
+            (( i++ ))
+        fi
+    done
+    FMT_LITERALS+=( "${lit}" )
+}
+
+# @description Format start/dur/text TSV lines using the requested FORMAT
+# @usage format-transcript < tsv
+# @stdin tab-separated: <startMs> <durationMs> <text>
+# @stdout the formatted transcript
+function format-transcript() {
+    local ts="" te="" xs="" xe=""
+
+    # Build the ANSI wrappers once (empty when color is disabled)
+    if [[ "${DO_COLOR}" -eq 1 ]]; then
+        ts=$'\e['"${COLOR_TIME}"'m'; te=$'\e[0m'
+        xs=$'\e['"${COLOR_TEXT}"'m'; xe=$'\e[0m'
+    fi
+
+    # Pre-parse the template once, then assemble each line by pure
+    # concatenation. No replacement engine ever sees the transcript text, so
+    # `&`, `\`, and even a stray `{text}` in the captions are inserted
+    # verbatim -- and a literal brace token like `{{}` can't be re-interpreted.
+    parse-format "${FORMAT}"
+
+    local sms dms text start_hms end_hms dur_hms out i
+    while IFS=$'\t' read -r sms dms text; do
+        ms-to-hms-var start_hms "${sms}"
+        ms-to-hms-var end_hms   "$(( sms + dms ))"
+        ms-to-hms-var dur_hms   "${dms}"
+
+        out="${FMT_LITERALS[0]}"
+        for (( i = 0; i < ${#FMT_TOKENS[@]}; i++ )); do
+            case "${FMT_TOKENS[i]}" in
+                timeStart)    out+="${ts}${start_hms}${te}" ;;
+                timeEnd)      out+="${ts}${end_hms}${te}" ;;
+                timeDuration) out+="${ts}${dur_hms}${te}" ;;
+                text)         out+="${xs}${text}${xe}" ;;
+                n)            out+=$'\n' ;;
+                t)            out+=$'\t' ;;
+                lbrace)       out+='{' ;;
+                rbrace)       out+='}' ;;
+            esac
+            out+="${FMT_LITERALS[i+1]}"
+        done
+        printf '%s\n' "${out}"
+    done
+}
 
 # @description Download a youtube video transcript
-# @usage get-transcript <video id> [<output file>]
+# @usage get-transcript <video id> [<output file>] [<lang>]
 # @arg $1 {string} video id
 # @arg $2 {string} output file
+# @arg $3 {string} language code
 # @return {string} transcript
 function get-transcript() {
     local video_id="${1}"
     local output_file="${2}"
     local lang="${3}"
-    local response transcript
+    local tsv
 
-    response=$(yt-transcript-fetch "${video_id}" "${lang}")
-    transcript=$(yt-transcript-parse "${response}")
+    # Fetch + parse first so a fetch failure isn't masked by the format stage
+    tsv="$(yt-transcript-fetch-json3 "${video_id}" "${lang}" | yt-transcript-json3-to-tsv)"
+    if [[ -z "${tsv}" ]]; then
+        # yt-transcript-fetch-json3 already reported the reason
+        return 1
+    fi
+
     if [[ -z "${output_file}" ]]; then
         debug "printing transcript to stdout"
-        printf "%s\n" "${transcript}"
+        printf '%s\n' "${tsv}" | format-transcript
     else
         debug "writing transcript to '${output_file}'"
-        printf "%s\n" "${transcript}" > "${output_file}"
+        printf '%s\n' "${tsv}" | format-transcript > "${output_file}"
     fi
 }
 
@@ -597,9 +424,10 @@ function get-transcript() {
 ################################################################################
 
 function main() {
+    check-dependencies || exit 1
     parse-args "${@}"
 
-    get-transcript "${VIDEO_ID}" "${OUTPUT_FILE}" "${LANG}"
+    get-transcript "${VIDEO_ID}" "${OUTPUT_FILE}" "${SUB_LANG}"
 }
 
 
