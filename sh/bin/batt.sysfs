@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# batt.sysfs — generic /sys/class/power_supply battery backend for Linux.
+# Device-agnostic: works for BAT0/BAT1/CMB0/macsmc-battery etc.
+#
+# Two kernel flavours exist and both are handled:
+#   charge_* (µAh) + current_now (µA)  — this machine (Librem 14)
+#   energy_* (µWh) + power_now   (µW)  — many Thinkpads, most ACPI laptops
+# Energy figures are normalised to Wh. On charge-based batteries that means
+# Ah × voltage_min_design, which is what upower does — NOT × voltage_now.
+# Verified 2026-07-29 on libre: charge_full 8.127 Ah × 6.0 V = 48.76 Wh,
+# matching `upower` exactly (it reports 48.762).
+#
+# Rates are read INSTANTANEOUSLY from current_now/power_now rather than taken
+# from upower's energy-rate, which is polled and smoothed over ~30s. That lag
+# is not academic: a runaway process was measured at 18.7 W while upower still
+# reported the pre-load 15.1 W, and the true idle draw was 9.4 W. A battery
+# readout that trails reality by a minute is worse than useless when you are
+# trying to find out what is eating the battery right now.
+
+battery() {
+  : 'Pick the battery device directory.
+
+      Prefers the device with the largest design capacity when a machine has
+      several (dual-battery Thinkpads); a UPS or keyboard/mouse battery is
+      excluded by requiring scope != Device.
+
+      @env BATT_SYSFS_ROOT power-supply class dir (default
+           /sys/class/power_supply). Exists so the unit tests can point at a
+           fixture tree — the conversion maths below is the part worth
+           testing, and it cannot be exercised against real hardware whose
+           values change between reads.
+      @stdout path to the chosen <root>/<dev>
+      @return 0 if one exists, 1 otherwise
+  '
+  local root="${BATT_SYSFS_ROOT:-/sys/class/power_supply}"
+  local d best="" best_cap=-1 cap type scope
+  for d in "$root"/*/; do
+    [[ -r "${d}type" ]] || continue
+    read -r type < "${d}type" 2>/dev/null || continue
+    [[ "$type" == Battery ]] || continue
+    # scope=Device marks peripherals (wireless mice, headsets), not the system
+    # battery. Absent on real laptop batteries.
+    if [[ -r "${d}scope" ]]; then
+      read -r scope < "${d}scope" 2>/dev/null
+      [[ "$scope" == Device ]] && continue
+    fi
+    cap=0
+    if [[ -r "${d}charge_full_design" ]]; then
+      read -r cap < "${d}charge_full_design"
+    elif [[ -r "${d}energy_full_design" ]]; then
+      read -r cap < "${d}energy_full_design"
+    fi
+    [[ "$cap" =~ ^[0-9]+$ ]] || cap=0
+    (( cap > best_cap )) && { best="${d%/}"; best_cap=$cap; }
+  done
+  [[ -n "$best" ]] && printf '%s\n' "$best"
+}
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then caps when usable. 60 — leaves room above for a
+              future batt.upower (richer history) without displacing this one,
+              which needs no daemon and works in a VT or over ssh.
+      @return 0 always
+  '
+  battery >/dev/null || { echo "score 0"; return; }
+  echo "score 60"
+  # get:procs is offered here rather than in the front-end because a truthful
+  # answer needs a /proc delta sample; ps(1) %cpu is a lifetime average and
+  # would finger long-lived idle processes instead of the current hog.
+  [[ -r /proc/stat ]] && { echo "caps get:status get:procs"; return; }
+  echo "caps get:status"
+}
+
+read_num() {
+  : 'Read a numeric sysfs attribute, or nothing if absent/unreadable.
+      @arg $1 file path
+      @stdout the value if it is an integer (possibly signed)
+  '
+  local v
+  [[ -r "$1" ]] || return 1
+  read -r v < "$1" 2>/dev/null || return 1
+  [[ "$v" =~ ^-?[0-9]+$ ]] || return 1
+  printf '%s\n' "$v"
+}
+
+sample_rate() {
+  : 'Median of several readings of a rate attribute (power_now/current_now).
+
+      A single read is not trustworthy here. Measured on libre 2026-07-29 the
+      EC refreshes current_now only about once a second, and consecutive
+      values ranged 1.08-1.42 A (8.5-11.1 W) at a steady idle — enough spread
+      to swing a time-to-empty estimate between 3h40m and 5h08m on successive
+      invocations. Worse, `batt` perturbs what it measures: the probe sweep
+      and its forks are themselves a CPU burst, so a read taken immediately
+      after startup is biased high.
+
+      The median (not the mean) is deliberate — it discards a lone spike
+      instead of letting it drag the figure, which is exactly the failure
+      mode here.
+
+      Cost is (samples-1) * gap seconds, ~0.8s by default. Set
+      BATT_RATE_SAMPLES=1 for an instant, noisier read (status bars).
+
+      @arg $1 sysfs attribute path
+      @env BATT_RATE_SAMPLES number of reads (default 3)
+      @env BATT_RATE_GAP seconds between reads (default 0.4)
+      @stdout median absolute value
+      @return 0 if at least one read succeeded
+  '
+  local file="$1"
+  local n="${BATT_RATE_SAMPLES:-3}" gap="${BATT_RATE_GAP:-0.4}"
+  [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )) || n=3
+  local -a vals=()
+  local v i
+  for (( i = 0; i < n; i++ )); do
+    (( i > 0 )) && sleep "$gap"
+    v=$(read_num "$file") || continue
+    (( v < 0 )) && (( v = -v ))
+    vals+=("$v")
+  done
+  (( ${#vals[@]} > 0 )) || return 1
+  printf '%s\n' "${vals[@]}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}'
+}
+
+get_status() {
+  : 'Emit battery state as "key value" lines.
+
+      Every field is optional except state — a caller must tolerate absences,
+      because which attributes a kernel exposes varies by driver. Fields:
+        percent state watts amps volts
+        energy_now_wh energy_full_wh energy_design_wh
+        health_pct cycles seconds_left
+  '
+  local dev raw
+  dev=$(battery) || return 1
+
+  local status="unknown"
+  if [[ -r "$dev/status" ]]; then
+    read -r raw < "$dev/status"
+    case "$raw" in
+      Charging)      status=charging ;;
+      Discharging)   status=discharging ;;
+      Full)          status=full ;;
+      "Not charging") status=notcharging ;;
+      *)             status=unknown ;;
+    esac
+  fi
+  printf 'state %s\n' "$status"
+
+  # --- capacity ----------------------------------------------------------
+  # charge_* is µAh, energy_* is µWh. Track which we got so the Wh conversion
+  # below knows whether it needs the voltage multiply.
+  local now full design unit=""
+  if now=$(read_num "$dev/charge_now"); then
+    unit=charge
+    full=$(read_num "$dev/charge_full")
+    design=$(read_num "$dev/charge_full_design")
+  elif now=$(read_num "$dev/energy_now"); then
+    unit=energy
+    full=$(read_num "$dev/energy_full")
+    design=$(read_num "$dev/energy_full_design")
+  fi
+
+  local pct
+  if pct=$(read_num "$dev/capacity"); then
+    printf 'percent %s\n' "$pct"
+  elif [[ -n "$now" && -n "$full" ]] && (( full > 0 )); then
+    printf 'percent %s\n' $(( (100 * now + full / 2) / full ))
+  fi
+
+  # voltage_min_design is the nominal voltage upower multiplies by; fall back
+  # to voltage_now only if the design value is missing (slightly off, but a
+  # wrong Wh beats no Wh).
+  local vmin vnow
+  vmin=$(read_num "$dev/voltage_min_design")
+  vnow=$(read_num "$dev/voltage_now")
+  [[ -z "$vmin" ]] && vmin="$vnow"
+
+  if [[ "$unit" == energy ]]; then
+    [[ -n "$now" ]]    && awk -v x="$now"    'BEGIN{printf "energy_now_wh %.2f\n", x/1e6}'
+    [[ -n "$full" ]]   && awk -v x="$full"   'BEGIN{printf "energy_full_wh %.2f\n", x/1e6}'
+    [[ -n "$design" ]] && awk -v x="$design" 'BEGIN{printf "energy_design_wh %.2f\n", x/1e6}'
+  elif [[ "$unit" == charge && -n "$vmin" ]]; then
+    [[ -n "$now" ]]    && awk -v x="$now"    -v v="$vmin" 'BEGIN{printf "energy_now_wh %.2f\n", x*v/1e12}'
+    [[ -n "$full" ]]   && awk -v x="$full"   -v v="$vmin" 'BEGIN{printf "energy_full_wh %.2f\n", x*v/1e12}'
+    [[ -n "$design" ]] && awk -v x="$design" -v v="$vmin" 'BEGIN{printf "energy_design_wh %.2f\n", x*v/1e12}'
+  fi
+
+  # Health is a ratio, so it is unit-agnostic — no voltage needed.
+  if [[ -n "$full" && -n "$design" ]] && (( design > 0 )); then
+    awk -v f="$full" -v d="$design" 'BEGIN{printf "health_pct %.1f\n", 100*f/d}'
+  fi
+
+  local cycles
+  cycles=$(read_num "$dev/cycle_count") && printf 'cycles %s\n' "$cycles"
+
+  [[ -n "$vnow" ]] && awk -v v="$vnow" 'BEGIN{printf "volts %.2f\n", v/1e6}'
+
+  # --- rate --------------------------------------------------------------
+  # power_now is already µW. current_now is µA and needs voltage_now. Some
+  # drivers report current_now signed (negative while charging) — take the
+  # magnitude, direction is already carried by `state`.
+  local watts="" amps=""
+  local pnow="" cnow=""
+  if [[ -r "$dev/power_now" ]] && pnow=$(sample_rate "$dev/power_now"); then
+    watts=$(awk -v p="$pnow" 'BEGIN{printf "%.2f", p/1e6}')
+    [[ -n "$vnow" ]] && (( vnow > 0 )) &&
+      amps=$(awk -v p="$pnow" -v v="$vnow" 'BEGIN{printf "%.2f", (p/1e6)/(v/1e6)}')
+  elif [[ -r "$dev/current_now" ]] && cnow=$(sample_rate "$dev/current_now"); then
+    amps=$(awk -v c="$cnow" 'BEGIN{printf "%.2f", c/1e6}')
+    [[ -n "$vnow" ]] &&
+      watts=$(awk -v c="$cnow" -v v="$vnow" 'BEGIN{printf "%.2f", c*v/1e12}')
+  fi
+  [[ -n "$amps"  ]] && printf 'amps %s\n' "$amps"
+  [[ -n "$watts" ]] && printf 'watts %s\n' "$watts"
+
+  # --- time remaining ----------------------------------------------------
+  # Computed from the instantaneous rate, so it swings with load — that is the
+  # point (see header). A zero rate means "not moving", so emit nothing rather
+  # than divide by zero and claim infinity.
+  local rate_raw="" ref_now="$now" ref_full="$full"
+  if [[ -n "$pnow" ]]; then rate_raw="$pnow"
+  elif [[ -n "$cnow" ]]; then rate_raw="$cnow"
+  fi
+  if [[ -n "$rate_raw" && -n "$ref_now" ]] && (( rate_raw > 0 )); then
+    # Mixed units are impossible here: power_now pairs with energy_*, and
+    # current_now with charge_*, so the ratio is always dimensionally sound.
+    case "$status" in
+      discharging)
+        awk -v q="$ref_now" -v r="$rate_raw" 'BEGIN{printf "seconds_left %d\n", (q/r)*3600}' ;;
+      charging)
+        [[ -n "$ref_full" ]] && (( ref_full > ref_now )) &&
+          awk -v q="$ref_full" -v n="$ref_now" -v r="$rate_raw" \
+              'BEGIN{printf "seconds_left %d\n", ((q-n)/r)*3600}' ;;
+    esac
+  fi
+}
+
+get_procs() {
+  : 'Emit the top CPU consumers as "cpu_pct<TAB>pid<TAB>command" lines.
+
+      Samples /proc/<pid>/stat twice over BATT_PROC_INTERVAL seconds (default
+      0.7) and reports the delta. This is the instantaneous share, unlike
+      ps(1) %cpu which averages over a process lifetime — a distinction that
+      matters here, since a days-old browser sitting idle would otherwise
+      outrank the process actually draining the battery this second.
+
+      @arg $1 how many rows to emit (default 5)
+      @env BATT_PROC_INTERVAL sample window in seconds (default 0.7)
+  '
+  local rows="${1:-5}" interval="${BATT_PROC_INTERVAL:-0.7}"
+  local tck; tck=$(getconf CLK_TCK 2>/dev/null) || tck=100
+
+  # comm can contain spaces AND parentheses, so the field split must key off
+  # the LAST ')' — a greedy /\(.*\)/ match does exactly that. Splitting on
+  # whitespace alone corrupts every field for processes like
+  # "(sd-pam)" or a browser tab titled "foo (bar)".
+  local sample='
+    {
+      if (match($0, /\(.*\)/) == 0) next
+      pid  = $1
+      comm = substr($0, RSTART+1, RLENGTH-2)
+      rest = substr($0, RSTART+RLENGTH+1)
+      n = split(rest, f, " ")
+      # After stripping "pid (comm) ", f[1] is field 3 (state), so stat field
+      # N is f[N-2]: utime=14 -> f[12], stime=15 -> f[13].
+      if (n < 13) next
+      printf "%s %s %s\n", pid, f[12]+f[13], comm
+    }'
+
+  local snap1 snap2
+  snap1=$(awk "$sample" /proc/[0-9]*/stat 2>/dev/null)
+  sleep "$interval"
+  snap2=$(awk "$sample" /proc/[0-9]*/stat 2>/dev/null)
+
+  # The nominal interval is used as the divisor rather than a measured one.
+  # sleep is accurate to well under the 0.1%-of-a-core resolution this display
+  # has, and every portable way to measure sub-second elapsed time in bash
+  # costs a fork that would itself distort a 0.7s window.
+  awk -v tck="$tck" -v dt="$interval" -v rows="$rows" '
+    NR==FNR { prev[$1]=$2; next }
+    {
+      pid=$1; tot=$2
+      $1=""; $2=""; sub(/^ +/, "")
+      if (!(pid in prev)) next
+      d = tot - prev[pid]
+      if (d <= 0) next
+      pct = (d/tck)/dt*100
+      if (pct < 0.5) next
+      printf "%.1f\t%s\t%s\n", pct, pid, $0
+    }
+  ' <(printf '%s\n' "$snap1") <(printf '%s\n' "$snap2") \
+    | sort -t$'\t' -k1,1nr | head -n "$rows"
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get)
+      @arg $2 control (status|procs)
+      @arg $3 row count, for get procs
+  '
+  case "$1" in
+    probe) probe ;;
+    get)
+      case "$2" in
+        status) get_status ;;
+        procs)  get_procs "$3" ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

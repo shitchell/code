@@ -169,6 +169,11 @@ tmux binds → lnotify wiring last (everything must work without it).
   wrinkle recs".
 - **Copy dispatcher per tool instead of shared provider.sh** — Accepted
   (YAGNI; don't destabilize clip). Revisit if a fourth provider family shows up.
+  **Superseded 2026-07-29**: `batt` became that fourth family, the copies were
+  extracted to `sh/lib/provider.sh`, and clip/vol/bright were migrated onto it.
+  See [2026-07-29-portable-batt-design.md](2026-07-29-portable-batt-design.md)
+  §2.1 for the four behaviors that had diverged between the copies and how each
+  became a parameter.
 - **lnotify integration lives in vt\* layer, optional at runtime** —
   Accepted. Rationale: portability quote in §2.
 - **Earlier rejected shapes for the related "mpv on its own VT" task** (still

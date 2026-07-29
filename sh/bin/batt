@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# batt — show battery charge, health, draw rate and time remaining via
+# batt.<tag> providers.
+#
+# Sourced directly (not via include-source): the dispatcher lib does not
+# resolve through include-source in this worktree (BASH_LIB_PATH points at the
+# main repo). Same pattern as vol/bright/clipin/clipout.
+source "$(dirname "$(readlink -f "$0")")/../lib/batt.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: batt                    show battery summary
+       batt <field>            print one field, for scripting
+       batt -1 | --oneline     compact single line (status bars)
+       batt -p | --procs       also list the top CPU consumers
+       batt -w[N] | --watch[=N]  refresh every N seconds (default 2)
+       batt -h | --help
+
+fields: percent state watts amps volts health cycles time
+        energy_now_wh energy_full_wh energy_design_wh seconds_left
+
+examples:
+       batt -w5 -p          live view, refreshed every 5s, with CPU hogs
+       batt percent         74
+       batt -1              74% v 9.4W 4h52m
+EOF
+}
+
+# --- rendering helpers -----------------------------------------------------
+
+fmt_hms() {
+  : 'Render seconds as "4h 52m" / "38m" — never a bare seconds count, which
+      nobody reads at a glance.
+      @arg $1 seconds
+  '
+  local -i s="$1" h m
+  (( h = s / 3600, m = (s % 3600) / 60 ))
+  if (( h > 0 )); then printf '%dh %dm' "$h" "$m"
+  else printf '%dm' "$m"
+  fi
+}
+
+state_arrow() {
+  : 'A direction glyph for a state.
+
+      U+2193/U+2191 are BMP, so they survive fbterm on the VT — astral
+      arrows and battery emoji do not (fbterm is BMP-only and monochrome).
+      @arg $1 state
+  '
+  case "$1" in
+    discharging) printf '↓' ;;   # down
+    charging)    printf '↑' ;;   # up
+    full)        printf '=' ;;
+    *)           printf '-' ;;
+  esac
+}
+
+# --- data ------------------------------------------------------------------
+
+load_status() {
+  : 'Populate the global assoc array B from the provider'\''s key/value lines.
+
+      @return 0 on success; the dispatcher'\''s 3 when nothing can answer
+  '
+  local out key val
+  out=$(batt::dispatch get status) || return $?
+  declare -gA B=()
+  while read -r key val; do
+    [[ -n "$key" ]] && B["$key"]="$val"
+  done <<< "$out"
+  [[ -n "${B[state]:-}" ]]
+}
+
+render_summary() {
+  : 'Print the aligned human summary. Fields the provider did not supply are
+      skipped entirely rather than shown as "unknown" — an absent row is
+      honest, a blank row invites re-reading it as zero.
+  '
+  local state="${B[state]:-unknown}"
+  local pct="${B[percent]:-}"
+
+  printf '%-11s %s%s  %s\n' 'Battery' \
+    "${pct:-?}" "${pct:+%}" "$state"
+
+  if [[ -n "${B[watts]:-}" ]]; then
+    local detail=""
+    [[ -n "${B[amps]:-}" && -n "${B[volts]:-}" ]] &&
+      detail="   (${B[amps]} A @ ${B[volts]} V)"
+    printf '%-11s %s W%s\n' 'Draw' "${B[watts]}" "$detail"
+  fi
+
+  if [[ -n "${B[seconds_left]:-}" ]]; then
+    local label='Remaining'
+    [[ "$state" == charging ]] && label='To full'
+    printf '%-11s %s\n' "$label" "$(fmt_hms "${B[seconds_left]}")"
+  fi
+
+  if [[ -n "${B[health_pct]:-}" ]]; then
+    local detail=""
+    [[ -n "${B[energy_full_wh]:-}" && -n "${B[energy_design_wh]:-}" ]] &&
+      detail="  (${B[energy_full_wh]} / ${B[energy_design_wh]} Wh)"
+    printf '%-11s %s%%%s\n' 'Health' "${B[health_pct]}" "$detail"
+  fi
+
+  # cycle_count reads 0 on plenty of ECs that simply do not track it. Printing
+  # "Cycles 0" there is a lie dressed as data, so 0 is treated as absent.
+  [[ -n "${B[cycles]:-}" ]] && (( B[cycles] > 0 )) &&
+    printf '%-11s %s\n' 'Cycles' "${B[cycles]}"
+
+  return 0
+}
+
+render_oneline() {
+  : 'One compact line for a tmux/status bar.'
+  local out="${B[percent]:-?}% $(state_arrow "${B[state]:-unknown}")"
+  [[ -n "${B[watts]:-}" ]]        && out+=" ${B[watts]}W"
+  [[ -n "${B[seconds_left]:-}" ]] && out+=" $(fmt_hms "${B[seconds_left]}")"
+  printf '%s\n' "$out"
+}
+
+render_procs() {
+  : 'Print the top CPU consumers, if a provider can supply them.
+
+      A provider without get:procs is not an error — the flag simply reports
+      that nothing here can answer, rather than failing the whole run.
+      @arg $1 row count
+  '
+  local rows="${1:-5}" out
+  if ! out=$(batt::dispatch get procs "$rows" 2>/dev/null); then
+    printf '\n%s\n' 'Top CPU     (no provider on this system)'
+    return 0
+  fi
+  if [[ -z "${out//[[:space:]]/}" ]]; then
+    printf '\n%s\n' 'Top CPU     (nothing above 0.5%)'
+    return 0
+  fi
+  printf '\n%s\n' 'Top CPU'
+  local pct pid cmd
+  while IFS=$'\t' read -r pct pid cmd; do
+    [[ -n "$pct" ]] && printf '  %5s%%  %-8s %s\n' "$pct" "$pid" "$cmd"
+  done <<< "$out"
+}
+
+field() {
+  : 'Print a single field for scripting.
+
+      `time` and `health` are spelled without their unit suffix because that
+      is what a caller types; both map onto the underlying field names.
+      @arg $1 field name
+      @return 0 if known and present, 1 if unknown, 4 if the provider omitted it
+  '
+  local f="$1" v
+  case "$f" in
+    time)   [[ -n "${B[seconds_left]:-}" ]] && { fmt_hms "${B[seconds_left]}"; echo; return 0; }; return 4 ;;
+    health) v="${B[health_pct]:-}" ;;
+    percent|state|watts|amps|volts|cycles|seconds_left| \
+    energy_now_wh|energy_full_wh|energy_design_wh)
+            v="${B[$f]:-}" ;;
+    *)      printf 'batt: unknown field: %s\n' "$f" >&2; usage; return 1 ;;
+  esac
+  [[ -n "$v" ]] || return 4
+  printf '%s\n' "$v"
+}
+
+# --- main ------------------------------------------------------------------
+
+main() {
+  : 'Show battery state through the provider dispatcher.
+
+      @return 0 on success; 1 bad usage; 3 no capable provider;
+              4 field not reported by this provider
+  '
+  local mode=summary want_procs=false watch_secs=0 field_name=""
+
+  while (( $# )); do
+    case "$1" in
+      -h|--help)    usage; return 0 ;;
+      -1|--oneline) mode=oneline; shift ;;
+      -p|--procs)   want_procs=true; shift ;;
+      --watch)      watch_secs=2; shift ;;
+      --watch=*)    watch_secs="${1#--watch=}"; shift ;;
+      -w)           watch_secs=2; shift ;;
+      -w[0-9]*)     watch_secs="${1#-w}"; shift ;;
+      -*)           usage; return 1 ;;
+      *)
+        [[ -n "$field_name" ]] && { usage; return 1; }
+        mode=field; field_name="$1"; shift ;;
+    esac
+  done
+
+  [[ "$watch_secs" =~ ^[0-9]+$ ]] || { usage; return 1; }
+
+  # The provider medians several rate reads (~0.8s) to survive a jittery EC.
+  # A status bar redraws constantly and would rather have a noisy number now
+  # than a settled one a second late, so oneline opts down to a single sample.
+  # An explicit BATT_RATE_SAMPLES from the caller always wins.
+  [[ "$mode" == oneline && -z "${BATT_RATE_SAMPLES:-}" ]] &&
+    export BATT_RATE_SAMPLES=1
+
+  if (( watch_secs == 0 )); then
+    load_status || return $?
+    case "$mode" in
+      field)   field "$field_name"; return $? ;;
+      oneline) render_oneline ;;
+      *)       render_summary ;;
+    esac
+    $want_procs && [[ "$mode" != field ]] && render_procs
+    return 0
+  fi
+
+  # --- watch mode ---
+  # A field/oneline query under --watch is legitimate (feeding a status bar),
+  # so only the summary gets the screen-clearing treatment.
+  local interactive=false
+  [[ "$mode" == summary ]] && [[ -t 1 ]] && interactive=true
+
+  # Restore the cursor on any exit path, including the Ctrl-C that is the
+  # normal way to leave this mode.
+  if $interactive; then
+    trap 'printf "\033[?25h"; printf "\n"; exit 0' INT TERM
+    printf '\033[?25l'
+  fi
+
+  while true; do
+    if load_status; then
+      local buf
+      # Render into a buffer and emit in one write: a redraw that clears and
+      # then prints line-by-line flickers, and the procs sample makes each
+      # cycle nearly a second long, which is plenty of time to see it.
+      case "$mode" in
+        field)   buf=$(field "$field_name") ;;
+        oneline) buf=$(render_oneline) ;;
+        *)       buf=$(render_summary; $want_procs && render_procs) ;;
+      esac
+      if $interactive; then
+        printf '\033[H\033[2J%s\n' "$buf"
+      else
+        printf '%s\n' "$buf"
+      fi
+    fi
+    sleep "$watch_secs"
+  done
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
