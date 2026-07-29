@@ -152,6 +152,37 @@ Cost is ~0.8s per invocation. `--oneline` opts down to a single sample, on the
 grounds that a status bar would rather have a noisy number now than a settled
 one a second late; an explicit `BATT_RATE_SAMPLES` always wins.
 
+### 4.1 What the rate actually measures
+
+The sensor reports **battery flow**, and its meaning flips with direction. This
+is not a labelling nicety — the two readings are different physical quantities:
+
+| state | sensor measures | is it system consumption? |
+|---|---|---|
+| discharging | energy out of the battery | **yes** — the battery is the only source |
+| charging | energy into the battery | **no** — it is the charge rate |
+| full / notcharging | ~0 | no — says nothing about consumption |
+
+On AC the relationship is `P_adapter = P_system + P_charge`, and this machine
+measures only `P_charge`. `/sys/class/power_supply/AC` exposes `online` and
+nothing else — no current, no voltage, no wattage (confirmed 2026-07-29;
+`hwmon0` is the AC device and carries no `*_input` files, while `hwmon1` is
+just BAT0's current/voltage under another name). **System power on AC is
+therefore unknowable on this hardware**, not merely unimplemented.
+
+The summary labels the row accordingly — `Draw` when discharging, `Charging`
+when charging — and suppresses it entirely when the battery is neither. A row
+reading `Draw 0.00 W` on a machine sitting on AC would be actively wrong: it
+reads as "this laptop is using no power".
+
+`intel-rapl` powercap *is* present and would give CPU-package watts, but that
+excludes backlight, NVMe and wifi — often 30-50% of total — so it could only
+ever appear as an explicitly-named extra row, never as "system power". Left
+out; noted in `~/TODO.md`.
+
+The `watts` field itself stays a magnitude with `state` carrying direction, so
+scripts are unaffected by the labelling.
+
 ## 5. `batt.sysfs`
 
 Score 60, leaving room above for a future `batt.upower` (richer history)
@@ -213,5 +244,15 @@ Note bats is not installed on libre; it runs out of
 - **Exit 4 for "field not reported"** — Accepted. Rationale: distinguishes a
   provider that cannot measure something from a genuinely empty value, which
   a script consuming `batt watts` needs to tell apart.
+- **Label the rate row by state; suppress it when idle** — Accepted
+  2026-07-29, after the first AC test. Context: user, on seeing `Draw` persist
+  while plugged in — "it might be nice to also no what the charge rate is? Or
+  is that what Draw is when it's charging? it seems like those would be two
+  always-on things: power consumed / power input. and it's simply that, when
+  not charging, the latter is 0. or am i misunderstanding something?"
+  The intuition is right that these are two distinct quantities; the
+  correction is that this hardware measures only one of them, and which one
+  depends on direction (§4.1). So the fix is honest labelling rather than a
+  second figure.
 - **Deferred**: `vtbatt` wrapper and tmux/status-bar wiring. `batt -1` exists
   to feed one, but no binding is added here.

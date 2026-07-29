@@ -82,11 +82,31 @@ render_summary() {
   printf '%-11s %s%s  %s\n' 'Battery' \
     "${pct:-?}" "${pct:+%}" "$state"
 
+  # The rate sensor measures BATTERY FLOW, and what that means depends on
+  # direction — so the row is labelled by state rather than always "Draw":
+  #
+  #   discharging  energy out of the battery. The battery is the only source,
+  #                so this genuinely is system consumption.
+  #   charging     energy INTO the battery. NOT consumption: the adapter is
+  #                feeding the system and the battery both, and
+  #                P_adapter = P_system + P_charge has two unmeasured terms.
+  #                This machine has no adapter sensor at all (AC exposes only
+  #                `online`), so system power on AC is simply unknowable here.
+  #   full/notcharging  flow is ~0 and says nothing about consumption, so the
+  #                row is suppressed rather than printed as "Draw 0.00 W",
+  #                which would read as "this laptop is using no power".
   if [[ -n "${B[watts]:-}" ]]; then
-    local detail=""
-    [[ -n "${B[amps]:-}" && -n "${B[volts]:-}" ]] &&
-      detail="   (${B[amps]} A @ ${B[volts]} V)"
-    printf '%-11s %s W%s\n' 'Draw' "${B[watts]}" "$detail"
+    local rate_label=""
+    case "$state" in
+      discharging) rate_label='Draw' ;;
+      charging)    rate_label='Charging' ;;
+    esac
+    if [[ -n "$rate_label" ]]; then
+      local detail=""
+      [[ -n "${B[amps]:-}" && -n "${B[volts]:-}" ]] &&
+        detail="   (${B[amps]} A @ ${B[volts]} V)"
+      printf '%-11s %s W%s\n' "$rate_label" "${B[watts]}" "$detail"
+    fi
   fi
 
   if [[ -n "${B[seconds_left]:-}" ]]; then

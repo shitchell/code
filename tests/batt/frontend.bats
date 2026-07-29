@@ -35,6 +35,63 @@ seconds_left 3600'
   [[ "$output" != *"Remaining"* ]]
 }
 
+@test "charging labels the rate row Charging, not Draw" {
+  # The sensor measures battery flow. While charging that is energy INTO the
+  # battery, not system consumption, so calling it "Draw" is simply wrong.
+  make_status_provider batt.fake 50 'state charging
+percent 56
+amps 2.02
+volts 7.96
+watts 16.04'
+  run batt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Charging"*"16.04 W"* ]]
+  [[ "$output" != *"Draw"* ]]
+}
+
+@test "discharging labels the rate row Draw" {
+  make_status_provider batt.fake 50 'state discharging
+percent 56
+watts 9.40'
+  run batt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Draw"*"9.40 W"* ]]
+  [[ "$output" != *"Charging"* ]]
+}
+
+@test "a full battery suppresses the rate row entirely" {
+  # Flow is ~0 and says nothing about consumption; "Draw 0.00 W" would read as
+  # "this laptop is using no power", which is false while it sits on AC.
+  make_status_provider batt.fake 50 'state full
+percent 100
+watts 0.00'
+  run batt
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"100%"* ]]
+  [[ "$output" != *"Draw"* ]]
+  [[ "$output" != *"Charging"* ]]
+  [[ "$output" != *"0.00 W"* ]]
+}
+
+@test "notcharging on AC also suppresses the rate row" {
+  make_status_provider batt.fake 50 'state notcharging
+percent 80
+watts 0.00'
+  run batt
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"0.00 W"* ]]
+}
+
+@test "watts is still queryable as a field regardless of label" {
+  # Scripts want the raw number; `state` tells them the direction.
+  make_status_provider batt.fake 50 'state charging
+percent 56
+watts 16.04'
+  run batt watts
+  [ "$status" -eq 0 ]
+  [ "$output" = "16.04" ]
+}
+
 @test "fields the provider omits are skipped entirely" {
   make_status_provider batt.fake 50 'state discharging
 percent 74'
