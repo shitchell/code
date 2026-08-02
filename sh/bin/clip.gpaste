@@ -15,7 +15,9 @@
 #   set <type>   -> store stdin as clipboard content of <type>
 #
 # This provider does NOT need clip::real_binary: gpaste-client is not one of
-# our shims, so there is no recursion risk.
+# our shims, so there is no recursion risk. It does need the dispatcher lib for
+# clip::dbus_has_owner (see probe).
+source "$(dirname "$(readlink -f "$0")")/../lib/clip.sh"
 
 probe() {
   : 'Self-rate this backend.
@@ -24,9 +26,22 @@ probe() {
       @return 0 always (an unusable backend still prints "score 0")
   '
   command -v gpaste-client >/dev/null 2>&1 || { echo "score 0"; return; }
-  # gpaste-client auto-activates the daemon over D-Bus, so we only need the
-  # client to respond — no separate pgrep on the daemon required.
-  gpaste-client --version >/dev/null 2>&1 || { echo "score 0"; return; }
+  # Liveness, NOT environment. This probe used to run `gpaste-client --version`,
+  # which asks D-Bus to activate the daemon; where the daemon cannot start (a VT
+  # with no graphical session) that blocks for the full 25s bus timeout. micro
+  # reads and writes the clipboard on startup, so it paid that four times over —
+  # the ~100s "hang" this check exists to prevent. NameHasOwner asks the bus what
+  # it already knows: ~20ms, and it never activates anything.
+  #
+  # Deliberately NOT gated on $DISPLAY/$WAYLAND_DISPLAY, which would look like
+  # the obvious cheap test and is what clip.wl/clip.xsel do. Those vars are
+  # process environment, frozen at pane-creation time inside tmux. In a tmux
+  # session shared across a GUI and VTs, a pane opened in a VT keeps empty
+  # display vars for the life of the pane — so an env gate would score this
+  # provider 0 even with a GNOME session up and gpaste-daemon perfectly usable,
+  # silently killing the clipboard rather than hanging it. Daemon liveness stays
+  # true across VT switches because it never consults the environment at all.
+  clip::dbus_has_owner org.gnome.GPaste || { echo "score 0"; return; }
   local score=40
   [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] && score=50   # fallback, below clip.wl (70)
   echo "score $score"
