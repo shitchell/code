@@ -23,6 +23,25 @@ export FBTERM_BACKGROUND_IMAGE=1
 # console-init race guard (kept from the original tty1 setup)
 sleep .5
 
+# Guard against the "*:RGB grey bug": a truecolor GUI session (cage + foot /
+# brave / ptyxis) leaks a wildcard `*:RGB` into the shared tmux server. Because
+# `*` matches fbterm too, tmux then hands fbterm standard truecolor escapes
+# (\e[48;2..m) it can't parse (fbterm speaks private \e[2;N} seqs), so every
+# background renders as color-8 grey. The root writer is a runtime `set -ag`
+# we've never pinned down (it recurs after using cage); rather than chase it,
+# self-heal: reset the color features on the already-running server *before*
+# this client attaches, so fbterm always starts clean. Guarded on an existing
+# server so a fresh boot doesn't double-source the config.
+# (Diagnosed 2026-07-23; matching note in ~/.tmux.conf. Removing *:RGB needs a
+#  full feature reset — targeted `fbterm:RGB@`/`Tc@` overrides do NOT beat it.)
+if tmux has-session 2>/dev/null; then
+	tmux set -gu terminal-features \; source-file "${HOME}/.tmux.conf" 2>/dev/null
+fi
+
 # TERM=fbterm (256-color terminfo) for the tmux client — the inherited
-# TERM=linux would put tmux in 8-color mode (unreadable styling)
-exec fbterm -- env TERM=fbterm tmux new-session -A -s "${FBTERM_TMUX_SESSION:-tty}"
+# TERM=linux would put tmux in 8-color mode (unreadable styling).
+# -u COLORTERM: strip any inherited COLORTERM=truecolor. Proven 2026-07-23 to be
+# a SECOND, independent path to the grey bug — tmux grants the client RGB from
+# COLORTERM just as *:RGB would. fbterm is 256-color; it must not advertise
+# truecolor by EITHER path, so we close both here (features reset above, env here).
+exec fbterm -- env -u COLORTERM TERM=fbterm tmux new-session -A -s "${FBTERM_TMUX_SESSION:-tty}"
