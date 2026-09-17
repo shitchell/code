@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# fix-hdmi — recover a dead external HDMI display on this ThinkPad (Optimus).
+#
+# Symptom: external monitor detected by Windows (EDID reads, shows OK in
+# Device Manager) but never joins the desktop; DisplaySwitch /extend|/clone
+# do nothing. Root cause is the NVIDIA Quadro M1200 (dGPU) output path
+# getting stuck — the HDMI port hangs off the dGPU. Disabling + re-enabling
+# the NVIDIA display adapter forces a fresh output enumeration and the
+# external display comes back, extended at native res.
+#
+# The laptop panel is Intel-driven, so bouncing NVIDIA does not blank your
+# working screen (at most a brief flicker). Needs Windows elevation -> wudo.
+set -euo pipefail
+
+ps() { powershell.exe -NoProfile -Command "$1"; }
+
+echo "Active displays before:"
+ps "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::AllScreens | Select DeviceName,Primary,Bounds | Format-Table -AutoSize"
+
+# Find the NVIDIA display adapter instance id dynamically (it can change).
+inst=$(ps "(Get-PnpDevice -Class Display | Where-Object {\$_.InstanceId -like 'PCI\VEN_10DE*'} | Select-Object -First 1 -ExpandProperty InstanceId)" | tr -d '\r')
+if [[ -z "${inst}" ]]; then
+  echo "No NVIDIA display adapter found — aborting." >&2
+  exit 1
+fi
+echo "Bouncing NVIDIA adapter: ${inst}"
+
+wudo powershell.exe -NoProfile -Command \
+  "Disable-PnpDevice -InstanceId '${inst}' -Confirm:\$false; Start-Sleep 2; Enable-PnpDevice -InstanceId '${inst}' -Confirm:\$false"
+
+sleep 4
+echo "Active displays after:"
+ps "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::AllScreens | Select DeviceName,Primary,Bounds | Format-Table -AutoSize"
