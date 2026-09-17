@@ -117,7 +117,15 @@ def is_wsl_sudo_daemon(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             cmdline = f.read()
-        return b"wsl-sudo" in cmdline and b"--daemon" in cmdline
+        if b"--daemon" not in cmdline:
+            return False
+        # The daemon is launched as os.path.abspath(__file__), which is
+        # whichever symlink name the client was invoked as (wsl-sudo OR
+        # wudo).  Matching only "wsl-sudo" made -k a no-op for daemons
+        # started via the wudo symlink: kill_daemon() would report a stale
+        # session, delete session.json, and leave a live elevated daemon
+        # orphaned -- forcing a fresh UAC prompt on the next call.
+        return any(name in cmdline for name in (b"wsl-sudo", b"wudo"))
     except OSError:
         return False
 
@@ -330,6 +338,15 @@ class ElevatedServer:
             envdict[b'ELEVATED_SHELL'] = b'1'
             if b'WSL_INTEROP' in os.environb:
                 envdict[b'WSL_INTEROP'] = os.environb[b'WSL_INTEROP']
+            # The elevated `wsl` is launched through Start-Process -Verb runas,
+            # which gives it a near-empty Windows environment: the Win32 Path a
+            # child sees is just the WSL package dir, so in-process cmdlets work
+            # but external .exes (netsh, ipconfig) are "not recognized".
+            # Sharing PATH/l makes interop rebuild a full Windows Path.
+            wslenv = envdict.get(b'WSLENV', b'')
+            if b'PATH/l' not in wslenv.split(b':'):
+                envdict[b'WSLENV'] = (wslenv + b':PATH/l') if wslenv \
+                    else b'PATH/l'
             try:
                 os.execvpe(argv[0], argv, envdict)
             except FileNotFoundError:
