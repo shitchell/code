@@ -234,7 +234,7 @@ function parse-args() {
         help-full >&2
         return ${E_INVALID_ACTION}
     fi
-    
+
     # If in silent mode, silence the output
     ${DO_SILENT} && silence-output
 
@@ -499,7 +499,7 @@ function __help-post() {
 function __action-is-up() {
     local response=""
     local status=""
-    
+
     response=$(
         DO_SHOW_HEADERS=false api-request GET / -- --max-time 3
     )

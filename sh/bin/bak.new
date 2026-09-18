@@ -87,7 +87,7 @@ EOF
         %{2n}             the number of the backup, zero-padded to 2 digits (00
                           if 0)
     The default format is '%{F}.bak%{.:n}'.
-    
+
     Examples:
         Filename       Format                    n       Backup Name
         foo.txt        %{F}.bak%{.:n}            0       foo.txt.bak
@@ -106,7 +106,7 @@ function parse-args() {
     FORMAT="%{F}.bak%{.:n}"
     DO_DRY_RUN=false
     FILEPATHS=()
-    
+
     # Loop over the arguments
     while [[ ${#} -gt 0 ]]; do
         case ${1} in
@@ -147,13 +147,13 @@ function parse-args() {
         esac
         shift 1
     done
-    
+
     # If -- was used, collect the remaining arguments
     while [[ ${#} -gt 0 ]]; do
         FILEPATHS+=("${1}")
         shift 1
     done
-    
+
     return 0
 }
 

@@ -10,12 +10,12 @@ ENVIRONMENT_NAME=$(environment)
 if [[ -n "${PATH_LEFT}" ]]; then
     # Get the realpath
     PATH_LEFT=$(realpath "${PATH_LEFT}")
-    
+
     # Convert the path to WSL if in a WSL environment
     if [[ "${ENVIRONMENT_NAME}" == "WSL"* ]]; then
         PATH_LEFT="$(wslpath -aw "${PATH_LEFT}")"
     fi
-    
+
     BC_ARGS+=("${PATH_LEFT}")
 fi
 
@@ -23,12 +23,12 @@ fi
 if [[ -n "${PATH_RIGHT}" ]]; then
     # Get the realpath
     PATH_RIGHT=$(realpath "${PATH_RIGHT}")
-    
+
     # Convert the path to WSL if in a WSL environment
     if [[ "${ENVIRONMENT_NAME}" == "WSL"* ]]; then
         PATH_RIGHT="$(wslpath -aw "${PATH_RIGHT}")"
     fi
-    
+
     BC_ARGS+=("${PATH_RIGHT}")
 fi
 

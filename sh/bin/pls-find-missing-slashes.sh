@@ -15,7 +15,7 @@
 #   - validate it is on its own line, else throw an INVALID BLOCK START error
 #   - increment block_level
 #   - if not in a block, set in_block to true and set block_start_line to the
-#     current line number 
+#     current line number
 # - CREATE (OR REPLACE) PACKAGE (BODY) blocks are special cases.
 #   - CREATE PACKAGE ...; starts a new block without a BEGIN keyword. That block
 #     ends with END.
@@ -292,7 +292,7 @@ function pls-find-missing-slashes() {
         BEGIN {
             debug("AWK BEGIN")
             IGNORECASE = 1 # SQL does not care about case, so neither do we
-            
+
             # Error exit codes
             ERROR_GENERIC = 10
             ERROR_MISSING_SLASH = 11
