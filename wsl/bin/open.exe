@@ -3,7 +3,10 @@
 # Open files in File Explorer or their default app
 # TODO: options to force file explorer or a default app
 
-OPEN_CMD=(cmd.exe /C start)
+# NOTE: the empty "" is a required window-title placeholder for cmd's `start`.
+# Without it, `start "C:\path with spaces"` treats the quoted path as the
+# window TITLE and just opens an empty cmd.exe window.
+OPEN_CMD=(cmd.exe /C start "")
 PATHS=()
 
 # Parse options

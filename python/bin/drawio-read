@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""
+drawio-read — strip a .drawio file down to its readable content.
+
+Emits an outline per page: geometric containment (groups/lanes), node labels,
+and edges as `source -> target` with edge labels resolved to node names.
+
+Handles both plain and compressed (deflate+base64) <diagram> payloads.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import html
+import re
+import sys
+import zlib
+import urllib.parse
+
+try:
+    from lxml import etree
+except ImportError:  # stdlib is sufficient for everything used here
+    import xml.etree.ElementTree as etree
+
+
+# ---------- payload decoding ----------
+
+def diagram_model(diagram):
+    """Return the <mxGraphModel> element for a page, inflating if compressed."""
+    model = diagram.find("mxGraphModel")
+    if model is not None:
+        return model
+    raw = (diagram.text or "").strip()
+    if not raw:
+        return None
+    data = base64.b64decode(raw)
+    try:
+        xml = zlib.decompress(data, -15).decode("utf-8")
+    except zlib.error:
+        xml = zlib.decompress(data).decode("utf-8")
+    xml = urllib.parse.unquote(xml)
+    return etree.fromstring(xml.encode("utf-8"))
+
+
+# ---------- label cleanup ----------
+
+BR = re.compile(r"<\s*(br|/p|/div|/li)\s*/?\s*>", re.I)
+TAG = re.compile(r"<[^>]+>")
+# Strikethrough is semantic in flow diagrams — a struck-through box normally means
+# the thing was deleted — so preserve it as markdown instead of dropping the tag.
+STRIKE = re.compile(r"<\s*(strike|s|del)\s*>(.*?)<\s*/\s*\1\s*>", re.I | re.S)
+
+
+def clean(text: str | None) -> str:
+    if not text:
+        return ""
+    s = BR.sub("\n", text)
+    s = STRIKE.sub(lambda m: f"~~{m.group(2).strip()}~~", s)
+    s = TAG.sub("", s)
+    s = html.unescape(s)
+    s = s.replace(" ", " ")
+    lines = [" ".join(l.split()) for l in s.split("\n")]
+    return "\n".join(l for l in lines if l)
+
+
+# ---------- style summary ----------
+
+# Style keys that carry no meaning for a reader: pure visual chrome and,
+# critically, `image=data:...` base64 blobs that make up most of the file.
+NOISE = {
+    "html", "whiteSpace", "rounded", "shadow", "glass", "sketch", "jiggle",
+    "curveFitting", "hachureGap", "fontFamily", "fontSize", "fontSource",
+    "labelBackgroundColor", "labelBorderColor", "verticalAlign", "align",
+    "spacing", "spacingTop", "spacingLeft", "spacingRight", "spacingBottom",
+    "arcSize", "absoluteArcSize", "perimeterSpacing", "startSize", "endSize",
+    "startArrow", "endArrow", "startFill", "endFill", "jumpStyle", "jumpSize",
+    "opacity", "textOpacity", "imageAspect", "imageBackground", "imageBorder",
+    "aspect", "resizable", "movable", "deletable", "editable", "cloneable",
+    "connectable", "locked", "points", "outlineConnect", "comic",
+}
+
+
+def style_bits(style: str | None, keep_visual: bool) -> str:
+    """Condense an mxCell style into the few tokens that mean something."""
+    if not style:
+        return ""
+    bits = []
+    for tok in style.split(";"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "=" not in tok:
+            bits.append(tok)  # bare shape name, e.g. `group`, `text`, `ellipse`
+            continue
+        k, v = tok.split("=", 1)
+        if k == "image" and v.startswith("data:"):
+            bits.append(f"image=<{len(v)}B embedded>")
+            continue
+        if k in NOISE and not keep_visual:
+            continue
+        if k in ("fillColor", "strokeColor", "fontColor") and not keep_visual:
+            continue
+        bits.append(f"{k}={v}")
+    return ";".join(bits)
+
+
+# ---------- geometry ----------
+
+def geom(cell):
+    g = cell.find("mxGeometry")
+    if g is None:
+        return None
+    f = lambda k: float(g.get(k)) if g.get(k) is not None else None
+    return {"x": f("x"), "y": f("y"), "w": f("width"), "h": f("height")}
+
+
+def name_for(cell, idx):
+    """Best human-readable handle for a cell: its label, else a typed id."""
+    lbl = clean(cell.get("value"))
+    if lbl:
+        return lbl.replace("\n", " / ")
+    st = cell.get("style") or ""
+    if "shape=image" in st:
+        return f"<image {cell.get('id')}>"
+    if st.startswith("group"):
+        return f"<group {cell.get('id')}>"
+    return f"<{cell.get('id')}>"
+
+
+# ---------- rendering ----------
+
+def render_page(diagram, args, out):
+    model = diagram_model(diagram)
+    if model is None:
+        out.append(f"## Page: {diagram.get('name')}  (empty)")
+        return
+
+    # <object>/<UserObject> wrap an mxCell to add custom attributes; the real
+    # cell is the child, but the id and label live on the wrapper.
+    cells, wrapper_of = [], {}
+    for node in model.iter():
+        if node.tag == "mxCell":
+            cells.append(node)
+        elif node.tag in ("object", "UserObject"):
+            inner = node.find("mxCell")
+            if inner is not None:
+                wrapper_of[inner] = node
+
+    def attr(cell, key):
+        w = wrapper_of.get(cell)
+        if w is not None and w.get(key) is not None:
+            return w.get(key)
+        return cell.get(key)
+
+    by_id, idx = {}, {}
+    for i, c in enumerate(cells):
+        cid = attr(c, "id")
+        if cid:
+            by_id[cid] = c
+        idx[c] = i
+
+    def label_of(cell):
+        w = wrapper_of.get(cell)
+        if w is not None:
+            lbl = clean(w.get("label") or w.get("value"))
+            if lbl:
+                return lbl.replace("\n", " / ")
+        return name_for(cell, idx)
+
+    verts = [c for c in cells if c.get("vertex") == "1"]
+    edges = [c for c in cells if c.get("edge") == "1"]
+
+    # Unlabeled image cells are pure decoration (branch icons, logos). They are
+    # also where the file's bulk lives, as base64 data URIs.
+    def decorative(c):
+        return (not clean(c.get("value"))
+                and "shape=image" in (c.get("style") or ""))
+
+    dropped_icons = 0
+    if not args.all:
+        deco = [c for c in verts if decorative(c)]
+        dropped_icons = len(deco)
+        verts = [c for c in verts if c not in set(deco)]
+
+    hdr = f"({len(verts)} shapes, {len(edges)} connectors"
+    if dropped_icons:
+        hdr += f"; {dropped_icons} icon(s) hidden, -a to show"
+    out.append(f"## Page: {diagram.get('name')}")
+    out.append(hdr + ")")
+    out.append("")
+
+    # --- shape tree, by parent, sorted top-to-bottom then left-to-right ---
+    # Keyed over ALL cells, not just vertices: the model root and layer cells are
+    # plain <mxCell> with no vertex flag, and their ids vary between pages, so we
+    # must be able to descend through them.
+    keep = set(verts)
+    children = {}
+    for c in cells:
+        children.setdefault(attr(c, "parent"), []).append(c)
+
+    def sort_key(c):
+        g = geom(c) or {}
+        return (g.get("y") if g.get("y") is not None else 1e9,
+                g.get("x") if g.get("x") is not None else 1e9)
+
+    # A `group` wrapping a single surviving child is scaffolding, not structure.
+    # Fold it away, keeping whichever of the two carries a real label.
+    def collapse(c):
+        merged = []
+        while (not args.no_collapse
+               and (c.get("style") or "").startswith("group")):
+            kids = [k for k in children.get(attr(c, "id"), []) if k in keep]
+            if len(kids) != 1:
+                break
+            outer = clean(c.get("value")).replace("\n", " / ")
+            if outer:
+                merged.append(outer)
+            c = kids[0]
+        return c, merged
+
+    def walk(pid, depth):
+        for c in sorted(children.get(pid, []), key=sort_key):
+            # Pass through anything we're not printing (root/layer cells, edges,
+            # suppressed icons) without consuming an indent level.
+            if c not in keep:
+                walk(attr(c, "id"), depth)
+                continue
+            pad = "  " * depth
+            c, merged = collapse(c)
+            lbl = label_of(c)
+            if merged:
+                lbl += "   <- group label(s): " + ", ".join(merged)
+            line = f"{pad}- {lbl}"
+            extras = []
+            if args.style:
+                sb = style_bits(c.get("style"), args.keep_visual)
+                if sb:
+                    extras.append(sb)
+            if args.geometry:
+                g = geom(c)
+                if g:
+                    n = lambda k: f"{g[k]:.0f}" if g[k] is not None else "?"
+                    extras.append(f"@{n('x')},{n('y')} {n('w')}x{n('h')}")
+            if args.ids:
+                extras.append(f"id={attr(c,'id')}")
+            if extras:
+                line += "   [" + " | ".join(extras) + "]"
+            out.append(line)
+            walk(attr(c, "id"), depth + 1)
+
+    # Page ids are not stable across pages ("0"/"1" is only a convention), so
+    # derive roots structurally: any cell whose parent is absent or unresolvable.
+    out.append("### Shapes")
+    seen_ids = set(by_id)
+    roots = [c for c in cells
+             if attr(c, "parent") is None or attr(c, "parent") not in seen_ids]
+    start = {attr(c, "parent") for c in roots}
+    for pid in sorted(start, key=lambda x: (x is not None, x or "")):
+        walk(pid, 0)
+
+    # --- edges ---
+    if edges:
+        out.append("")
+        out.append("### Connectors")
+
+        def endpoint(cid):
+            """Resolve an edge endpoint, following any group collapse."""
+            if not cid:
+                return None
+            c = by_id.get(cid)
+            if c is None:
+                return f"<missing {cid}>"
+            c, _ = collapse(c)
+            return label_of(c)
+
+        for e in edges:
+            sn = endpoint(attr(e, "source"))
+            tn = endpoint(attr(e, "target"))
+            lbl = clean(attr(e, "value") or "").replace("\n", " / ")
+            if sn is None and tn is None:
+                # No endpoints at all: a free-floating arrow, typically a legend key.
+                line = f"- (unattached arrow — legend/annotation)"
+                if lbl:
+                    line += f"    ({lbl})"
+                out.append(line)
+                continue
+            line = f"- {sn or '(dangling)'}  ->  {tn or '(dangling)'}"
+            if lbl:
+                line += f"    ({lbl})"
+            if args.style:
+                sb = style_bits(e.get("style"), args.keep_visual)
+                if sb:
+                    line += f"   [{sb}]"
+            out.append(line)
+
+    # --- floating labels attached to edges/cells as children ---
+    out.append("")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Strip a .drawio file to readable content.")
+    p.add_argument("file")
+    p.add_argument("-p", "--page", action="append",
+                   help="only this page (name or 0-based index); repeatable")
+    p.add_argument("-s", "--style", action="store_true",
+                   help="include condensed style tokens")
+    p.add_argument("-g", "--geometry", action="store_true",
+                   help="include x,y and w x h")
+    p.add_argument("-i", "--ids", action="store_true", help="include cell ids")
+    p.add_argument("-V", "--keep-visual", action="store_true",
+                   help="with -s, keep colors/fonts instead of dropping them")
+    p.add_argument("-l", "--list", action="store_true", help="list page names only")
+    p.add_argument("-a", "--all", action="store_true",
+                   help="keep unlabeled decorative image cells")
+    p.add_argument("-C", "--no-collapse", action="store_true",
+                   help="keep single-child group wrappers as their own level")
+    args = p.parse_args()
+
+    tree = etree.parse(args.file)
+    pages = tree.findall(".//diagram")
+
+    if args.list:
+        for i, d in enumerate(pages):
+            print(f"{i}\t{d.get('name')}")
+        return
+
+    if args.page:
+        want = set(args.page)
+        pages = [d for i, d in enumerate(pages)
+                 if d.get("name") in want or str(i) in want]
+        if not pages:
+            sys.exit(f"no page matched {args.page}")
+
+    out = [f"# {args.file}", ""]
+    for d in pages:
+        render_page(d, args, out)
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main()

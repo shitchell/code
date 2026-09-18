@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+#
+# wmd -- work planning by horizon: quarter > month > week > day
+#
+# The tool owns the layout so you never mkdir a day dir by hand. Canonical
+# storage is flat-by-horizon (short stable paths, and a week that straddles a
+# month boundary doesn't have to pick a parent). The nested view -- `up`,
+# `weeks/`, `days/` -- is generated symlinks, not something you author.
+#
+#   ~/wmd/
+#   |-- current/{quarter,month,week,day}   symlinks; only these move
+#   |-- quarters/2026-Q3/PLAN.md
+#   |-- months/2026-08/{PLAN.md, up, weeks/}
+#   |-- weeks/2026-W34/{PLAN.md, notes.md, up, days/, resources/}
+#   `-- days/2026-08-17/{notes.md, up, resources/}
+#
+# A week belongs to the month containing its Thursday (ISO convention), which
+# makes straddling weeks deterministic instead of a judgement call.
+
+set -euo pipefail
+
+WMD_ROOT="${WMD_ROOT:-${HOME}/wmd}"
+EDIT_CMD="${VISUAL:-${EDITOR:-vi}}"
+DO_EDIT=1
+
+die() { printf 'wmd: %s\n' "${*}" >&2; exit 1; }
+info() { printf '%s\n' "${*}" >&2; }
+
+usage() {
+    cat <<'EOF'
+wmd -- work planning by horizon (quarter > month > week > day)
+
+USAGE
+  wmd                        status: current horizons + what has notes
+  wmd day    [SPEC]          ensure + open a day note        (default: today)
+  wmd week   [SPEC]          ensure + open a week plan       (default: this week)
+  wmd month  [SPEC]          ensure + open a month plan      (default: this month)
+  wmd quarter [SPEC]         ensure + open a quarter plan    (default: this quarter)
+  wmd notes  [SPEC]          open the WEEK's notes.md rather than its PLAN.md
+  wmd sync                   create today's horizons, re-point current/*
+  wmd path   HORIZON [SPEC]  print a path       ->  cd "$(wmd path week)"
+  wmd link   TARGET [opts]   attach a repo/dir/ticket/server to a horizon
+  wmd ls     [SPEC]          tree of a month's weeks and days
+  wmd help                   this text
+
+SPEC
+  day      today | tomorrow | yesterday | 2026-08-17 | "next monday" | any `date -d`
+  week     this | next | prev | 2026-W34 | W34 | 34 | any date (-> its ISO week)
+  month    this | next | prev | 2026-08 | any date (-> its month)
+  quarter  this | next | prev | 2026-Q3
+
+OPTIONS
+  -n, --no-edit              create/ensure only, never launch $EDITOR
+  -t, --to HORIZON           (link) which horizon to attach to  [default: week]
+  -a, --as NAME              (link) name for the symlink        [default: basename]
+
+EXAMPLES
+  wmd week next                    # next week's plan, created if missing
+  wmd notes next -n                # ensure next week's notes.md, don't open it
+  wmd link ~/devops/tashelix-packer
+  wmd link HSP-1234 --to day       # non-path -> recorded in resources.md
+  cd "$(wmd path week next)"
+
+ENV
+  WMD_ROOT  planning root  [default: ~/wmd]
+EOF
+}
+
+# ---------------------------------------------------------------- date helpers
+
+# Monday of ISO week $2 in ISO year $1. Jan 4 is always in ISO week 1.
+iso_week_monday() {
+    local y="${1}" w="${2}" jan4 dow wk1
+    jan4="$(date -d "${y}-01-04" +%F)"
+    dow="$(date -d "${jan4}" +%u)"
+    wk1="$(date -d "${jan4} -$(( dow - 1 )) days" +%F)"
+    date -d "${wk1} +$(( (10#${w} - 1) * 7 )) days" +%F
+}
+
+# Any day -> the Monday of its ISO week.
+monday_of() {
+    local d="${1}" dow
+    dow="$(date -d "${d}" +%u)"
+    date -d "${d} -$(( dow - 1 )) days" +%F
+}
+
+resolve_day() {
+    local spec="${1:-today}"
+    case "${spec}" in
+        this|current|'') spec=today ;;
+        next)            spec=tomorrow ;;
+        prev|last)       spec=yesterday ;;
+    esac
+    date -d "${spec}" +%F 2>/dev/null \
+        || die "unparseable day spec: ${spec}"
+}
+
+# -> YYYY-Www
+resolve_week() {
+    local spec="${1:-this}" d
+    case "${spec}" in
+        this|current|'')     d="$(date +%F)" ;;
+        next)                d="$(date -d 'today +7 days' +%F)" ;;
+        prev|last)           d="$(date -d 'today -7 days' +%F)" ;;
+        [0-9][0-9][0-9][0-9]-[Ww][0-9][0-9])
+                             d="$(iso_week_monday "${spec:0:4}" "${spec:6:2}")" ;;
+        [Ww][0-9]|[Ww][0-9][0-9])
+                             d="$(iso_week_monday "$(date +%G)" "$(printf '%02d' "10#${spec:1}")")" ;;
+        [0-9]|[0-9][0-9])
+                             d="$(iso_week_monday "$(date +%G)" "$(printf '%02d' "10#${spec}")")" ;;
+        *)                   d="$(resolve_day "${spec}")" ;;
+    esac
+    date -d "${d}" +%G-W%V
+}
+
+# -> YYYY-MM
+resolve_month() {
+    local spec="${1:-this}"
+    case "${spec}" in
+        this|current|'')  date +%Y-%m ;;
+        next)             date -d "$(date +%Y-%m-01) +1 month" +%Y-%m ;;
+        prev|last)        date -d "$(date +%Y-%m-01) -1 month" +%Y-%m ;;
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]) printf '%s\n' "${spec}" ;;
+        *)                date -d "$(resolve_day "${spec}")" +%Y-%m ;;
+    esac
+}
+
+# -> YYYY-Qn
+resolve_quarter() {
+    local spec="${1:-this}" m y
+    case "${spec}" in
+        [0-9][0-9][0-9][0-9]-[Qq][1-4]) printf '%s\n' "${spec^^}"; return ;;
+        this|current|'')  m="$(date +%Y-%m)" ;;
+        next)             m="$(date -d "$(date +%Y-%m-01) +3 months" +%Y-%m)" ;;
+        prev|last)        m="$(date -d "$(date +%Y-%m-01) -3 months" +%Y-%m)" ;;
+        *)                m="$(resolve_month "${spec}")" ;;
+    esac
+    y="${m%%-*}"
+    printf '%s-Q%d\n' "${y}" "$(( (10#${m##*-} - 1) / 3 + 1 ))"
+}
+
+# The month a week belongs to = the month of its Thursday.
+month_of_week() {
+    local mon
+    mon="$(iso_week_monday "${1%%-W*}" "${1##*-W}")"
+    date -d "${mon} +3 days" +%Y-%m
+}
+
+# ------------------------------------------------------------------ templating
+
+render() {
+    # render TEMPLATE_NAME DEST_FILE  -- substitutes {{VAR}} from the env below.
+    local tpl="${WMD_ROOT}/.templates/${1}" dest="${2}"
+    [[ -e "${dest}" ]] && return 0
+    [[ -f "${tpl}" ]] || die "missing template: ${tpl}"
+    local out
+    out="$(<"${tpl}")"
+    local k v
+    for k in TITLE DATE DATE_LONG WEEK WEEK_RANGE MONTH MONTH_LONG QUARTER; do
+        v="${!k:-}"
+        out="${out//\{\{${k}\}\}/${v}}"
+    done
+    printf '%s\n' "${out}" > "${dest}"
+}
+
+seed_templates() {
+    local t="${WMD_ROOT}/.templates"
+    mkdir -p "${t}"
+
+    [[ -f "${t}/day.md" ]] || cat > "${t}/day.md" <<'EOF'
+# {{DATE_LONG}}
+
+> week [{{WEEK}}](../../weeks/{{WEEK}}/PLAN.md) · month [{{MONTH}}](../../months/{{MONTH}}/PLAN.md)
+
+## Plan for today
+
+## Notes
+
+## Carried forward
+EOF
+
+    [[ -f "${t}/week-plan.md" ]] || cat > "${t}/week-plan.md" <<'EOF'
+# {{WEEK}} — {{WEEK_RANGE}}
+
+> month [{{MONTH}}](../../months/{{MONTH}}/PLAN.md) · quarter [{{QUARTER}}](../../quarters/{{QUARTER}}/PLAN.md)
+
+## Goals
+
+## Deadlines / commitments
+
+## Resources
+_`wmd link` writes here and into `resources/`._
+
+## Retro
+EOF
+
+    [[ -f "${t}/week-notes.md" ]] || cat > "${t}/week-notes.md" <<'EOF'
+# {{WEEK}} notes — {{WEEK_RANGE}}
+
+> plan: [PLAN.md](PLAN.md)
+EOF
+
+    [[ -f "${t}/month.md" ]] || cat > "${t}/month.md" <<'EOF'
+# {{MONTH_LONG}} ({{MONTH}})
+
+> quarter [{{QUARTER}}](../../quarters/{{QUARTER}}/PLAN.md)
+
+## Themes
+
+## Goals
+
+## Weeks
+_`weeks/` holds symlinks to the weeks whose Thursday falls in this month._
+
+## Retro
+EOF
+
+    [[ -f "${t}/quarter.md" ]] || cat > "${t}/quarter.md" <<'EOF'
+# {{QUARTER}}
+
+## Objectives
+
+## Months
+
+## Retro
+EOF
+}
+
+seed_readme() {
+    [[ -f "${WMD_ROOT}/README.md" ]] && return 0
+    cat > "${WMD_ROOT}/README.md" <<'EOF'
+# wmd — work planning by horizon
+
+Quarter > month > week > day. Managed by the `wmd` command
+(`~/code/sh/bin/wmd`) — don't hand-create directories here, the tool
+conjures them and keeps the links consistent.
+
+## Layout
+
+Canonical storage is **flat by horizon**: `quarters/`, `months/`, `weeks/`,
+`days/`. Short, stable, greppable paths, and a week that straddles a month
+boundary doesn't have to pick a parent.
+
+The **nested view is generated**: every dir has an `up` symlink to its parent
+horizon, months carry a `weeks/` dir of symlinks, weeks carry a `days/` dir.
+Browse either way; only one copy exists.
+
+`current/{quarter,month,week,day}` are the only things that move — `wmd sync`
+re-points them at today.
+
+    ~/wmd/
+    |-- current/week -> ../weeks/2026-W34
+    |-- months/2026-08/{PLAN.md, up, weeks/}
+    |-- weeks/2026-W34/{PLAN.md, notes.md, up, days/, resources/}
+    `-- days/2026-08-17/{notes.md, up, resources/}
+
+A week belongs to the month containing its **Thursday** (ISO convention), so
+straddling weeks resolve deterministically rather than by judgement call.
+
+## Resources over containment
+
+`wmd link` is the piece that matters. A project spans several repos plus
+servers, tickets, and docs; a repo is a *resource you link to*, not the unit of
+organization. Real paths become symlinks under `<horizon>/resources/`;
+everything else (Jira keys, hostnames, PR URLs) gets a line in `resources.md`.
+
+## Templates
+
+`.templates/*.md` — edit freely, they're only read when a file is first created.
+Placeholders: `{{DATE}} {{DATE_LONG}} {{WEEK}} {{WEEK_RANGE}} {{MONTH}}
+{{MONTH_LONG}} {{QUARTER}}`.
+EOF
+}
+
+init_root() {
+    mkdir -p "${WMD_ROOT}"/{quarters,months,weeks,days,current}
+    seed_templates
+    seed_readme
+}
+
+# relative symlink, idempotent, never clobbers a real file
+link_rel() {
+    local target="${1}" linkname="${2}"
+    [[ -e "${linkname}" && ! -L "${linkname}" ]] && return 0
+    ln -sfn -- "$(realpath -m --relative-to="$(dirname "${linkname}")" "${target}")" "${linkname}"
+}
+
+# ------------------------------------------------------------------- ensurers
+
+# A failed resolve_* inside $(...) does not stop the caller under `set -e`, so
+# every ensurer refuses an empty id rather than creating `days/`, `weeks/`, ...
+require_id() { [[ -n "${1}" ]] || die "could not resolve a ${2} — check the spec"; }
+
+ensure_quarter() {
+    require_id "${1:-}" quarter
+    local q="${1}" dir="${WMD_ROOT}/quarters/${1}"
+    init_root
+    mkdir -p "${dir}"
+    QUARTER="${q}" render quarter.md "${dir}/PLAN.md"
+    printf '%s\n' "${dir}"
+}
+
+ensure_month() {
+    require_id "${1:-}" month
+    local m="${1}" dir="${WMD_ROOT}/months/${1}" q qdir
+    q="$(resolve_quarter "${m}-01")"
+    qdir="$(ensure_quarter "${q}")"
+    mkdir -p "${dir}/weeks"
+    MONTH="${m}" QUARTER="${q}" MONTH_LONG="$(date -d "${m}-01" '+%B %Y')" \
+        render month.md "${dir}/PLAN.md"
+    link_rel "${dir}" "${qdir}/${m}"
+    link_rel "${qdir}" "${dir}/up"
+    printf '%s\n' "${dir}"
+}
+
+ensure_week() {
+    require_id "${1:-}" week
+    local w="${1}" dir="${WMD_ROOT}/weeks/${1}" m mdir mon sun range
+    m="$(month_of_week "${w}")"
+    mdir="$(ensure_month "${m}")"
+    mon="$(iso_week_monday "${w%%-W*}" "${w##*-W}")"
+    sun="$(date -d "${mon} +6 days" +%F)"
+    range="$(date -d "${mon}" '+%a %b %-d') – $(date -d "${sun}" '+%a %b %-d, %Y')"
+    mkdir -p "${dir}/days" "${dir}/resources"
+    WEEK="${w}" MONTH="${m}" QUARTER="$(resolve_quarter "${m}-01")" WEEK_RANGE="${range}" \
+        render week-plan.md "${dir}/PLAN.md"
+    WEEK="${w}" WEEK_RANGE="${range}" render week-notes.md "${dir}/notes.md"
+    link_rel "${dir}" "${mdir}/weeks/${w}"
+    link_rel "${mdir}" "${dir}/up"
+    printf '%s\n' "${dir}"
+}
+
+ensure_day() {
+    require_id "${1:-}" day
+    local d="${1}" dir="${WMD_ROOT}/days/${1}" w wdir
+    w="$(date -d "${d}" +%G-W%V)"
+    wdir="$(ensure_week "${w}")"
+    mkdir -p "${dir}/resources"
+    DATE="${d}" DATE_LONG="$(date -d "${d}" '+%A, %B %-d, %Y')" \
+        WEEK="${w}" MONTH="$(date -d "${d}" +%Y-%m)" \
+        render day.md "${dir}/notes.md"
+    link_rel "${dir}" "${wdir}/days/${d}"
+    link_rel "${wdir}" "${dir}/up"
+    printf '%s\n' "${dir}"
+}
+
+# horizon dispatch: ensure_horizon HORIZON [SPEC] -> prints dir
+ensure_horizon() {
+    case "${1}" in
+        day)     ensure_day     "$(resolve_day     "${2:-today}")" ;;
+        week)    ensure_week    "$(resolve_week    "${2:-this}")" ;;
+        month)   ensure_month   "$(resolve_month   "${2:-this}")" ;;
+        quarter) ensure_quarter "$(resolve_quarter "${2:-this}")" ;;
+        *)       die "unknown horizon: ${1} (day|week|month|quarter)" ;;
+    esac
+}
+
+primary_file() {
+    # the file `wmd <horizon>` opens
+    [[ "${1}" == day ]] && printf '%s\n' "${2}/notes.md" || printf '%s\n' "${2}/PLAN.md"
+}
+
+open_file() {
+    local f="${1}"
+    if (( DO_EDIT )) && [[ -t 1 ]]; then
+        "${EDIT_CMD}" "${f}"
+    else
+        printf '%s\n' "${f}"
+    fi
+}
+
+# ------------------------------------------------------------------- commands
+
+cmd_sync() {
+    init_root
+    local h dir
+    for h in quarter month week day; do
+        dir="$(ensure_horizon "${h}" this)"
+        ln -sfn -- "$(realpath -m --relative-to="${WMD_ROOT}/current" "${dir}")" \
+            "${WMD_ROOT}/current/${h}"
+    done
+    info "current/ -> $(basename "$(readlink -f "${WMD_ROOT}/current/day")")"
+}
+
+cmd_status() {
+    init_root
+    cmd_sync >/dev/null 2>&1
+    printf '\n  %s\n' "$(date '+%A, %B %-d, %Y')"
+    printf '  %s\n\n' "$(printf '%.0s─' {1..46})"
+    local h dir f mark
+    for h in quarter month week day; do
+        dir="$(readlink -f "${WMD_ROOT}/current/${h}")"
+        f="$(primary_file "${h}" "${dir}")"
+        # "has content" = more than the rendered template's headings
+        mark='·'
+        [[ -s "${f}" ]] && grep -qvE '^\s*(#|>|_|$)' "${f}" && mark='✎'
+        printf '  %s %-8s %-14s %s\n' "${mark}" "${h}" "$(basename "${dir}")" \
+            "${f#"${WMD_ROOT}/"}"
+    done
+    local wdir
+    wdir="$(readlink -f "${WMD_ROOT}/current/week")"
+    if [[ -s "${wdir}/resources.md" ]] || compgen -G "${wdir}/resources/*" >/dev/null 2>&1; then
+        printf '\n  linked this week:\n'
+        compgen -G "${wdir}/resources/*" >/dev/null 2>&1 &&
+            for r in "${wdir}"/resources/*; do
+                printf '    → %s\n' "$(basename "${r}")"
+            done
+        [[ -s "${wdir}/resources.md" ]] &&
+            grep -oE '^- .*' "${wdir}/resources.md" | sed 's/^- /    · /'
+    fi
+    printf '\n  wmd help  for commands\n\n'
+}
+
+cmd_path() {
+    local h="${1:-}"
+    [[ -z "${h}" ]] && { printf '%s\n' "${WMD_ROOT}"; return; }
+    ensure_horizon "${h}" "${2:-}"
+}
+
+cmd_link() {
+    local target="" horizon="week" name="" spec=""
+    while (( $# )); do
+        case "${1}" in
+            -t|--to)   horizon="${2}"; shift 2 ;;
+            -a|--as)   name="${2}"; shift 2 ;;
+            -s|--spec) spec="${2}"; shift 2 ;;
+            -*)        die "unknown link option: ${1}" ;;
+            *)         [[ -z "${target}" ]] && target="${1}" || spec="${1}"; shift ;;
+        esac
+    done
+    [[ -z "${target}" ]] && die "link: need a target (a path, or a ticket/host/URL)"
+
+    local dir
+    dir="$(ensure_horizon "${horizon}" "${spec}")"
+
+    if [[ -e "${target}" ]]; then
+        local abs
+        abs="$(realpath "${target}")"
+        name="${name:-$(basename "${abs}")}"
+        mkdir -p "${dir}/resources"
+        ln -sfn -- "${abs}" "${dir}/resources/${name}"
+        info "linked ${name} -> ${abs}  (${horizon})"
+    else
+        # not a path: a Jira key, a hostname, a PR URL, a person
+        local rf="${dir}/resources.md"
+        [[ -f "${rf}" ]] || printf '# resources\n\n' > "${rf}"
+        if grep -qF -- "- ${target}" "${rf}" 2>/dev/null; then
+            info "already recorded: ${target}  (${horizon})"
+        else
+            printf -- '- %s%s\n' "${target}" "${name:+ — ${name}}" >> "${rf}"
+            info "recorded ${target}  (${horizon}) -> ${rf#"${WMD_ROOT}/"}"
+        fi
+    fi
+}
+
+cmd_ls() {
+    local m dir
+    m="$(resolve_month "${1:-this}")"
+    dir="$(ensure_month "${m}")"
+    printf '\n%s  (%s)\n' "$(date -d "${m}-01" '+%B %Y')" "${m}"
+    local w wk d
+    for w in "${dir}"/weeks/*; do
+        [[ -e "${w}" ]] || continue
+        wk="$(basename "${w}")"
+        printf '  %s\n' "${wk}"
+        for d in "${w}"/days/*; do
+            [[ -e "${d}" ]] || continue
+            printf '    %s  %s\n' "$(basename "${d}")" \
+                "$(date -d "$(basename "${d}")" '+%a')"
+        done
+    done
+    printf '\n'
+}
+
+# ----------------------------------------------------------------------- main
+
+main() {
+    local args=()
+    while (( $# )); do
+        case "${1}" in
+            -n|--no-edit) DO_EDIT=0; shift ;;
+            -h|--help)    usage; exit 0 ;;
+            *)            args+=("${1}"); shift ;;
+        esac
+    done
+    set -- "${args[@]:-}"
+
+    local cmd="${1:-status}"
+    [[ $# -gt 0 ]] && shift || true
+
+    case "${cmd}" in
+        ''|status)              cmd_status ;;
+        help)                   usage ;;
+        sync)                   cmd_sync ;;
+        path)                   cmd_path "${@}" ;;
+        link)                   cmd_link "${@}" ;;
+        ls|tree)                cmd_ls "${@}" ;;
+        day|week|month|quarter)
+            local dir
+            dir="$(ensure_horizon "${cmd}" "${1:-}")"
+            open_file "$(primary_file "${cmd}" "${dir}")"
+            ;;
+        notes)
+            local dir
+            dir="$(ensure_horizon week "${1:-}")"
+            open_file "${dir}/notes.md"
+            ;;
+        *)                      die "unknown command: ${cmd} (try: wmd help)" ;;
+    esac
+}
+
+main "${@}"

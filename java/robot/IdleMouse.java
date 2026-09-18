@@ -67,6 +67,7 @@ public class IdleMouse
         int loopDuration = -1;
         boolean runForever = true;
         boolean showBrief = false;
+        boolean pointerUnavailable = false;
         int remainingTime = 0;
         String remainingTimeStr = "";
         long startTime = System.currentTimeMillis();
@@ -89,6 +90,7 @@ public class IdleMouse
         String C_MOVE = "";
         String C_IDLE = "";
         String C_COORDS = "";
+        String C_UNAVAILABLE = "";
 
         // Check if we're in a pipe or should enable ANSI colors
         if (System.console() != null)
@@ -109,6 +111,7 @@ public class IdleMouse
             C_MOVE = C_PURPLE;
             C_IDLE = C_YELLOW;
             C_COORDS = C_GREEN;
+            C_UNAVAILABLE = C_RED;
         }
 
         // Get the script name
@@ -294,22 +297,51 @@ public class IdleMouse
             remainingTimeStr = secondsToTimeString(remainingTime);
             if (pointerInfo == null)
             {
-                // Mouse is idle! Print a message and do the jiggle wiggle
-                if (!runForever) {
-                    System.out.printf("[%s]  ", remainingTimeStr);
+                // waitForMouseMovement() returns null both when the mouse sat
+                // still for the whole idleTime and when the pointer position is
+                // unavailable (workstation locked, secure desktop, display
+                // asleep, disconnected RDP session). Only the first is a real
+                // idle, so let the jiggle attempt tell us which one happened
+                // rather than announcing a jiggle that never occurred.
+                if (idleMouse.jiggleMouse(xOffset, yOffset))
+                {
+                    // Mouse is idle! We did the jiggle wiggle, so say so
+                    pointerUnavailable = false;
+                    if (!runForever) {
+                        System.out.printf("[%s]  ", remainingTimeStr);
+                    }
+                    if (showBrief) {
+                        jiggleString = "~";
+                    } else {
+                        jiggleString = "Mouse is idle, jiggling";
+                    }
+                    System.out.printf(
+                        "%s%s%s%n",
+                        C_IDLE, jiggleString, S_RESET
+                    );
+                } else if (!pointerUnavailable) {
+                    // Report only the first failure. The pointer stays
+                    // unavailable for as long as the screen is locked, and
+                    // announcing it every polling interval would bury the rest
+                    // of the output. The next idle or movement line marks the
+                    // recovery.
+                    pointerUnavailable = true;
+                    if (!runForever) {
+                        System.out.printf("[%s]  ", remainingTimeStr);
+                    }
+                    if (showBrief) {
+                        jiggleString = "x";
+                    } else {
+                        jiggleString = "Mouse position unavailable, waiting";
+                    }
+                    System.out.printf(
+                        "%s%s%s%n",
+                        C_UNAVAILABLE, jiggleString, S_RESET
+                    );
                 }
-                if (showBrief) {
-                    jiggleString = "~";
-                } else {
-                    jiggleString = "Mouse is idle, jiggling";
-                }
-                System.out.printf(
-                    "%s%s%s%n",
-                    C_IDLE, jiggleString, S_RESET
-                );
-                idleMouse.jiggleMouse(xOffset, yOffset);
             } else {
                 // The mouse moved! Print the coordinates and continue
+                pointerUnavailable = false;
                 StringBuilder mouseMovementStr = new StringBuilder();
                 if (!runForever) {
                     // Add some info about the remaining time
@@ -454,19 +486,29 @@ public class IdleMouse
     
         do
         {
-            // Update the pointer info
+            // Update the pointer info. This is null whenever the cursor
+            // position is unavailable (workstation locked, secure desktop,
+            // display asleep, disconnected RDP session), in which case we can't
+            // tell whether the mouse moved -- leave the idle timer alone and
+            // check again after the next sleep.
             pointerInfo = MouseInfo.getPointerInfo();
-            xNew = pointerInfo.getLocation().x;
-            yNew = pointerInfo.getLocation().y;
-
-            if (xNew != x || yNew != y)
+            if (pointerInfo == null)
             {
-                lastTime = System.currentTimeMillis();
-                x = pointerInfo.getLocation().x;
-                y = pointerInfo.getLocation().y;
+                debug("Pointer info unavailable, cannot check for idleness");
                 mouseIdle = false;
             } else {
-                mouseIdle = true;
+                xNew = pointerInfo.getLocation().x;
+                yNew = pointerInfo.getLocation().y;
+
+                if (xNew != x || yNew != y)
+                {
+                    lastTime = System.currentTimeMillis();
+                    x = xNew;
+                    y = yNew;
+                    mouseIdle = false;
+                } else {
+                    mouseIdle = true;
+                }
             }
 
             try
@@ -485,23 +527,39 @@ public class IdleMouse
         }
     }
 
-    public void jiggleMouse(int xOffset, int yOffset)
+    /*
+     * Jiggle the mouse by the given offsets. Returns true if the mouse was
+     * jiggled, or false if the pointer position was unavailable and there was
+     * nothing to jiggle.
+     */
+    public boolean jiggleMouse(int xOffset, int yOffset)
     {
-        int x = MouseInfo.getPointerInfo().getLocation().x;
-        int y = MouseInfo.getPointerInfo().getLocation().y;
+        // Fetch the pointer info once -- getPointerInfo() returns null whenever
+        // the cursor position is unavailable (workstation locked, secure
+        // desktop, display asleep, disconnected RDP session), and calling it
+        // twice can return non-null then null.
+        PointerInfo pointerInfo = MouseInfo.getPointerInfo();
+        if (pointerInfo == null)
+        {
+            debug("Pointer info unavailable, skipping jiggle");
+            return false;
+        }
+        int x = pointerInfo.getLocation().x;
+        int y = pointerInfo.getLocation().y;
         this.robot.mouseMove(x + xOffset, y + yOffset);
         this.robot.mouseMove(x - xOffset, y - yOffset);
         this.robot.mouseMove(x, y);
+        return true;
     }
 
-    public void jiggleMouse(int offset)
+    public boolean jiggleMouse(int offset)
     {
-        jiggleMouse(offset, offset);
+        return jiggleMouse(offset, offset);
     }
 
-    public void jiggleMouse()
+    public boolean jiggleMouse()
     {
-        jiggleMouse(this.xOffset, this.yOffset);
+        return jiggleMouse(this.xOffset, this.yOffset);
     }
 
     public static void debug(String... args)

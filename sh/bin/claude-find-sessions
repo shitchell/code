@@ -23,10 +23,43 @@
 #   -n, --named-only    only sessions that were manually named (/rename or custom-title)
 #   -N, --named-first   sort named sessions to the top (within each bucket)
 #   -p, --project PAT   only sessions whose cwd or project-dir matches PAT (substring)
-#   -d, --days N        only sessions modified within the last N days
+#   -s, --search PAT    only sessions whose JSONL content matches PAT (regex by default);
+#                       a matching snippet is shown on a 'match:' line
+#   -F, --fixed         treat --search PAT as a literal string, not a regex
+#   -i, --ignore-case   case-insensitive --search
+#   -d, --days N        only sessions modified within the last N days (last activity)
+#   -D, --dead          only sessions that died dirty (crash marker, no live process)
+#   -L, --live          only sessions with a live claude process right now
+#       --died-within N only dead sessions whose death bound falls in the last N days
 #   -l, --limit N       show at most N sessions (default 25)
 #   -a, --all           no limit
+#       --reap [N]      delete dead markers (optionally only those started >N days
+#                       ago), print what went, and exit -- clears stale
+#                       "UNCLEAN EXIT" noise so the report reads clean again
+#       --reap-dry-run [N]  show what --reap would remove, delete nothing
+#       --reap-superseded  reap ONLY stale markers whose session has a live
+#                       process again (i.e. you already recovered it). Clears the
+#                       "+N stale" noise while keeping the crash signal on
+#                       sessions you have not dealt with yet. Combines with
+#                       --reap-dry-run.
+#       --no-stamp      don't write died_bound= back into markers (see below)
 #   -h, --help          this help
+#
+# Death times
+#   A marker records only `started`. A clean exit deletes the marker and a crash
+#   never fires SessionEnd, so nothing ever records *when* a session died. We can
+#   only bound it from above:
+#     - marker started before the current boot -> it cannot have survived the
+#       boot, so death <= boot time;
+#     - a newer marker for the same session    -> death <= that marker's start;
+#     - otherwise (died during this boot)      -> death <= now.
+#   This is only ever an upper bound, never an exact time, so it always prints
+#   as `died: <= TIME`. The bound also *widens* as time passes: an old marker
+#   re-derived after another reboot yields the newer, looser boot time. So the
+#   first time a dead marker is observed the bound is frozen into the file as
+#   `died_bound=` (suppress with --no-stamp) and reused thereafter -- shown as
+#   `(recorded)` vs a freshly `(inferred)` one. Sessions idle for days before
+#   dying get a loose bound; that is a real limit of the data, not a bug.
 #
 set -u
 
@@ -37,8 +70,19 @@ BUCKET=""        # "" | hour | day | week | month
 NAMED_ONLY=0
 NAMED_FIRST=0
 PROJECT_PAT=""
+SEARCH_PAT=""
+SEARCH_FIXED=0
+IGNORE_CASE=0
 DAYS=""
 LIMIT=25
+DEAD_ONLY=0
+LIVE_ONLY=0
+DIED_WITHIN=""
+REAP=0
+REAP_DRY=0
+REAP_DAYS=0
+REAP_SUPERSEDED=0
+NO_STAMP=0
 
 die() { echo "claude-find-sessions: $*" >&2; exit 2; }
 
@@ -50,6 +94,18 @@ while [[ $# -gt 0 ]]; do
         -n|--named-only)  NAMED_ONLY=1; shift ;;
         -N|--named-first) NAMED_FIRST=1; shift ;;
         -p|--project)     PROJECT_PAT="${2:-}"; shift 2 ;;
+        -s|--search)      SEARCH_PAT="${2:-}"; shift 2 ;;
+        -F|--fixed)       SEARCH_FIXED=1; shift ;;
+        -i|--ignore-case) IGNORE_CASE=1; shift ;;
+        -D|--dead)        DEAD_ONLY=1; shift ;;
+        -L|--live)        LIVE_ONLY=1; shift ;;
+        --died-within)    DIED_WITHIN="${2:-}"; shift 2 ;;
+        --reap)           REAP=1
+                          if [[ "${2:-}" =~ ^[0-9]+$ ]]; then REAP_DAYS="$2"; shift 2; else shift; fi ;;
+        --reap-dry-run)   REAP=1; REAP_DRY=1
+                          if [[ "${2:-}" =~ ^[0-9]+$ ]]; then REAP_DAYS="$2"; shift 2; else shift; fi ;;
+        --no-stamp)       NO_STAMP=1; shift ;;
+        --reap-superseded) REAP=1; REAP_SUPERSEDED=1; shift ;;
         -d|--days)        DAYS="${2:-}"; shift 2 ;;
         -l|--limit)       LIMIT="${2:-}"; shift 2 ;;
         -a|--all)         LIMIT=0; shift ;;
@@ -61,11 +117,21 @@ done
 case "$BUCKET" in ""|hour|day|week|month) ;; *) die "--bucket must be hour|day|week|month" ;; esac
 [[ -n "$DAYS"  && ! "$DAYS"  =~ ^[0-9]+$ ]] && die "--days must be an integer"
 [[ -n "$LIMIT" && ! "$LIMIT" =~ ^[0-9]+$ ]] && die "--limit must be an integer"
+[[ -n "$DIED_WITHIN" && ! "$DIED_WITHIN" =~ ^[0-9]+$ ]] && die "--died-within must be an integer"
+(( DEAD_ONLY && LIVE_ONLY )) && die "--dead and --live are mutually exclusive"
+[[ -n "$DIED_WITHIN" ]] && DEAD_ONLY=1
 [[ -d "$PROJECTS_DIR" ]] || die "no projects dir at $PROJECTS_DIR"
 
 NOW="$(date +%s)"
 CUTOFF=0
 [[ -n "$DAYS" ]] && CUTOFF=$(( NOW - DAYS * 86400 ))
+DIED_CUTOFF=0
+[[ -n "$DIED_WITHIN" ]] && DIED_CUTOFF=$(( NOW - DIED_WITHIN * 86400 ))
+
+# Boot time: a dead marker predating this cannot have survived the boot, which
+# makes BOOT a hard upper bound on when that session died.
+_up="$(cut -d' ' -f1 /proc/uptime 2>/dev/null)"; _up="${_up%.*}"
+BOOT=$(( NOW - ${_up:-0} ))
 
 # --- field extractors (grep-based; cheap, format-agnostic) -------------------
 
@@ -73,6 +139,30 @@ ai_title()     { grep -aoP '"aiTitle":"\K[^"]*'                              "$1
 custom_title() { grep -aoP '"customTitle":"\K[^"]*'                          "$1" 2>/dev/null | tail -1; }
 rename_mark()  { grep -aoP '"content":"<local-command-stdout>Session renamed to: \K[^<]+' "$1" 2>/dev/null | tail -1; }
 session_cwd()  { grep -aoP '"cwd":"\K[^"]*'                                   "$1" 2>/dev/null | head -1; }
+
+# --- content search ----------------------------------------------------------
+# --search PAT filters sessions to those whose raw JSONL matches PAT. PAT is an
+# ERE by default; --fixed treats it literally; --ignore-case folds case. The
+# whole file is scanned (keys included) -- searching specific message roles
+# isn't worth the jq cost here, and matching anywhere is the friendlier default.
+
+matches_search() {  # returns 0 if "$1" contains a match
+    local opts=(-aq)
+    (( IGNORE_CASE )) && opts+=(-i)
+    if (( SEARCH_FIXED )); then opts+=(-F); else opts+=(-E); fi
+    grep "${opts[@]}" -- "$SEARCH_PAT" "$1" 2>/dev/null
+}
+
+# A short snippet around the first match, for the 'match:' display line.
+search_snippet() {
+    local opts=(-ao)
+    (( IGNORE_CASE )) && opts+=(-i)
+    if (( SEARCH_FIXED )); then
+        grep "${opts[@]}" -F -- "$SEARCH_PAT" "$1" 2>/dev/null
+    else
+        grep "${opts[@]}" -E -- ".{0,40}(${SEARCH_PAT}).{0,40}" "$1" 2>/dev/null
+    fi | head -1 | tr '\n\t' '  ' | sed -E 's/  +/ /g; s/^ //; s/ $//' | cut -c1-120
+}
 
 # Fallback when there's no aiTitle: the first genuinely-typed user prompt.
 # Skips meta-wrapped (<...>) and serialized-stub ({...}) content. Only the
@@ -132,6 +222,103 @@ last_message() {
         | cut -c1-140
 }
 
+# --- live markers ------------------------------------------------------------
+# One marker per (session, process): ~/.claude/live/<uuid>.<pid>.live. A clean
+# exit removes it; a crash leaves it behind, and that leftover is the recovery
+# signal. See "Death times" in the header for how the bound is derived.
+
+marker_pid() {  # $1=marker path -> owning claude pid ("" if unknowable)
+    local base; base="$(basename "$1" .live)"
+    if [[ "$base" == *.* ]]; then printf '%s' "${base##*.}"
+    else grep -m1 '^claude_pid=' "$1" 2>/dev/null | cut -d= -f2-
+    fi
+}
+
+marker_alive() {  # $1=pid; guards against PID reuse by checking comm
+    [[ -n "$1" ]] || return 1
+    [[ "$(cat "/proc/$1/comm" 2>/dev/null)" =~ ^(claude|node)$ ]]
+}
+
+marker_started() {  # $1=marker path -> epoch
+    local v; v="$(grep -m1 '^started=' "$1" 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$v" ]]; then date -d "$v" +%s 2>/dev/null || stat -c %Y "$1"
+    else stat -c %Y "$1"; fi
+}
+
+# Populated by scan_markers: live pids, dead count, death bound, exactness.
+SM_PIDS=(); SM_STALE=0; SM_BOUND=0; SM_EXACT=0
+
+scan_markers() {  # $1=uuid
+    local uuid="$1" m p st b v
+    SM_PIDS=(); SM_STALE=0; SM_BOUND=0; SM_EXACT=0
+    local -a dead=() starts=()
+    for m in "$LIVE_DIR/$uuid".live "$LIVE_DIR/$uuid".*.live; do
+        [[ -e "$m" ]] || continue
+        p="$(marker_pid "$m")"
+        starts+=("$(marker_started "$m")")
+        if marker_alive "$p"; then SM_PIDS+=("$p")
+        else SM_STALE=$((SM_STALE+1)); dead+=("$m"); fi
+    done
+    (( ${#dead[@]} )) || return 0
+    for m in "${dead[@]}"; do
+        v="$(grep -m1 '^died_bound=' "$m" 2>/dev/null | cut -d= -f2-)"
+        if [[ -n "$v" ]]; then
+            b="$(date -d "$v" +%s 2>/dev/null || echo 0)"; SM_EXACT=1
+        else
+            st="$(marker_started "$m")"
+            if (( st < BOOT )); then b=$BOOT; else b=$NOW; fi
+            # A newer marker for the same session caps the bound further.
+            local s2
+            for s2 in "${starts[@]}"; do
+                (( s2 > st && s2 < b )) && b=$s2
+            done
+            (( NO_STAMP )) || printf 'died_bound=%s\n' \
+                "$(date -d "@$b" --iso-8601=seconds 2>/dev/null)" >> "$m" 2>/dev/null
+        fi
+        (( b > SM_BOUND )) && SM_BOUND=$b
+    done
+}
+
+# --- reap --------------------------------------------------------------------
+# Removes markers whose owning process is gone, so "UNCLEAN EXIT" stops showing
+# for sessions already dealt with. Note this discards the crash signal: reap
+# after you have recovered what you wanted, not before.
+reap() {
+    local m p st u removed=0 kept=0 cutoff=0 verb="reaped"
+    (( REAP_DRY )) && verb="would reap"
+    (( REAP_DAYS )) && cutoff=$(( NOW - REAP_DAYS * 86400 ))
+    [[ -d "$LIVE_DIR" ]] || die "no live dir at $LIVE_DIR"
+    shopt -s nullglob
+
+    # First pass: which sessions currently have a live process?
+    local -A has_live=()
+    for m in "$LIVE_DIR"/*.live; do
+        p="$(marker_pid "$m")"
+        marker_alive "$p" || continue
+        u="$(basename "$m" .live)"; u="${u%%.*}"
+        has_live["$u"]=1
+    done
+
+    for m in "$LIVE_DIR"/*.live; do
+        p="$(marker_pid "$m")"
+        if marker_alive "$p"; then kept=$((kept+1)); continue; fi
+        u="$(basename "$m" .live)"; u="${u%%.*}"
+        if (( REAP_SUPERSEDED )) && [[ -z "${has_live[$u]:-}" ]]; then
+            kept=$((kept+1)); continue
+        fi
+        st="$(marker_started "$m")"
+        if (( cutoff && st > cutoff )); then kept=$((kept+1)); continue; fi
+        printf '  \033[31m-\033[0m %s \033[2m(started %s)\033[0m\n' \
+            "$(basename "$m")" "$(date -d "@$st" '+%F %H:%M')"
+        (( REAP_DRY )) || rm -f "$m"
+        removed=$((removed+1))
+    done
+    printf '\n\033[2m%s %d dead marker(s); %d left in place\033[0m\n' \
+        "$verb" "$removed" "$kept"
+    exit 0
+}
+(( REAP )) && reap
+
 # --- bucket helpers ----------------------------------------------------------
 
 bucket_key() {  # sortable, lexical-desc == chrono-desc
@@ -179,11 +366,25 @@ for f in "$PROJECTS_DIR"/*/*.jsonl; do
         [[ "$dir" == *"$PROJECT_PAT"* || "$cwd" == *"$PROJECT_PAT"* ]] || continue
     fi
 
+    if [[ -n "$SEARCH_PAT" ]]; then
+        matches_search "$f" || continue
+    fi
+
     named=0
     if is_named "$f"; then named=1; fi
     (( NAMED_ONLY && named == 0 )) && continue
 
-    printf -v rec '%s\t%s\t%s\t%s\t%s' "$(bucket_key "$epoch")" "$epoch" "$named" "$bytes" "$f"
+    uuid_g="$(basename "$f" .jsonl)"
+    scan_markers "$uuid_g"
+    (( LIVE_ONLY && ${#SM_PIDS[@]} == 0 )) && continue
+    # "dead" = has a leftover marker and nothing live for that session
+    (( DEAD_ONLY && ( SM_STALE == 0 || ${#SM_PIDS[@]} > 0 ) )) && continue
+    (( DIED_CUTOFF && SM_BOUND < DIED_CUTOFF )) && continue
+
+    pidlist="-"; (( ${#SM_PIDS[@]} )) && pidlist="$(IFS=,; echo "${SM_PIDS[*]}")"
+    printf -v rec '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+        "$(bucket_key "$epoch")" "$epoch" "$named" "$bytes" \
+        "$pidlist" "$SM_STALE" "$SM_BOUND" "$SM_EXACT" "$f"
     records+=("$rec")
 done
 
@@ -211,7 +412,7 @@ fi
 prev_bucket="__none__"
 shown=0
 for rec in "${records[@]}"; do
-    IFS=$'\t' read -r bkey epoch named bytes f <<<"$rec"
+    IFS=$'\t' read -r bkey epoch named bytes pidlist stale_n died_bound died_exact f <<<"$rec"
     shown=$((shown+1))
 
     if [[ -n "$BUCKET" && "$bkey" != "$prev_bucket" ]]; then
@@ -232,20 +433,10 @@ for rec in "${records[@]}"; do
     ct="$(custom_title "$f")"
     last="$(last_message "$f")"
 
-    # Live markers: one per (session, process). Aggregate across all of them,
-    # since the same session can be resumed in multiple terminals at once.
+    # Live/dead state was resolved during gather; rebuild the display from it.
     livemark=""
-    live_pids=(); stale_n=0
-    for m in "$LIVE_DIR/$uuid".live "$LIVE_DIR/$uuid".*.live; do
-        [[ -e "$m" ]] || continue
-        base="$(basename "$m" .live)"               # <uuid> or <uuid>.<pid>
-        if [[ "$base" == *.* ]]; then p="${base##*.}"; else p="$(grep -m1 '^claude_pid=' "$m" | cut -d= -f2-)"; fi
-        if [[ -n "$p" && "$(cat "/proc/$p/comm" 2>/dev/null)" =~ ^(claude|node)$ ]]; then
-            live_pids+=("$p")
-        else
-            stale_n=$((stale_n+1))
-        fi
-    done
+    live_pids=()
+    [[ "$pidlist" != "-" ]] && IFS=, read -ra live_pids <<<"$pidlist"
     if (( ${#live_pids[@]} > 0 )); then
         if (( ${#live_pids[@]} == 1 )); then
             livemark=" \033[32m◉ live (pid ${live_pids[0]})\033[0m"
@@ -266,9 +457,33 @@ for rec in "${records[@]}"; do
     [[ -n "$rn" ]] && printf '    \033[36mrename:\033[0m %s\n' "$rn"
     [[ -n "$ct" && "$ct" != "$rn" ]] && printf '    \033[36mcustom:\033[0m %s\n' "$ct"
     [[ -n "$cwd"  ]] && printf '    \033[2mcwd:\033[0m    %s\n' "${cwd/#$HOME/\~}"
+    if (( stale_n > 0 && died_bound > 0 )); then
+        if (( died_exact )); then
+            printf '    \033[31mdied:\033[0m   <= %s \033[2m(recorded)\033[0m\n' "$(date -d "@$died_bound" '+%F %H:%M')"
+        else
+            printf '    \033[31mdied:\033[0m   <= %s \033[2m(inferred)\033[0m\n' "$(date -d "@$died_bound" '+%F %H:%M')"
+        fi
+    fi
     [[ -n "$last" ]] && printf '    \033[2mlast:\033[0m   %s\n' "$last"
+    if [[ -n "$SEARCH_PAT" ]]; then
+        sm="$(search_snippet "$f")"
+        [[ -n "$sm" ]] && printf '    \033[33mmatch:\033[0m  %s\n' "$sm"
+    fi
 done
 
 printf '\n\033[2m%d shown' "$shown"
 (( total > shown )) && printf ' of %d (use --all or --limit)' "$total"
 printf '\033[0m\n'
+
+# Orphan markers: a dead marker whose transcript is gone has no session to list,
+# so it would otherwise be invisible unclean state. Surface the count -- a report
+# that silently omits them isn't actually clean.
+orphans=0
+for m in "$LIVE_DIR"/*.live; do
+    [[ -e "$m" ]] || continue
+    marker_alive "$(marker_pid "$m")" && continue
+    u="$(basename "$m" .live)"; u="${u%%.*}"
+    compgen -G "$PROJECTS_DIR/*/$u.jsonl" >/dev/null && continue
+    orphans=$((orphans+1))
+done
+(( orphans )) && printf '\033[2m%d dead marker(s) with no transcript (not listed above); clear with --reap\033[0m\n' "$orphans"

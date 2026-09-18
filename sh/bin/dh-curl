@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# dh-curl — curl wrapper that mimics the app.developerhub.io browser session.
+#
+# Keeps all the browser headers in one place so requests to the DeveloperHub
+# app backend look like they came from the logged-in SPA. The Bearer token is
+# read from $DH_TOKEN, else from ~/.config/developerhub/token (chmod 600).
+# When the token expires, grab a fresh one from DevTools and overwrite that
+# file — nothing else needs to change.
+#
+# Usage:
+#   dh-curl <path-or-url> [extra curl args...]
+#   dh-curl /api/user
+#   dh-curl '/api/page/413684/export?format=darkdown'
+#   dh-curl /api/page/413684 | jq .
+set -euo pipefail
+
+token="${DH_TOKEN:-}"
+if [[ -z "$token" ]]; then
+  tokfile="${DH_TOKEN_FILE:-$HOME/.config/developerhub/token}"
+  [[ -r "$tokfile" ]] || { echo "dh-curl: no DH_TOKEN and can't read $tokfile" >&2; exit 1; }
+  token="$(<"$tokfile")"
+fi
+
+[[ $# -ge 1 ]] || { echo "usage: dh-curl <path-or-url> [curl args...]" >&2; exit 2; }
+
+base='https://api.developerhub.io'
+case "$1" in
+  http*) url="$1" ;;
+  /*)    url="${base}$1" ;;
+  *)     url="${base}/$1" ;;
+esac
+shift
+
+curl -s \
+  -H "authorization: Bearer ${token}" \
+  -H 'accept: */*' \
+  -H 'accept-language: en-US,en;q=0.6' \
+  -H 'origin: https://app.developerhub.io' \
+  -H 'referer: https://app.developerhub.io/' \
+  -H 'dnt: 1' \
+  -H 'sec-ch-ua: "Brave";v="149", "Chromium";v="149", "Not)A;Brand";v="24"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "Linux"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: same-site' \
+  -H 'sec-gpc: 1' \
+  -H 'user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36' \
+  "$url" "$@"
