@@ -1,7 +1,0 @@
-#!/bin/bash
-#
-# Echo the contents of the Windows clipboard using Powershell's `Get-Clipboard`
-
-(
-    powershell.exe -command 'Get-Clipboard -Raw' | cat
-) 2>/dev/null | tr -d '\r\0'
