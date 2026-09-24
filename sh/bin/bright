@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bright — get or set screen brightness (1-100) via bright.<tag> providers.
+# bright — get or set screen brightness (1-100) via provider.bright.<tag> providers.
 # Replaces the abandoned bin/brightness draft (removed 2026-07-06).
 #
 # Sourced directly (not via include-source): the dispatcher lib does not

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bright.sysfs — generic /sys/class/backlight backend. Device-agnostic: works
+# provider.bright.sysfs — generic /sys/class/backlight backend. Device-agnostic: works
 # for intel_backlight, acpi_video0 (libre's, verified 2026-07-06), amdgpu_bl0,
 # etc. When several devices exist, the largest max_brightness wins (vendor
 # devices expose fine-grained ranges; acpi_video is often a coarse 0-100 —

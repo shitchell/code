@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# bright.brightnessctl — backend via brightnessctl, which can set brightness
-# unprivileged through systemd-logind (no sudo), hence out-scoring bright.sysfs.
+# provider.bright.brightnessctl — backend via brightnessctl, which can set brightness
+# unprivileged through systemd-logind (no sudo), hence out-scoring provider.bright.sysfs.
 
 probe() {
   : 'Self-rate this backend.

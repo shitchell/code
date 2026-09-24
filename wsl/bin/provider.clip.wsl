@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# provider.clip.wsl — Windows clipboard backend for WSL, via PowerShell.
+#
+# Bridges the WSL Linux clipboard suite to the real Windows clipboard using
+# PowerShell (Get-Clipboard, and System.Windows.Forms via the clip-wsl.ps1
+# sidecar). Plain + rich (real CF_HTML, with a UnicodeText fallback on the same
+# clipboard write). Image is not implemented (see caps below).
+#
+# THE ORIGINAL BUG THIS MUST NOT REPRODUCE:
+#   On this WSL box, opening micro used to WIPE the Windows clipboard because a
+#   *read* was mis-dispatched to a *write*. Here, `get` is a PURE READ: it only
+#   runs Get-Clipboard and must leave the clipboard byte-for-byte unchanged.
+#   The integration test (tests/clip/int_wsl.bats) asserts exactly this.
+#
+# PowerShell resolution (CRITICAL for SSH):
+#   In non-interactive SSH shells, powershell.exe is often NOT on PATH. We fall
+#   back to its absolute System32 location. Without this fallback, probe would
+#   report score 0 over SSH even though PowerShell is present.
+#
+# Prior art folded in (from ~/code/wsl/bin on the WSL box):
+#   - clipout.exe:  `powershell.exe -command 'Get-Clipboard -Raw' | tr -d '\r\0'`
+#   - clipin.exe:   Set-Clipboard with single-quote escaping ('  ->  '')
+#     (since replaced: content now goes via temp files, see clip_set)
+#
+# Provider contract (executable, +x):
+#   probe        -> "score N" then (if usable) "caps ..."
+#   get <type>   -> print clipboard content of <type> to stdout
+#   set <type>   -> store stdin as clipboard content of <type>
+#                   (set rich honours CLIP_PLAIN_FALLBACK, see clip_set)
+#
+# This provider does NOT need clip::real_binary: powershell.exe is not one of
+# our shims, so there is no recursion risk.
+
+PSH="$(command -v powershell.exe || echo /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe)"
+
+# Windows-side logic lives in a sidecar next to this script (resolved through
+# symlinks). It is deliberately not named provider.clip.* and is kept
+# non-executable, so provider enumeration (compgen -c 'provider.clip.') can
+# never pick it up.
+SIDECAR="$(dirname "$(readlink -f "$0")")/clip-wsl.ps1"
+
+probe() {
+  : 'Self-rate this backend.
+
+      @stdout "score N"; then "caps ..." when usable (plain + rich).
+      @return 0 always (an unusable backend still prints "score 0")
+  '
+  grep -qi microsoft /proc/version 2>/dev/null || { echo "score 0"; return; }
+  [[ -x "$PSH" ]] || { echo "score 0"; return; }
+  echo "score 70"
+  # NOTE: no get:image — image is not implemented in this unit.
+  echo "caps get:plain set:plain get:rich set:rich"
+}
+
+clip_get() {
+  : 'Read the Windows clipboard. PURE READ — never mutates the clipboard.
+
+      @arg $1 type (plain|rich)
+      @stdout clipboard content (UTF-8)
+  '
+  case "$1" in
+    plain)
+      # -Raw preserves internal newlines as a single string. tr strips the CRs
+      # PowerShell emits (CRLF) and any stray NULs, matching clipout.exe.
+      # OutputEncoding=UTF8 is load-bearing: the console default is not UTF-8,
+      # so without it non-ASCII comes back mangled (é -> 202, ✓ -> 373).
+      "$PSH" -NoProfile -Command \
+        '[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Clipboard -Raw' \
+        | tr -d '\r\0'
+      ;;
+    rich)
+      # The HTML *fragment* (StartFragment..EndFragment of the CF_HTML), as raw
+      # UTF-8 bytes -- symmetric with `set rich`, which takes a fragment. Empty
+      # if the clipboard holds no HTML. Not Get-Clipboard -TextFormatType Html:
+      # that returns the CF_HTML header too and garbles non-ASCII.
+      _ps get-rich | tr -d '\r\0'
+      ;;
+  esac
+}
+
+_ps() {
+  : 'Run a mode of the PowerShell sidecar (clip-wsl.ps1, next to this script).
+
+      Linux paths in the args are converted to Windows paths by the caller.
+
+      @arg $@ mode and its (Windows) path args
+  '
+  "$PSH" -NoProfile -STA -ExecutionPolicy Bypass \
+    -File "$(wslpath -w "$SIDECAR")" "$@"
+}
+
+_html_to_plain() {
+  : 'Derive a plain-text rendering of an HTML fragment (the UnicodeText flavour
+      paste targets without HTML support receive when the caller supplied no
+      CLIP_PLAIN_FALLBACK).
+
+      @stdin  HTML fragment
+      @stdout plain text
+  '
+  if command -v pandoc >/dev/null 2>&1; then
+    pandoc -f html -t plain --wrap=none
+  else
+    sed -e 's/<[^>]*>//g' -e 's/&lt;/</g' -e 's/&gt;/>/g' \
+        -e 's/&quot;/"/g' -e "s/&#39;/'/g" -e 's/&amp;/\&/g'
+  fi
+}
+
+clip_set() {
+  : 'Write stdin to the Windows clipboard.
+
+      Content reaches PowerShell through temp files, never the command line, so
+      there is no quoting and no ~32K Windows command-line limit.
+
+      @arg $1 type (plain|rich)
+      @stdin content to store (plain text, or an HTML fragment for rich)
+      @env CLIP_PLAIN_FALLBACK (rich only) path to a file whose contents become
+           the UnicodeText flavour placed alongside the HTML. Unset -> derived
+           from the HTML (pandoc -t plain, else tag stripping).
+  '
+  local tmpdir content
+  tmpdir="$(mktemp -d)" || return 1
+  # shellcheck disable=SC2064  # expand now: the local is gone by EXIT time
+  trap "rm -rf '$tmpdir'" EXIT
+  # Command substitution strips trailing newlines, which is the desired
+  # clipboard behavior (Windows tools do not preserve a trailing newline either).
+  content="$(cat)"
+  printf '%s' "$content" > "$tmpdir/content"
+  case "$1" in
+    plain)
+      _ps set-plain "$(wslpath -w "$tmpdir/content")"
+      ;;
+    rich)
+      if [[ -n "${CLIP_PLAIN_FALLBACK:-}" && -r "$CLIP_PLAIN_FALLBACK" ]]; then
+        content="$(cat "$CLIP_PLAIN_FALLBACK")"
+      else
+        [[ -n "${CLIP_PLAIN_FALLBACK:-}" ]] \
+          && echo "provider.clip.wsl: CLIP_PLAIN_FALLBACK unreadable ($CLIP_PLAIN_FALLBACK); deriving plain text from the HTML" >&2
+        content="$(_html_to_plain < "$tmpdir/content")"
+      fi
+      printf '%s' "$content" > "$tmpdir/plain"
+      _ps set-rich "$(wslpath -w "$tmpdir/content")" "$(wslpath -w "$tmpdir/plain")"
+      ;;
+  esac
+}
+
+main() {
+  : 'Provider entrypoint.
+
+      @arg $1 subcommand (probe|get|set)
+      @arg $2 type (plain|rich)
+  '
+  case "$1" in
+    probe) probe ;;
+    get)   clip_get "$2" ;;
+    set)   clip_set "$2" ;;
+  esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"

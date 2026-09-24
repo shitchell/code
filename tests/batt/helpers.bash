@@ -1,4 +1,4 @@
-# helpers.bash — fake batt.* providers and fake sysfs trees
+# helpers.bash — fake provider.batt.* providers and fake sysfs trees
 
 make_provider() { # $1=name $2=score $3=caps $4=get-output
   local dir="$BATS_TEST_TMPDIR/bin"; mkdir -p "$dir"
@@ -32,7 +32,7 @@ EOF
 }
 
 frontend_only_path() {
-  # Expose `batt` on a PATH with NO real batt.<tag> providers, so tests control
+  # Expose `batt` on a PATH with NO real provider.batt.<tag> providers, so tests control
   # provider existence entirely via the make_*_provider helpers. A symlink
   # preserves readlink -f resolution back to sh/bin so the front-end still
   # sources ../lib/batt.sh.
@@ -84,7 +84,7 @@ mk_energy_battery() {
 # Run the provider with rate sampling collapsed to a single read, so tests do
 # not pay the 0.8s median window.
 batt_sysfs() {
-  BATT_RATE_SAMPLES=1 "$BATS_TEST_DIRNAME/../../sh/bin/batt.sysfs" "$@"
+  BATT_RATE_SAMPLES=1 "$BATS_TEST_DIRNAME/../../sh/bin/provider.batt.sysfs" "$@"
 }
 
 # Pull one "key value" line out of a status blob.

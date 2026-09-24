@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vol.powershell — Windows/WSL backend, via powershell.exe and the Core Audio
+# provider.vol.powershell — Windows/WSL backend, via powershell.exe and the Core Audio
 # COM API. The C# interop blob is ported intact from the monolithic bin/vol
 # (pre-2026-07-06); it only exposes the master volume scalar, so no mute caps.
 

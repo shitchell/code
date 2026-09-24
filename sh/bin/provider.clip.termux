@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# clip.termux — Android/Termux clipboard backend, via termux-clipboard-*.
+# provider.clip.termux — Android/Termux clipboard backend, via termux-clipboard-*.
 #
 # UNTESTED: authored without a Termux device available. Trivial per the plan
 # (termux-clipboard-get reads, termux-clipboard-set writes). Requires the

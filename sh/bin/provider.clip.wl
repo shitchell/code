@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# clip.wl — wl-clipboard (Wayland) backend.
+# provider.clip.wl — wl-clipboard (Wayland) backend.
 #
 # THE LIBRE LESSON (historical): on GNOME/Mutter the Wayland selection path can
 # stall 30-50s (the bug this whole project came from), which used to make
-# clip.wl rate itself LOW (score 20) on GNOME so clip.gpaste won.
+# provider.clip.wl rate itself LOW (score 20) on GNOME so provider.clip.gpaste won.
 #
 # DECISION (Task B): wl-clipboard is now the CHOSEN PRIMARY backend here — it is
 # the only one that offers rich/image formatting, and the dispatcher wraps every
 # call in a timeout with fallback (see clip.sh), so an occasional Mutter stall
 # degrades gracefully to gpaste instead of hanging. The old GNOME penalty is
-# therefore DROPPED: clip.wl rates HIGH (70) even on GNOME, out-scoring gpaste
+# therefore DROPPED: provider.clip.wl rates HIGH (70) even on GNOME, out-scoring gpaste
 # (50), while gpaste stays running as a lower-priority plain-only fallback.
 #
 # We must reach the REAL wl-paste/wl-copy binaries, NOT our own wl-* shims

@@ -1,7 +1,7 @@
 # Cross-provider selection — wl primary, gpaste fallback (Task B).
 #
-# With BOTH the real clip.gpaste and clip.wl on PATH, clip::dispatch must select
-# clip.wl on GNOME: wl-clipboard is now the chosen primary (formatting-capable),
+# With BOTH the real provider.clip.gpaste and provider.clip.wl on PATH, clip::dispatch must select
+# provider.clip.wl on GNOME: wl-clipboard is now the chosen primary (formatting-capable),
 # and gpaste is kept only as a lower-priority plain-only fallback. We assert the
 # score ordering directly (which is what the dispatcher keys on) AND verify an
 # end-to-end dispatch get returns the wl value.
@@ -24,8 +24,8 @@ teardown() {
 
 @test "wl out-scores gpaste on GNOME (so dispatch selects wl)" {
   local gs ws
-  gs="$(clip.gpaste probe | sed -n 's/^score //p')"
-  ws="$(clip.wl probe | sed -n 's/^score //p')"
+  gs="$(provider.clip.gpaste probe | sed -n 's/^score //p')"
+  ws="$(provider.clip.wl probe | sed -n 's/^score //p')"
   [[ "$gs" =~ ^[0-9]+$ ]]
   [[ "$ws" =~ ^[0-9]+$ ]]
   [ "$ws" -gt "$gs" ]

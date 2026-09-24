@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# clip.macos — macOS clipboard backend, via pbcopy/pbpaste.
+# provider.clip.macos — macOS clipboard backend, via pbcopy/pbpaste.
 #
 # UNTESTED: authored without a Mac available. The logic is trivial (pbpaste
 # reads, pbcopy writes) and matches the Phase 3 Task 12 plan, but it has NOT

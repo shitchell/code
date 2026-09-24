@@ -61,7 +61,7 @@ logic — they parse intent and delegate):
 - Enumerates providers, keeps those that are compatible **and** implement the
   requested capability, invokes the **highest-fitness** survivor.
 
-**Providers** (`clip.<tags>`, self-registering backends, drop-in):
+**Providers** (`provider.clip.<tags>`, self-registering backends, drop-in):
 
 - Small executables; often one-liners; frequently shared across machines.
 - Each owns its own compatibility verdict and capability set.
@@ -80,12 +80,13 @@ Graceful degradation is a first-class feature, not an afterthought.
 
 ## 5. Provider contract
 
-Each provider `clip.<tags>` (e.g. `clip.gpaste`, `clip.wl`, `clip.xsel`,
-`clip.wsl`, `clip.macos`, `clip.termux`) is an executable answering a tiny
+Each provider `provider.clip.<tags>` (e.g. `provider.clip.gpaste`,
+`provider.clip.wl`, `provider.clip.xsel`, `provider.clip.wsl`,
+`provider.clip.macos`, `provider.clip.termux`) is an executable answering a tiny
 subcommand protocol, so it is independently runnable/testable by hand
-(`clip.gpaste get plain`):
+(`provider.clip.gpaste get plain`):
 
-- **`clip.<tags> probe`** — self-registration. Emits a **fitness score**
+- **`provider.clip.<tags> probe`** — self-registration. Emits a **fitness score**
   (integer; `0`/no output = "not me") **and** the capabilities it offers, in one
   shot:
   ```
@@ -93,17 +94,45 @@ subcommand protocol, so it is independently runnable/testable by hand
   caps  get:plain set:plain
   ```
   This is where each provider's nuanced self-knowledge lives. Examples:
-  - `clip.gpaste` scores high on GNOME (fast D-Bus), offers `get:plain set:plain`.
-  - `clip.wl` scores **low on GNOME/Mutter** (the Wayland selection stalls) but
+  - `provider.clip.gpaste` scores high on GNOME (fast D-Bus), offers
+    `get:plain set:plain`.
+  - `provider.clip.wl` scores **low on GNOME/Mutter** (the Wayland selection stalls) but
     **high on wlroots/sway**, and may offer `get:rich`.
   - So on libre, `plain` resolves to gpaste while `rich` resolves to wl — *on the
     same machine*.
-- **`clip.<tags> get <plain|rich|image>`** — emit that representation to stdout.
-- **`clip.<tags> set <plain|rich|image>`** — read stdin into the clipboard.
+- **`provider.clip.<tags> get <plain|rich|image>`** — emit that representation
+  to stdout.
+- **`provider.clip.<tags> set <plain|rich|image>`** — read stdin into the
+  clipboard.
+  For `rich`, stdin is an HTML **fragment** (no `<html>`/`<body>`), and `get
+  rich` returns a fragment too, so the two round-trip.
+- **`CLIP_PLAIN_FALLBACK`** (optional env, `set rich` only; added 2026-09-24) —
+  path to a file whose contents the provider places as the **plain-text
+  flavour alongside the HTML, in the same clipboard write**, so each paste
+  target picks what it understands (a GUI editor gets the HTML, a terminal gets
+  the plain text). Unset → the provider derives plain text from the HTML itself
+  (e.g. `pandoc -t plain` or tag stripping). Purely additive: a provider that
+  cannot put two flavours on the clipboard at once simply ignores it.
+  `clipin --markdown` sets it to the raw markdown, so plain-text targets receive
+  the markdown source rather than a lossy HTML-to-text rendering. Implemented by
+  `provider.clip.wsl` (CF_HTML + UnicodeText on one `DataObject`).
 
-**Enumeration:** `compgen -c 'clip.' | sort -u`. The dot namespaces providers
-away from the front-end `clip`/`clipin`/`clipout` (no dot), so this lists exactly
-the providers, PATH-aware, no manual dir globbing.
+**Enumeration:** `compgen -c 'provider.clip.' | sort -u`. The `provider.`
+prefix namespaces providers away from the front-end `clip`/`clipin`/`clipout`
+**and** from every unrelated executable on PATH, so this lists exactly the
+providers, PATH-aware, no manual dir globbing.
+
+*Amended 2026-09-24 — providers renamed `clip.<tags>` → `provider.clip.<tags>`
+(all four families: clip/vol/bright/batt).* The original enumeration was
+`compgen -c 'clip.'`. On WSL that also matched Windows
+`/mnt/c/Windows/System32/clip.exe` (it looks like the "exe" provider of
+`clip`), so every clipboard dispatch ran `clip.exe probe`. A legacy
+`~/code/wsl/bin/clip.exe` treated unknown args as clipboard content, so that
+probe could overwrite the clipboard with the literal text "probe" (the legacy
+script was deleted in 5c4c59b). The bare `<ns>.` prefix cannot rule out that
+kind of collision for any family; `provider.<ns>.` does, because no real tool
+is named `provider.*`. The engine is `provider::_providers` in
+`sh/lib/provider.sh`.
 
 ## 6. Dispatch, tie-breaking, defaults
 
@@ -114,7 +143,7 @@ while read -r p; do
   read -r score caps < <("$p" probe 2>/dev/null)   # parse "score N" / "caps ..."
   (( score > bestscore )) && caps_has "$caps" "$op:$type" \
     && { best=$p; bestscore=$score; }
-done < <(compgen -c 'clip.' | sort -u)
+done < <(compgen -c 'provider.clip.' | sort -u)
 [[ $best ]] && exec "$best" "$op" "$type" || die_with_hint "$op" "$type"
 ```
 
@@ -166,8 +195,8 @@ Tune per tool by what we know about it:
 
 ## 8. Layout & PATH
 
-`~/.path` adds every `~/code/*/bin/` to `$PATH`, so `compgen -c 'clip.'` finds
-providers in any topic dir.
+`~/.path` adds every `~/code/*/bin/` to `$PATH`, so
+`compgen -c 'provider.clip.'` finds providers in any topic dir.
 
 - `~/code/sh/lib/clip.sh` — dispatcher + shared helpers. **Source-only →
   `lib/`**, and `sh/lib` is the **`bash-libs` submodule**. *"the dispatcher can
@@ -178,10 +207,12 @@ providers in any topic dir.
   the lib (+x → `bin/`).
 - `~/code/sh/bin/{xclip,xsel,wl-copy,wl-paste,pbcopy,pbpaste}` — name-shims.
 - Providers (executables, +x → `bin/`):
-  - `~/code/sh/bin/clip.gpaste`, `clip.wl`, `clip.xsel`, `clip.termux` (anywhere-bash)
-  - `~/code/wsl/bin/clip.wsl` (may be PowerShell via `psrun` shebang; folds in the
+  - `~/code/sh/bin/provider.clip.gpaste`, `provider.clip.wl`,
+    `provider.clip.xsel`, `provider.clip.termux` (anywhere-bash)
+  - `~/code/wsl/bin/provider.clip.wsl` (bash; Windows-side logic in the
+    non-provider sidecar `clip-wsl.ps1` next to it; folds in the
     existing `clip.exe`/`clipin.exe`/`clipout.exe` rich/image logic)
-  - `~/code/macos/bin/clip.macos` (**new topic dir**; basic `pbcopy`/`pbpaste`)
+  - `~/code/macos/bin/provider.clip.macos` (**new topic dir**; basic `pbcopy`/`pbpaste`)
 
 Convention: `bin/` = executable (source-or-exec OK with +x); `lib/` = only-ever-
 sourced.
@@ -207,7 +238,8 @@ Decide per the shim behavior we end up with.
 
 - **Round-trip per type:** `printf X | clipin; [[ "$(clipout)" == X ]]` for plain
   (and rich/image where supported). Reuse/extend `~/code/wsl/bin/test-clipboard.sh`.
-- **Provider probe:** each `clip.<tags> probe` emits a parseable `score`/`caps`;
+- **Provider probe:** each `provider.clip.<tags> probe` emits a parseable
+  `score`/`caps`;
   `is_compatible` returns sane scores per platform.
 - **Dispatch selection:** on a machine with multiple compatible providers, assert
   the expected one wins per type (libre: plain→gpaste).
@@ -240,7 +272,16 @@ Decide per the shim behavior we end up with.
   offer a rich text function while the wl-copy one might."*
 - **Tie-break by self-rated fitness (Option C).** Accepted ("i can dig C").
 - **Strict `clipout`; image DWIM in `clip` (Option #1).** Accepted ("let's do #1").
-- **Provider naming `clip.<tags>`, enumerate via `compgen`.** Accepted.
+- **Provider naming `clip.<tags>`, enumerate via `compgen`.** Accepted;
+  superseded 2026-09-24 (next entry). Rationale: TBD.
+- **Rename providers to `provider.<ns>.<backend>`, enumerate via
+  `compgen -c 'provider.<ns>.'`.** Accepted 2026-09-24 (Shaun's choice), for all
+  four families (clip/vol/bright/batt). Context: bare `compgen -c 'clip.'`
+  matched Windows `clip.exe` on WSL, so every clipboard dispatch probed it, and
+  a since-deleted legacy `~/code/wsl/bin/clip.exe` could turn `clip.exe probe`
+  into a clipboard overwrite. Rationale: make that class of collision
+  impossible for every family, not just clip. (Stated as the motive for the
+  change; no direct quote recorded.)
 - **Dispatcher in bash-libs submodule (source-only).** Accepted; prioritizes
   existing org rules over avoiding the submodule dance.
 - **Ship thin name-shims; per-tool tunable real-binary checks.** Accepted.

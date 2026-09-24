@@ -15,7 +15,7 @@ seconds_left 17503'
 # --- summary ---------------------------------------------------------------
 
 @test "summary renders charge, draw, remaining and health" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt
   [ "$status" -eq 0 ]
   [[ "$output" == *"Battery"*"74%"*"discharging"* ]]
@@ -26,7 +26,7 @@ seconds_left 17503'
 }
 
 @test "charging relabels the time row as To full" {
-  make_status_provider batt.fake 50 'state charging
+  make_status_provider provider.batt.fake 50 'state charging
 percent 40
 seconds_left 3600'
   run batt
@@ -38,7 +38,7 @@ seconds_left 3600'
 @test "charging labels the rate row Charging, not Draw" {
   # The sensor measures battery flow. While charging that is energy INTO the
   # battery, not system consumption, so calling it "Draw" is simply wrong.
-  make_status_provider batt.fake 50 'state charging
+  make_status_provider provider.batt.fake 50 'state charging
 percent 56
 amps 2.02
 volts 7.96
@@ -50,7 +50,7 @@ watts 16.04'
 }
 
 @test "discharging labels the rate row Draw" {
-  make_status_provider batt.fake 50 'state discharging
+  make_status_provider provider.batt.fake 50 'state discharging
 percent 56
 watts 9.40'
   run batt
@@ -62,7 +62,7 @@ watts 9.40'
 @test "a full battery suppresses the rate row entirely" {
   # Flow is ~0 and says nothing about consumption; "Draw 0.00 W" would read as
   # "this laptop is using no power", which is false while it sits on AC.
-  make_status_provider batt.fake 50 'state full
+  make_status_provider provider.batt.fake 50 'state full
 percent 100
 watts 0.00'
   run batt
@@ -74,7 +74,7 @@ watts 0.00'
 }
 
 @test "notcharging on AC also suppresses the rate row" {
-  make_status_provider batt.fake 50 'state notcharging
+  make_status_provider provider.batt.fake 50 'state notcharging
 percent 80
 watts 0.00'
   run batt
@@ -84,7 +84,7 @@ watts 0.00'
 
 @test "watts is still queryable as a field regardless of label" {
   # Scripts want the raw number; `state` tells them the direction.
-  make_status_provider batt.fake 50 'state charging
+  make_status_provider provider.batt.fake 50 'state charging
 percent 56
 watts 16.04'
   run batt watts
@@ -93,7 +93,7 @@ watts 16.04'
 }
 
 @test "fields the provider omits are skipped entirely" {
-  make_status_provider batt.fake 50 'state discharging
+  make_status_provider provider.batt.fake 50 'state discharging
 percent 74'
   run batt
   [ "$status" -eq 0 ]
@@ -106,7 +106,7 @@ percent 74'
 @test "cycle_count 0 is treated as 'not tracked' and hidden" {
   # Plenty of ECs report 0 forever; showing "Cycles 0" reads as a real
   # measurement of a brand-new battery.
-  make_status_provider batt.fake 50 'state discharging
+  make_status_provider provider.batt.fake 50 'state discharging
 percent 74
 cycles 0'
   run batt
@@ -117,7 +117,7 @@ cycles 0'
 # --- oneline ---------------------------------------------------------------
 
 @test "oneline is compact and single-line" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt -1
   [ "$status" -eq 0 ]
   [ "${#lines[@]}" -eq 1 ]
@@ -127,7 +127,7 @@ cycles 0'
 }
 
 @test "oneline arrow reflects direction" {
-  make_status_provider batt.fake 50 'state charging
+  make_status_provider provider.batt.fake 50 'state charging
 percent 50'
   run batt --oneline
   [ "$status" -eq 0 ]
@@ -137,28 +137,28 @@ percent 50'
 # --- field mode ------------------------------------------------------------
 
 @test "field mode prints a bare value for scripting" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt percent
   [ "$status" -eq 0 ]
   [ "$output" = "74" ]
 }
 
 @test "field 'health' maps onto health_pct" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt health
   [ "$status" -eq 0 ]
   [ "$output" = "92.4" ]
 }
 
 @test "field 'time' is rendered human-readable, not raw seconds" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt time
   [ "$status" -eq 0 ]
   [ "$output" = "4h 51m" ]
 }
 
 @test "a field the provider did not report exits 4" {
-  make_status_provider batt.fake 50 'state discharging
+  make_status_provider provider.batt.fake 50 'state discharging
 percent 74'
   run batt watts
   [ "$status" -eq 4 ]
@@ -166,7 +166,7 @@ percent 74'
 }
 
 @test "an unknown field name is a usage error" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt nonsense
   [ "$status" -eq 1 ]
   [[ "$output" == *"unknown field"* ]]
@@ -175,7 +175,7 @@ percent 74'
 # --- procs -----------------------------------------------------------------
 
 @test "--procs degrades gracefully when no provider offers get:procs" {
-  make_status_provider batt.fake 50 "$full_status"
+  make_status_provider provider.batt.fake 50 "$full_status"
   run batt -p
   [ "$status" -eq 0 ]
   [[ "$output" == *"74%"* ]]              # summary still rendered
@@ -191,9 +191,9 @@ percent 74'
 }
 
 @test "highest-scoring capable provider wins" {
-  make_status_provider batt.low  10 'state discharging
+  make_status_provider provider.batt.low  10 'state discharging
 percent 11'
-  make_status_provider batt.high 90 'state discharging
+  make_status_provider provider.batt.high 90 'state discharging
 percent 99'
   run batt percent
   [ "$status" -eq 0 ]

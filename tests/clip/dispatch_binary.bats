@@ -11,7 +11,7 @@ setup() {
 
 # Fake provider: emits NUL-containing bytes on get, saves stdin on set.
 mk_binprovider() {
-  cat > "$BIN/clip.bin" <<EOF
+  cat > "$BIN/provider.clip.bin" <<EOF
 #!/bin/bash
 case "\$1" in
   probe) echo "score 90"; echo "caps get:plain set:plain" ;;
@@ -19,7 +19,7 @@ case "\$1" in
   set)   cat > "$BATS_TEST_TMPDIR/binsink" ;;
 esac
 EOF
-  chmod +x "$BIN/clip.bin"
+  chmod +x "$BIN/provider.clip.bin"
 }
 
 @test "dispatch get preserves NUL bytes (binary-safe)" {

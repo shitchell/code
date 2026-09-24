@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vol.alsa — raw ALSA backend, via amixer. Last-ditch Linux fallback: on
+# provider.vol.alsa — raw ALSA backend, via amixer. Last-ditch Linux fallback: on
 # PipeWire/Pulse systems amixer may only see a virtual "Master", and on some
 # it fails outright — hence the low score and the probe actually exercising
 # `amixer get Master`. Ported from the monolithic bin/vol (pre-2026-07-06).

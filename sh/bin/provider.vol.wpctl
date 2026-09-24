@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vol.wpctl — PipeWire/WirePlumber backend, via wpctl.
+# provider.vol.wpctl — PipeWire/WirePlumber backend, via wpctl.
 #
 # The modern Linux primary: pactl is often absent on PipeWire systems (libre,
 # 2026-07-06 — the reason this provider exists), while wpctl ships with

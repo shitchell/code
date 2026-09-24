@@ -6,6 +6,13 @@ had each been carrying as a private copy. Companion to
 [2026-07-06-unified-vol-bright-design.md](2026-07-06-unified-vol-bright-design.md)
 and [2026-06-29-unified-clipboard-design.md](2026-06-29-unified-clipboard-design.md).
 
+> **Amended 2026-09-24:** providers are now named `provider.<ns>.<backend>`
+> (e.g. `provider.batt.sysfs`) and enumerated with `compgen -c 'provider.<ns>.'`,
+> across all four families. The bare `<ns>.` prefix matched unrelated
+> executables such as Windows `clip.exe`. Names below use the new scheme; see
+> [clipboard design §5](2026-06-29-unified-clipboard-design.md#5-provider-contract)
+> for the full rationale.
+
 ## 1. Motivation
 
 The immediate itch was simply not having a battery readout. `upower -i` answers
@@ -44,7 +51,8 @@ lib/bright.sh │
 lib/clip.sh ──┘
   │
   ▼
-batt.sysfs  vol.wpctl  bright.brightnessctl  clip.wl  …   (providers)
+provider.batt.sysfs  provider.vol.wpctl  provider.bright.brightnessctl
+provider.clip.wl  …                                      (providers)
 ```
 
 The family libs are now ~30-line wrappers: a `<ns>::dispatch` that forwards to
@@ -139,7 +147,7 @@ refreshes `current_now` only about once a second, consecutive values spanned
 probe sweep is a CPU burst. Successive invocations disagreed by 3h40m vs 5h08m
 on time-to-empty.
 
-`batt.sysfs` therefore takes the **median** of `BATT_RATE_SAMPLES` reads
+`provider.batt.sysfs` therefore takes the **median** of `BATT_RATE_SAMPLES` reads
 (default 3, `BATT_RATE_GAP` 0.4s apart). Median, not mean: the failure mode is
 a lone spike, and the median discards it. Measured over 8 runs:
 
@@ -183,9 +191,9 @@ out; noted in `~/TODO.md`.
 The `watts` field itself stays a magnitude with `state` carrying direction, so
 scripts are unaffected by the labelling.
 
-## 5. `batt.sysfs`
+## 5. `provider.batt.sysfs`
 
-Score 60, leaving room above for a future `batt.upower` (richer history)
+Score 60, leaving room above for a future `provider.batt.upower` (richer history)
 without displacing a backend that needs no daemon and works in a VT or over
 ssh.
 

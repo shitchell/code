@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# batt.sysfs — generic /sys/class/power_supply battery backend for Linux.
+# provider.batt.sysfs — generic /sys/class/power_supply battery backend for Linux.
 # Device-agnostic: works for BAT0/BAT1/CMB0/macsmc-battery etc.
 #
 # Two kernel flavours exist and both are handled:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vol — get or set system volume (0-100) via vol.<tag> providers.
+# vol — get or set system volume (0-100) via provider.vol.<tag> providers.
 #
 # Sourced directly (not via include-source): the dispatcher lib does not
 # resolve through include-source in this worktree (BASH_LIB_PATH points at the

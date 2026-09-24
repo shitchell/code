@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# clip.gpaste — GPaste D-Bus clipboard backend.
+# provider.clip.gpaste — GPaste D-Bus clipboard backend.
 #
 # gpaste-client talks to the GPaste daemon over D-Bus (fast, reliable). It used
-# to be the preferred GNOME backend, but per the Task B decision clip.wl is now
+# to be the preferred GNOME backend, but per the Task B decision provider.clip.wl is now
 # the chosen primary (it alone offers rich/image, and the dispatcher's timeout +
 # fallback covers wl stalls). gpaste is kept as a lower-priority PLAIN-ONLY
-# fallback: it scores 50 on GNOME, below clip.wl's 70, so it only wins when wl
+# fallback: it scores 50 on GNOME, below provider.clip.wl's 70, so it only wins when wl
 # is unavailable (no wl-* binaries) or when wl fails and the dispatcher falls
 # back to it.
 #
@@ -34,7 +34,7 @@ probe() {
   # it already knows: ~20ms, and it never activates anything.
   #
   # Deliberately NOT gated on $DISPLAY/$WAYLAND_DISPLAY, which would look like
-  # the obvious cheap test and is what clip.wl/clip.xsel do. Those vars are
+  # the obvious cheap test and is what provider.clip.wl/clip.xsel do. Those vars are
   # process environment, frozen at pane-creation time inside tmux. In a tmux
   # session shared across a GUI and VTs, a pane opened in a VT keeps empty
   # display vars for the life of the pane — so an env gate would score this
@@ -43,7 +43,7 @@ probe() {
   # true across VT switches because it never consults the environment at all.
   clip::dbus_has_owner org.gnome.GPaste || { echo "score 0"; return; }
   local score=40
-  [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] && score=50   # fallback, below clip.wl (70)
+  [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] && score=50   # fallback, below provider.clip.wl (70)
   echo "score $score"
   echo "caps get:plain set:plain"
 }

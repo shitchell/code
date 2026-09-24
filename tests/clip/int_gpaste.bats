@@ -1,4 +1,4 @@
-# Integration tests for clip.gpaste — run on a machine with GPaste.
+# Integration tests for provider.clip.gpaste — run on a machine with GPaste.
 #
 # These touch the REAL clipboard, so we save it in setup and restore it in
 # teardown to avoid clobbering the user's actual clipboard.
@@ -15,8 +15,8 @@ teardown() {
   fi
 }
 
-@test "clip.gpaste probe reports a numeric score and plain caps" {
-  run clip.gpaste probe
+@test "provider.clip.gpaste probe reports a numeric score and plain caps" {
+  run provider.clip.gpaste probe
   [ "$status" -eq 0 ]
   [[ "$output" == *"get:plain"* ]]
   [[ "$output" == *"set:plain"* ]]
@@ -26,14 +26,14 @@ teardown() {
   [ "$score" -ge 40 ]
 }
 
-@test "clip.gpaste scores 50 on GNOME (fallback below clip.wl)" {
+@test "provider.clip.gpaste scores 50 on GNOME (fallback below provider.clip.wl)" {
   [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]] || skip "not GNOME"
-  run clip.gpaste probe
+  run provider.clip.gpaste probe
   [[ "$output" == *"score 50"* ]]
 }
 
-@test "clip.gpaste round-trips plain text" {
+@test "provider.clip.gpaste round-trips plain text" {
   local val="rt-gpaste-$$-$RANDOM"
-  printf '%s' "$val" | clip.gpaste set plain
-  [ "$(clip.gpaste get plain)" = "$val" ]
+  printf '%s' "$val" | provider.clip.gpaste set plain
+  [ "$(provider.clip.gpaste get plain)" = "$val" ]
 }

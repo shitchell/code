@@ -10,6 +10,13 @@
 
 **Design ref:** `sh/docs/plans/2026-06-29-unified-clipboard-design.md`
 
+> **Note 2026-09-24:** this plan is the record of how the suite was first
+> built, so its code and names are left as executed. Providers have since been
+> renamed `clip.<tags>` → `provider.clip.<tags>` (e.g. `clip.wsl` →
+> `provider.clip.wsl`) and enumeration changed from `compgen -c 'clip.'` to
+> `compgen -c 'provider.clip.'`; fake test providers follow the same scheme.
+> See design doc §5 for why.
+
 **Conventions (from ~/code/CLAUDE.md):**
 - Functions use `: 'docstring with @arg/@stdout'`.
 - Scripts import via `source "$(dirname "$0")/../lib/include.sh"; include-source 'clip.sh'`.

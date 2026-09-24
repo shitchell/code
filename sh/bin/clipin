@@ -1,18 +1,75 @@
 #!/usr/bin/env bash
-# clipin — copy args (or stdin) to the clipboard as plain text.
+# clipin — copy args (or stdin) to the clipboard as plain text, or (with
+# --markdown) as rich text rendered from markdown.
 #
 # See clipout for why we source the dispatcher directly rather than via
 # include-source (include-source does not reliably resolve this worktree's
 # sh/lib/clip.sh).
 source "$(dirname "$(readlink -f "$0")")/../lib/clip.sh"
 
+usage() {
+  cat >&2 <<'EOF'
+usage: clipin [text...]                copy text (args, else stdin) as plain text
+       clipin -m|--markdown [text...]  render markdown to HTML and copy it as rich
+                                       text, with the markdown itself as the
+                                       plain-text flavour (needs pandoc)
+       clipin -h|--help                show this help
+
+Only a LEADING -m/--markdown/-h/--help is an option; use `--` to copy text that
+starts with one (clipin -- --help). Without a set:rich provider on this machine,
+--markdown falls back to copying the markdown as plain text, with a notice.
+EOF
+}
+
+copy_markdown() {
+  : 'Render markdown to HTML and dispatch set rich, markdown as plain fallback.
+
+      Degrades per the design doc: rich is optional, plain is the floor. If no
+      provider can set:rich (or every one fails), the markdown source is copied
+      as plain text and a notice goes to stderr -- the copy still happens.
+
+      @arg $@ optional markdown (joined by spaces); if absent, read from stdin
+      @return 0 on success (rich, or plain fallback); 3 pandoc missing or no
+              provider at all
+  '
+  command -v pandoc >/dev/null 2>&1 \
+    || { echo "clipin: pandoc required for --markdown" >&2; return 3; }
+
+  local tmpdir rc
+  tmpdir="$(mktemp -d)" || return 1
+  # shellcheck disable=SC2064  # expand now: the local is gone by EXIT time
+  trap "rm -rf '$tmpdir'" EXIT
+  if (($#)); then printf '%s' "$*" > "$tmpdir/md"; else cat > "$tmpdir/md"; fi
+
+  # Fragment, not --standalone: set rich takes an HTML fragment.
+  pandoc -f gfm -t html5 "$tmpdir/md" > "$tmpdir/html" \
+    || { echo "clipin: pandoc failed to convert markdown" >&2; return 1; }
+
+  # Providers that can put several flavours on the clipboard in one write use
+  # this file as the plain-text flavour; others ignore it.
+  CLIP_PLAIN_FALLBACK="$tmpdir/md" clip::dispatch set rich < "$tmpdir/html"
+  rc=$?
+  (( rc == 3 )) || return "$rc"
+  echo "clipin: rich text unavailable; copied the markdown as plain text" >&2
+  clip::dispatch set plain < "$tmpdir/md"
+}
+
 main() {
   : 'Copy CLI args (joined by spaces) or stdin to the clipboard.
 
+      @arg -m|--markdown  treat the input as markdown and copy it as rich text
+      @arg -h|--help      print usage
+      @arg --             end of options
       @arg $@ optional text to copy; if absent, read from stdin
       @stdin  text to copy when no args are given
-      @return passthrough from clip::dispatch set plain (3 if no provider)
+      @return passthrough from clip::dispatch (3 if no provider); 3 also when
+              --markdown is given and pandoc is missing
   '
+  case "$1" in
+    -h|--help) usage; return 0 ;;
+    -m|--markdown) shift; [[ "$1" == -- ]] && shift; copy_markdown "$@"; return ;;
+    --) shift ;;
+  esac
   if (($#)); then
     printf '%s' "$*" | clip::dispatch set plain
   else

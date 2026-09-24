@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# vol.pactl — PulseAudio backend, via pactl (also serves PipeWire's pulse
+# provider.vol.pactl — PulseAudio backend, via pactl (also serves PipeWire's pulse
 # compat layer when pactl happens to be installed). Ported from the
 # monolithic bin/vol (pre-2026-07-06).
 
 probe() {
   : 'Self-rate this backend.
 
-      @stdout "score N"; then caps when usable. 70 — below vol.wpctl (80).
+      @stdout "score N"; then caps when usable. 70 — below provider.vol.wpctl (80).
       @return 0 always
   '
   command -v pactl >/dev/null 2>&1 || { echo "score 0"; return; }

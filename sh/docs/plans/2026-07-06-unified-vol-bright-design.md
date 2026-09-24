@@ -6,6 +6,13 @@ consumes them. Companion to
 [2026-06-29-unified-clipboard-design.md](2026-06-29-unified-clipboard-design.md),
 whose architecture this deliberately mirrors.
 
+> **Amended 2026-09-24:** providers are now named `provider.<ns>.<backend>`
+> (e.g. `provider.vol.wpctl`) and enumerated with `compgen -c 'provider.<ns>.'`,
+> across all four families. The bare `<ns>.` prefix matched unrelated
+> executables such as Windows `clip.exe`. Names below use the new scheme; see
+> [clipboard design §5](2026-06-29-unified-clipboard-design.md#5-provider-contract)
+> for the full rationale.
+
 ## 1. Motivation
 
 The immediate itch: tmux volume bindings in the tracked `.tmux.conf`
@@ -41,8 +48,9 @@ tracked .tmux.conf  ──binds──►  vtvol / vtbright     (policy: VT gate 
                                 vol / bright          (mechanism: portable CLI)
                                      │ dispatch
                                      ▼
-                    vol.wpctl  vol.pactl  vol.alsa …  (providers: one per system)
-                    bright.sysfs  bright.brightnessctl
+           provider.vol.wpctl  provider.vol.pactl  provider.vol.alsa …
+           provider.bright.sysfs  provider.bright.brightnessctl
+                                                      (providers: one per system)
 ```
 
 - **`vol` / `bright`** — mechanism only. No VT logic, no notifications.
@@ -62,8 +70,8 @@ Layout and contract copied from clip (see clipboard design §3–§8):
 |---|---|
 | Dispatcher libs (source-only, not +x) | `sh/lib/vol.sh`, `sh/lib/bright.sh` |
 | Front-ends | `sh/bin/vol`, `sh/bin/bright` |
-| Volume providers | `sh/bin/vol.wpctl` (new), `.pactl`, `.alsa`, `.termux`, `.powershell`, `.macos` (ported from monolithic `vol`) |
-| Brightness providers | `sh/bin/bright.sysfs`, `sh/bin/bright.brightnessctl` |
+| Volume providers | `sh/bin/provider.vol.wpctl` (new), `.pactl`, `.alsa`, `.termux`, `.powershell`, `.macos` (ported from monolithic `vol`) |
+| Brightness providers | `sh/bin/provider.bright.sysfs`, `sh/bin/provider.bright.brightnessctl` |
 
 - Dispatch logic is a namespaced copy of `clip::dispatch` (probe → `score N` +
   `caps …`, filter on capability, sort by score desc, `timeout` per attempt,
@@ -98,12 +106,12 @@ Layout and contract copied from clip (see clipboard design §3–§8):
   - `vol` → print percent; `vol 40` → set; `vol +5` / `vol -5` → relative
   - `vol mute [on|off|toggle]` → default `toggle`; `vol muted` → query
   - `bright` mirrors: `bright`, `bright 50`, `bright +10`, `bright -10`
-- Scoring sketch: `vol.wpctl` 80 when `wpctl` exists and a PipeWire socket is
-  live in `$XDG_RUNTIME_DIR`; `vol.pactl` 70 when `pactl` works; `vol.alsa`
+- Scoring sketch: `provider.vol.wpctl` 80 when `wpctl` exists and a PipeWire socket is
+  live in `$XDG_RUNTIME_DIR`; `provider.vol.pactl` 70 when `pactl` works; `provider.vol.alsa`
   40 (last-ditch); platform providers (termux/powershell/macos) 70 on their
-  platforms, 0 elsewhere. `bright.sysfs` 60 when `/sys/class/backlight/*`
+  platforms, 0 elsewhere. `provider.bright.sysfs` 60 when `/sys/class/backlight/*`
   exists (device = largest `max_brightness`; write directly, else `sudo -n`,
-  else fail so the dispatcher falls through); `bright.brightnessctl` 70 when
+  else fail so the dispatcher falls through); `provider.bright.brightnessctl` 70 when
   installed (its logind path needs no sudo).
 - `bin/brightness` (broken draft) is deleted in the same commit.
 

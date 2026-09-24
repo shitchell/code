@@ -1,4 +1,4 @@
-# helpers.bash — make fake clip.* providers on a temp PATH
+# helpers.bash — make fake provider.clip.* providers on a temp PATH
 make_provider() { # $1=name $2=score $3=caps $4=get-output
   local dir="$BATS_TEST_TMPDIR/bin"; mkdir -p "$dir"
   cat > "$dir/$1" <<EOF
@@ -45,9 +45,30 @@ EOF
   export PATH="$dir:$PATH"
 }
 
+make_rich_recorder() { # $1=name $2=score
+  # A plain+rich-capable provider that records what a `set` asked of it:
+  #   $1.type      the type argument (plain|rich)
+  #   $1.sink      the stdin payload
+  #   $1.fallback  the contents of $CLIP_PLAIN_FALLBACK, if that was set
+  local dir="$BATS_TEST_TMPDIR/bin"; mkdir -p "$dir"
+  cat > "$dir/$1" <<EOF
+#!/bin/bash
+case "\$1" in
+  probe) echo "score $2"; echo "caps get:plain set:plain get:rich set:rich" ;;
+  set)   echo "\$2" > "$BATS_TEST_TMPDIR/$1.type"
+         cat > "$BATS_TEST_TMPDIR/$1.sink"
+         if [[ -n "\$CLIP_PLAIN_FALLBACK" ]]; then
+           cat "\$CLIP_PLAIN_FALLBACK" > "$BATS_TEST_TMPDIR/$1.fallback"
+         fi ;;
+esac
+EOF
+  chmod +x "$dir/$1"
+  export PATH="$dir:$PATH"
+}
+
 frontends_only_path() {
   # Expose the suite's front-end commands (clipin/clipout/clipinout/clip) on a
-  # clean PATH that contains NONE of the real clip.<tag> providers, so negative
+  # clean PATH that contains NONE of the real provider.clip.<tag> providers, so negative
   # and DWIM tests control which providers exist purely via make_provider.
   # Symlinks preserve readlink -f resolution back to sh/bin (so the front-ends
   # still source ../lib/clip.sh correctly).

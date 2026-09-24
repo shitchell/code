@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vol.macos — macOS backend, via osascript. Ported from the monolithic
+# provider.vol.macos — macOS backend, via osascript. Ported from the monolithic
 # bin/vol (pre-2026-07-06), mute support added (get/set volume settings
 # carries an "output muted" field).
 

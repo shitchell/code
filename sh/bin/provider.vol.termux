@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vol.termux — Android/Termux backend, via termux-volume (music stream).
+# provider.vol.termux — Android/Termux backend, via termux-volume (music stream).
 # No mute concept in termux-volume, so only volume caps are advertised.
 # Ported from the monolithic bin/vol (pre-2026-07-06).
 
@@ -38,7 +38,7 @@ get_volume() {
   local vol max
   read -r vol max < <(termux-volume | parse_music_stream)
   if [[ -z "$max" ]] || (( max == 0 )); then
-    echo "vol.termux: failed to parse termux volume" >&2
+    echo "provider.vol.termux: failed to parse termux volume" >&2
     return 1
   fi
   awk "BEGIN { printf \"%.0f\\n\", ($vol/$max)*100 }"
@@ -49,7 +49,7 @@ set_volume() {
   local vol max
   read -r vol max < <(termux-volume | parse_music_stream)
   if [[ -z "$max" ]] || (( max == 0 )); then
-    echo "vol.termux: failed to parse termux max volume" >&2
+    echo "provider.vol.termux: failed to parse termux max volume" >&2
     return 1
   fi
   (( raw = level * max / 100 ))
