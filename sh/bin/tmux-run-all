@@ -7,6 +7,21 @@ include-source 'colors.sh'
 
 SHELLS=(bash zsh fish ksh xonsh)
 
+# True if the shell at <pid> is sitting at its prompt: it owns the terminal's
+# foreground process group AND nothing else is in that group. tmux's
+# pane_current_command alone reports "bash" for a bash *script* running less or
+# an editor, or for the git wrapper running a pager -- typing into those feeds
+# the keystrokes to the program (less's `v` opens an editor, `s` saves to file,
+# `|`/`!` run shell commands). Background jobs have their own pgid, so a shell
+# with `&` jobs still counts as idle.
+function at-prompt() {
+    local pid="${1}" pgid tpgid others
+    read -r pgid tpgid < <(ps -o pgid=,tpgid= -p "${pid}" 2>/dev/null) || return 1
+    [[ -n "${tpgid}" && "${pgid}" == "${tpgid}" ]] || return 1
+    others=$(ps -eo pid=,pgid= | awk -v g="${pgid}" -v p="${pid}" '$2 == g && $1 != p' | wc -l)
+    (( others == 0 ))
+}
+
 # Default options
 COMMAND=()
 PANE_GLOB=""
@@ -97,9 +112,9 @@ fi
 # Loop over all of the panes, running the command on those with a shell
 SKIPPED=()
 TMUX_FORMAT_STR=$'#{session_name}:#{window_index}.#{pane_index}\t'
-TMUX_FORMAT_STR+='#{pane_current_command}'
-THIS_PANE_ID=$(tmux display-message -p "${TMUX_FORMAT_STR%$'\t'*}")
-while read -r pane_id command; do
+TMUX_FORMAT_STR+=$'#{pane_current_command}\t#{pane_pid}'
+THIS_PANE_ID=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}')
+while read -r pane_id command pane_pid; do
     skip_reason=""
     has_shell=false
 
@@ -122,6 +137,9 @@ while read -r pane_id command; do
         done
         if ! ${has_shell}; then
             skip_reason="${C_GREEN}${command}${S_RESET}"
+        elif ! at-prompt "${pane_pid}"; then
+            has_shell=false
+            skip_reason="${C_GREEN}${command}${S_RESET} busy (not at prompt)"
         fi
     fi
 
