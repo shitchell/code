@@ -49,6 +49,13 @@ USAGE
   sec ls [GROUP]                    list group paths + var names (never values)
   sec run SPEC[,SPEC...] [--] CMD   run CMD with the secrets exported into ITS env
                                     SPEC = a group (its direct entries) or one entry
+  sec run SPEC... < SCRIPT          no CMD: run stdin as a bash script (file or
+                                    <<'EOF' heredoc; quote EOF so YOUR shell
+                                    leaves $VAR alone) -- the easiest quoting
+  sec run SPEC... --- CMD ARGS      template: {{VAR}} in ARGS is replaced by the
+                                    value, then CMD is exec'd directly (no shell).
+                                    CAVEAT: values land in argv, readable via ps
+                                    /proc/*/cmdline while CMD runs; prefer env/stdin
   sec add [-f] GROUP/VAR            store a value read from stdin (or hidden prompt)
   sec import [-f] FILE GROUP        import a bash-style key=value file into GROUP
   sec rm GROUP/VAR                  delete an entry
@@ -57,6 +64,10 @@ USAGE
 EXAMPLES
   sec ls
   sec run azure/packer-sp -- bash -c 'az login --service-principal -u "$packer_sp_value" ...'
+  sec run jira/api <<'SH'
+      printf 'user = "%s:%s"\n' "$JIRA_USER" "$JIRA_TOKEN" | curl -sS -K - https://...
+  SH
+  sec run jira/api --- curl -u '{{JIRA_USER}}:{{JIRA_TOKEN}}' https://...
   printf %s "$x" | sec add azure/packer-sp/NEW_VAR
 
 Reference the vars INSIDE the command (single-quoted so your own shell does not
@@ -200,11 +211,32 @@ cmd_rm() {
     printf 'removed %s\n' "${1}"
 }
 
+# substitute {{NAME}} tokens in one arg (single left-to-right pass, so a value
+# containing "{{X}}" is never re-expanded); NAME must be a var loaded by this run
+template_arg() {
+    local rest="${1}" out="" name
+    while [[ "${rest}" =~ \{\{([A-Za-z_][A-Za-z0-9_]*)\}\} ]]; do
+        name="${BASH_REMATCH[1]}"
+        [[ -v "seen[${name}]" ]] || die "{{${name}}} is not a var in the given SPEC(s)"
+        out+="${rest%%"${BASH_REMATCH[0]}"*}${!name}"
+        rest="${rest#*"${BASH_REMATCH[0]}"}"
+    done
+    REPLY="${out}${rest}"
+}
+
 cmd_run() {
-    [[ $# -ge 1 ]] || die "usage: sec run SPEC[,SPEC...] [--] CMD..."
+    [[ $# -ge 1 ]] || die "usage: sec run SPEC[,SPEC...] [-- CMD... | --- CMD {{VAR}}... | < script]"
     local specs="${1}"; shift
-    [[ "${1:-}" == "--" ]] && shift
-    [[ $# -ge 1 ]] || die "no command given"
+    local mode=env
+    case "${1:-}" in
+        --)  shift ;;
+        ---) mode=template; shift ;;
+    esac
+    if [[ $# -eq 0 ]]; then
+        [[ ${mode} == env ]] || die "--- needs a command"
+        [[ ! -t 0 ]] || die "no command given, and stdin is a terminal (pipe a script in, or give a CMD)"
+        mode=stdin
+    fi
     ensure_store
 
     local -a entries=() list
@@ -238,7 +270,15 @@ cmd_run() {
         export "${var}=${value}"
     done
     unset value
-    exec "${@}"
+    case "${mode}" in
+        stdin)    exec bash -s ;;
+        template)
+            local -a argv=()
+            local a
+            for a in "${@}"; do template_arg "${a}"; argv+=("${REPLY}"); done
+            exec "${argv[@]}" ;;
+        *)        exec "${@}" ;;
+    esac
 }
 
 main() {
