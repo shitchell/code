@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+#
+# sec -- let Claude sessions USE secrets as env vars without SEEING them
+#
+# PURELY FOR CLAUDE USE. A thin wrapper around `pass` with its own store,
+# encrypted to Claude's own passphraseless GPG signing key (the one the git
+# wrapper signs Claude-authored commits with). Shaun's personal store
+# (~/.password-store) is never touched.
+#
+# Decision (Shaun, 2026-09-29):
+#   "i like the `sec` wrapper idea ... let's have it use `pass` + your claude
+#   signing key, noting this wrapper as purely for claude use"
+#
+# Context: Claude transcripts/logs are persisted and sent to Anthropic. The goal
+# is to keep secret VALUES out of Claude's context, stdout and shell history
+# while still letting Claude use them, with no password typing.
+#
+# HONEST LIMIT: this is NOT a security boundary against Claude itself (or
+# anything else running as `guy`). The store is encrypted at rest to a
+# passphraseless key that lives in ~/.gnupg, so it protects against copies of
+# the store files, not against a process that can run gpg as this user. It
+# exists to prevent ACCIDENTAL disclosure. A PreToolUse hook
+# (~/.claude/hooks/sec-guard.sh) blocks the obvious ways of printing values.
+#
+# There is deliberately NO subcommand that prints a value.
+#
+# Layout:
+#   ~/.local/share/claude-sec/store/<group>/<ENV_VAR_NAME>.gpg
+#   e.g. azure/packer-sp/packer_sp_value -> exported as $packer_sp_value
+#
+# Usage: see `sec help`.
+
+set -uo pipefail
+
+SEC_KEY="8FC7AEB80ADE55538460B67994E750AFAFCDA7F6"   # Claude Code <noreply@anthropic.com>
+SEC_STORE="${SEC_STORE:-${HOME}/.local/share/claude-sec/store}"
+SEC_GNUPGHOME="${SEC_GNUPGHOME:-${HOME}/.gnupg}"
+VAR_RE='^[A-Za-z_][A-Za-z0-9_]*$'
+SEG_RE='^[A-Za-z0-9_.-]+$'
+
+die() { printf 'sec: %s\n' "${*}" >&2; exit 1; }
+warn() { printf 'sec: %s\n' "${*}" >&2; }
+
+usage() {
+    cat <<'EOF'
+sec -- use secrets as env vars without printing them (for Claude sessions)
+
+USAGE
+  sec ls [GROUP]                    list group paths + var names (never values)
+  sec run SPEC[,SPEC...] [--] CMD   run CMD with the secrets exported into ITS env
+                                    SPEC = a group (its direct entries) or one entry
+  sec add [-f] GROUP/VAR            store a value read from stdin (or hidden prompt)
+  sec import [-f] FILE GROUP        import a bash-style key=value file into GROUP
+  sec rm GROUP/VAR                  delete an entry
+  sec help                          this text
+
+EXAMPLES
+  sec ls
+  sec run azure/packer-sp -- bash -c 'az login --service-principal -u "$packer_sp_value" ...'
+  printf %s "$x" | sec add azure/packer-sp/NEW_VAR
+
+Reference the vars INSIDE the command (single-quoted so your own shell does not
+expand them). Never echo/printenv them: output lands in the transcript.
+
+Store: ~/.local/share/claude-sec/store (pass, encrypted to Claude's GPG key)
+EOF
+}
+
+# pass, pointed at the claude store/keyring; nothing leaks into the caller's env
+_pass() {
+    env -u PASSWORD_STORE_KEY \
+        PASSWORD_STORE_DIR="${SEC_STORE}" \
+        PASSWORD_STORE_GPG_OPTS="--batch" \
+        PASSWORD_STORE_ENABLE_EXTENSIONS=false \
+        PASSWORD_STORE_UMASK=077 \
+        GNUPGHOME="${SEC_GNUPGHOME}" \
+        pass "${@}"
+}
+
+ensure_store() {
+    command -v pass >/dev/null 2>&1 || die "pass is not installed (sudo apt-get install -y pass)"
+    if [[ ! -f "${SEC_STORE}/.gpg-id" ]]; then
+        mkdir -p "${SEC_STORE}" || die "cannot create ${SEC_STORE}"
+        chmod 700 "${SEC_STORE%/store}" "${SEC_STORE}" 2>/dev/null
+        _pass init "${SEC_KEY}" >/dev/null || die "pass init failed"
+    fi
+}
+
+# validate a slash path: no empty/.. segments, safe chars only
+valid_path() {
+    local p="${1}" seg
+    local -a segs
+    [[ -n "${p}" && "${p}" != /* && "${p}" != */ ]] || return 1
+    IFS='/' read -r -a segs <<< "${p}"
+    for seg in "${segs[@]}"; do
+        [[ "${seg}" =~ ${SEG_RE} && "${seg}" != "." && "${seg}" != ".." ]] || return 1
+    done
+}
+
+# validate GROUP/VAR entry name
+valid_entry() {
+    local n="${1}"
+    valid_path "${n}" || return 1
+    [[ "${n}" == */* ]] || return 1
+    [[ "${n##*/}" =~ ${VAR_RE} ]]
+}
+
+# store VALUE (arg 2) at ENTRY (arg 1); value never touches argv of pass/gpg
+store_value() {
+    local entry="${1}" value="${2}"
+    printf '%s' "${value}" | _pass insert -m -f "${entry}" >/dev/null \
+        || die "failed to store ${entry}"
+}
+
+cmd_ls() {
+    ensure_store
+    local base="${SEC_STORE}"
+    if [[ $# -gt 0 ]]; then
+        valid_path "${1}" || die "bad group: ${1}"
+        base="${SEC_STORE}/${1}"
+        [[ -d "${base}" ]] || die "no such group: ${1}"
+    fi
+    command find "${base}" -type f -name '*.gpg' -printf '%P\n' 2>/dev/null \
+        | sed -e 's/\.gpg$//' -e "s|^|${1:+${1}/}|" | LC_ALL=C sort
+}
+
+cmd_add() {
+    local force=0
+    [[ "${1:-}" == "-f" ]] && { force=1; shift; }
+    [[ $# -eq 1 ]] || die "usage: sec add [-f] GROUP/VAR   (value on stdin, never argv)"
+    local entry="${1}" value
+    valid_entry "${entry}" || die "bad name '${entry}' (want GROUP/VAR, VAR matching ${VAR_RE})"
+    ensure_store
+    if [[ -e "${SEC_STORE}/${entry}.gpg" && ${force} -eq 0 ]]; then
+        die "${entry} exists (use -f to overwrite)"
+    fi
+    if [[ -t 0 ]]; then
+        IFS= read -r -s -p "value for ${entry}: " value; echo >&2
+    else
+        IFS= read -r -d '' value
+        value="${value%$'\n'}"
+    fi
+    [[ -n "${value}" ]] || die "empty value, not stored"
+    [[ "${value}" != *$'\n'* ]] || die "value contains a newline, not stored"
+    store_value "${entry}" "${value}"
+    printf 'stored %s (%d chars)\n' "${entry}" "${#value}"
+}
+
+cmd_import() {
+    local force=0
+    [[ "${1:-}" == "-f" ]] && { force=1; shift; }
+    [[ $# -eq 2 ]] || die "usage: sec import [-f] FILE GROUP"
+    local file="${1}" group="${2}"
+    [[ -r "${file}" ]] || die "cannot read ${file}"
+    valid_path "${group}" || die "bad group: ${group}"
+    ensure_store
+
+    # Keys = assignment lines in the file. Values come from actually sourcing it
+    # (in a clean, throwaway bash) so quoting is interpreted exactly as bash
+    # would. NOTE: this executes the file -- only import files you trust.
+    local -a keys
+    mapfile -t keys < <(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "${file}" | awk '!seen[$0]++')
+    [[ ${#keys[@]} -gt 0 ]] || die "no key=value lines found in ${file}"
+
+    local -A vals=()
+    local k v
+    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+        vals["${k}"]="${v}"
+    done < <(env -i PATH=/usr/bin:/bin HOME="${HOME}" bash --noprofile --norc -c '
+        source "$1" >/dev/null 2>&1 </dev/null
+        shift
+        for k in "$@"; do
+            [[ -v "$k" ]] && printf "%s\0%s\0" "$k" "${!k}"
+        done' _ "${file}" "${keys[@]}")
+
+    local n=0 rc=0 entry
+    for k in "${keys[@]}"; do
+        entry="${group}/${k}"
+        if [[ ! -v "vals[${k}]" ]]; then warn "${k}: not set after sourcing, skipped"; rc=1; continue; fi
+        v="${vals[${k}]}"
+        if [[ -z "${v}" ]]; then warn "${k}: empty, skipped"; rc=1; continue; fi
+        if [[ "${v}" == *$'\n'* ]]; then warn "${k}: contains a newline, skipped"; rc=1; continue; fi
+        if [[ -e "${SEC_STORE}/${entry}.gpg" && ${force} -eq 0 ]]; then
+            warn "${entry} exists, skipped (use -f)"; rc=1; continue
+        fi
+        store_value "${entry}" "${v}"
+        printf 'imported %s (%d chars)\n' "${entry}" "${#v}"
+        n=$((n + 1))
+    done
+    printf '%d entr%s imported into %s\n' "${n}" "$([[ ${n} -eq 1 ]] && echo y || echo ies)" "${group}"
+    return ${rc}
+}
+
+cmd_rm() {
+    [[ $# -eq 1 ]] || die "usage: sec rm GROUP/VAR"
+    valid_entry "${1}" || die "bad name: ${1}"
+    ensure_store
+    [[ -e "${SEC_STORE}/${1}.gpg" ]] || die "no such entry: ${1}"
+    _pass rm -f "${1}" >/dev/null || die "failed to remove ${1}"
+    printf 'removed %s\n' "${1}"
+}
+
+cmd_run() {
+    [[ $# -ge 1 ]] || die "usage: sec run SPEC[,SPEC...] [--] CMD..."
+    local specs="${1}"; shift
+    [[ "${1:-}" == "--" ]] && shift
+    [[ $# -ge 1 ]] || die "no command given"
+    ensure_store
+
+    local -a entries=() list
+    local spec f
+    IFS=',' read -r -a list <<< "${specs}"
+    for spec in "${list[@]}"; do
+        valid_path "${spec}" || die "bad spec: ${spec}"
+        if [[ -f "${SEC_STORE}/${spec}.gpg" ]]; then
+            entries+=("${spec}")
+        elif [[ -d "${SEC_STORE}/${spec}" ]]; then
+            local found=0
+            for f in "${SEC_STORE}/${spec}"/*.gpg; do
+                [[ -f "${f}" ]] || continue
+                f="${f##*/}"; entries+=("${spec}/${f%.gpg}"); found=1
+            done
+            [[ ${found} -eq 1 ]] || die "group has no direct entries: ${spec}"
+        else
+            die "no such group or entry: ${spec}"
+        fi
+    done
+
+    local -A seen=()
+    local entry var value
+    for entry in "${entries[@]}"; do
+        var="${entry##*/}"
+        [[ "${var}" =~ ${VAR_RE} ]] || die "bad var name in store: ${entry}"
+        [[ "${seen[${var}]:-}" == "${entry}" ]] && continue
+        [[ -v "seen[${var}]" ]] && warn "${var} defined by both ${seen[${var}]} and ${entry}; using ${entry}"
+        seen["${var}"]="${entry}"
+        value="$(_pass show "${entry}" 2>/dev/null)" || die "failed to decrypt ${entry}"
+        export "${var}=${value}"
+    done
+    unset value
+    exec "${@}"
+}
+
+main() {
+    local sub="${1:-help}"
+    [[ $# -gt 0 ]] && shift
+    case "${sub}" in
+        ls|list)          cmd_ls "${@}" ;;
+        run|exec)         cmd_run "${@}" ;;
+        add|insert)       cmd_add "${@}" ;;
+        import)           cmd_import "${@}" ;;
+        rm|remove|del)    cmd_rm "${@}" ;;
+        help|-h|--help)   usage ;;
+        *)                usage >&2; die "unknown subcommand: ${sub}" ;;
+    esac
+}
+
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "${@}"
